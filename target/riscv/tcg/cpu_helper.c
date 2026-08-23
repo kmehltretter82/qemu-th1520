@@ -1640,7 +1640,15 @@ void riscv_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
 
 static void pmu_tlb_fill_incr_ctr(RISCVCPU *cpu, MMUAccessType access_type)
 {
-    enum riscv_pmu_event_idx pmu_event_type;
+    uint32_t pmu_event_type;
+
+    if (cpu->cfg.thead_c9xx_pmu) {
+        pmu_event_type = access_type == MMU_INST_FETCH ?
+                         THEAD_C9XX_PMU_EVENT_ITLB_MISS :
+                         THEAD_C9XX_PMU_EVENT_DTLB_MISS;
+        riscv_pmu_incr_ctr(cpu, pmu_event_type);
+        return;
+    }
 
     switch (access_type) {
     case MMU_INST_FETCH:

@@ -157,6 +157,10 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * C910 scalar identity, 40-bit physical-address constraints, the TH1520
   no-PMP configuration, the initial custom CSR bank, migration state, and
   provisional MAEE PTE acceptance;
+* the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
+  machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
+  event maps, and focused CSR/fixed-counter overflow tests; microarchitectural
+  event values remain an explicit hardware-differential task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
   and CSR behavior, debugger/migration integration, and focused qtest/TCG
   smoke coverage; and

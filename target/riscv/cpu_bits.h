@@ -745,6 +745,9 @@ typedef enum {
 /* T-Head C9xx machine-extension status bits. */
 #define THEAD_MXSTATUS_MAEE       BIT_ULL(21)
 #define THEAD_MXSTATUS_THEADISAEE BIT_ULL(22)
+#define THEAD_MXSTATUS_PMDM       BIT_ULL(13)
+#define THEAD_MXSTATUS_PMDS       BIT_ULL(11)
+#define THEAD_MXSTATUS_PMDU       BIT_ULL(10)
 
 /* XTheadVector 0.7.1-derived status and vtype layouts. */
 #define THEAD_MSTATUS_VS          0x01800000
@@ -823,6 +826,8 @@ typedef enum RISCVException {
 #define IRQ_M_EXT                          11
 #define IRQ_S_GEXT                         12
 #define IRQ_PMU_OVF                        13
+/* T-Head C9xx predates Sscofpmf and uses local interrupt cause 17. */
+#define IRQ_THEAD_C9XX_PMU_OVF             17
 #define IRQ_LOCAL_MAX                      64
 /* -1 is due to bit zero of hgeip and hgeie being ROZ. */
 #define IRQ_LOCAL_GUEST_MAX                (TARGET_LONG_BITS - 1)
@@ -845,6 +850,7 @@ typedef enum RISCVException {
 #define MIP_MEIP                           (1 << IRQ_M_EXT)
 #define MIP_SGEIP                          (1 << IRQ_S_GEXT)
 #define MIP_LCOFIP                         (1 << IRQ_PMU_OVF)
+#define MIP_THEAD_C9XX_PMU_OVF             (1 << IRQ_THEAD_C9XX_PMU_OVF)
 
 /* sip masks */
 #define SIP_SSIP                           MIP_SSIP

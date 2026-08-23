@@ -33,7 +33,11 @@ class RiscvOpenSBI(QemuSystemTest):
         wait_for_console_pattern(self,
                                  'Platform Timer Device       : aclint-mtimer @ 3000000Hz')
         wait_for_console_pattern(self, 'Platform Console Device     : uart8250')
-        wait_for_console_pattern(self, 'Boot HART Priv Version      : v1.10')
+        wait_for_console_pattern(self,
+                                 'Platform PMU Device         : thead,c900-pmu')
+        wait_for_console_pattern(self, 'Boot HART Priv Version      : v1.11')
+        wait_for_console_pattern(self,
+                                 'Boot HART ISA Extensions    : zicntr,zihpm')
         wait_for_console_pattern(self, 'Boot HART PMP Count         : 0')
         wait_for_console_pattern(self, 'Boot HART PMP Address Bits  : 0')
         wait_for_console_pattern(self, 'Boot HART MHPM Info         : 16 (0x0007fff8)')

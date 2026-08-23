@@ -1244,7 +1244,10 @@ static RISCVException write_mhpmevent(CPURISCVState *env, int csrno,
     uint64_t mhpmevt_val;
     uint64_t inh_avail_mask;
 
-    if (riscv_cpu_mxl(env) == MXL_RV32) {
+    if (riscv_cpu_cfg(env)->thead_c9xx_pmu) {
+        /* C9xx implements a six-bit WARL selector with events 0..42. */
+        mhpmevt_val = val <= THEAD_C9XX_PMU_EVENT_MAX ? val : 0;
+    } else if (riscv_cpu_mxl(env) == MXL_RV32) {
         mhpmevt_val = deposit64(env->mhpmevent_val[evt_index], 0, 32, val);
     } else {
         inh_avail_mask = ~MHPMEVENT_FILTER_MASK | MHPMEVENT_BIT_MINH;
@@ -1313,6 +1316,16 @@ static uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
         cfg_val &= MHPMEVENT_FILTER_MASK;
     }
 
+    if (riscv_cpu_cfg(env)->thead_c9xx_pmu) {
+        cfg_val = 0;
+        cfg_val |= env->th_mxstatus & THEAD_MXSTATUS_PMDM ?
+                   MCYCLECFG_BIT_MINH : 0;
+        cfg_val |= env->th_mxstatus & THEAD_MXSTATUS_PMDS ?
+                   MCYCLECFG_BIT_SINH | MCYCLECFG_BIT_VSINH : 0;
+        cfg_val |= env->th_mxstatus & THEAD_MXSTATUS_PMDU ?
+                   MCYCLECFG_BIT_UINH | MCYCLECFG_BIT_VUINH : 0;
+    }
+
     if (!cfg_val) {
         if (icount_enabled()) {
                 curr_val = inst ? icount_get_raw() : icount_get();
@@ -1366,7 +1379,7 @@ static RISCVException riscv_pmu_write_ctr(CPURISCVState *env, target_ulong val,
         ctr = riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx);
         counter->mhpmcounter_prev = deposit64(counter->mhpmcounter_prev,
                                               0, deposit_size, ctr);
-        if (ctr_idx > 2) {
+        if (ctr_idx > 2 || riscv_cpu_cfg(env)->thead_c9xx_pmu) {
             riscv_pmu_setup_timer(env, counter->mhpmcounter_val, ctr_idx);
         }
      } else {
@@ -1393,7 +1406,7 @@ static RISCVException riscv_pmu_write_ctrh(CPURISCVState *env, target_ulong val,
         ctrh = riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx);
         counter->mhpmcounter_prev = deposit64(counter->mhpmcounter_prev,
                                               32, 32, ctrh);
-        if (ctr_idx > 2) {
+        if (ctr_idx > 2 || riscv_cpu_cfg(env)->thead_c9xx_pmu) {
             riscv_pmu_setup_timer(env, counter->mhpmcounter_val, ctr_idx);
         }
     } else {
@@ -1549,6 +1562,10 @@ static int rmw_cd_mhpmevent(CPURISCVState *env, int evt_index,
         wr_mask &= ~MHPMEVENT_BIT_MINH;
         /* wr_mask is 64-bit so upper 32 bits of mhpmevt_val are retained */
         mhpmevt_val = (new_val & wr_mask) | (mhpmevt_val & ~wr_mask);
+        if (riscv_cpu_cfg(env)->thead_c9xx_pmu &&
+            mhpmevt_val > THEAD_C9XX_PMU_EVENT_MAX) {
+            mhpmevt_val = 0;
+        }
         env->mhpmevent_val[evt_index] = mhpmevt_val;
         riscv_pmu_update_event_map(env, mhpmevt_val, evt_index);
     } else {
@@ -1837,6 +1854,17 @@ static const uint64_t vs_delegable_ints =
     (VS_MODE_INTERRUPTS | LOCAL_INTERRUPTS) & ~MIP_LCOFIP;
 static const uint64_t all_ints = M_MODE_INTERRUPTS | S_MODE_INTERRUPTS |
                                      HS_MODE_INTERRUPTS | LOCAL_INTERRUPTS;
+
+static uint64_t riscv_delegable_ints(CPURISCVState *env)
+{
+    uint64_t mask = delegable_ints;
+
+    if (riscv_cpu_cfg(env)->thead_c9xx_pmu) {
+        mask |= MIP_THEAD_C9XX_PMU_OVF;
+    }
+
+    return mask;
+}
 #define DELEGABLE_EXCPS ((1ULL << (RISCV_EXCP_INST_ADDR_MIS)) | \
                          (1ULL << (RISCV_EXCP_INST_ACCESS_FAULT)) | \
                          (1ULL << (RISCV_EXCP_ILLEGAL_INST)) | \
@@ -2295,7 +2323,7 @@ static RISCVException rmw_mideleg64(CPURISCVState *env, int csrno,
                                     uint64_t *ret_val,
                                     uint64_t new_val, uint64_t wr_mask)
 {
-    uint64_t mask = wr_mask & delegable_ints;
+    uint64_t mask = wr_mask & riscv_delegable_ints(env);
 
     if (ret_val) {
         *ret_val = env->mideleg;
@@ -3134,7 +3162,7 @@ static RISCVException write_mcountinhibit(CPURISCVState *env, int csrno,
         if (!get_field(env->mcountinhibit, BIT(cidx))) {
             counter->mhpmcounter_prev = riscv_pmu_ctr_get_fixed_counters_val(env, cidx);
 
-            if (cidx > 2) {
+            if (cidx > 2 || cpu->cfg.thead_c9xx_pmu) {
                 riscv_pmu_setup_timer(env, counter->mhpmcounter_val, cidx);
             }
         } else {
@@ -3821,7 +3849,7 @@ static RISCVException rmw_mip64(CPURISCVState *env, int csrno,
                                 uint64_t *ret_val,
                                 uint64_t new_val, uint64_t wr_mask)
 {
-    uint64_t old_mip, mask = wr_mask & delegable_ints;
+    uint64_t old_mip, mask = wr_mask & riscv_delegable_ints(env);
     uint32_t gin;
 
     /*
@@ -3854,6 +3882,10 @@ static RISCVException rmw_mip64(CPURISCVState *env, int csrno,
         old_mip = riscv_cpu_update_mip(env, mask, (new_val & mask));
     } else {
         old_mip = env->mip;
+    }
+    if (riscv_cpu_cfg(env)->thead_c9xx_pmu) {
+        /* The C9xx local PMU pending bit is the level INTEN & COUNTEROF. */
+        riscv_pmu_thead_c9xx_update_irq(env);
     }
 
     if (csrno != CSR_HVIP) {
@@ -5682,7 +5714,9 @@ static inline RISCVException riscv_csrrw_check(CPURISCVState *env,
     }
 
     /* privileged spec version check */
-    if (env->priv_ver < csr_min_priv) {
+    if (env->priv_ver < csr_min_priv &&
+        !(riscv_cpu_cfg(env)->thead_c9xx_pmu &&
+          csrno == CSR_MCOUNTINHIBIT)) {
         return RISCV_EXCP_ILLEGAL_INST;
     }
 

@@ -22,6 +22,14 @@
 #include "cpu.h"
 #include "qapi/error.h"
 
+/* Raw event selector values implemented by the open C910 PMU. */
+#define THEAD_C9XX_PMU_EVENT_ICACHE_ACCESS       1
+#define THEAD_C9XX_PMU_EVENT_ICACHE_MISS         2
+#define THEAD_C9XX_PMU_EVENT_ITLB_MISS           3
+#define THEAD_C9XX_PMU_EVENT_DTLB_MISS           4
+#define THEAD_C9XX_PMU_EVENT_INSTRUCTIONS        22
+#define THEAD_C9XX_PMU_EVENT_MAX                 42
+
 bool riscv_pmu_ctr_monitor_instructions(CPURISCVState *env,
                                         uint32_t target_ctr);
 bool riscv_pmu_ctr_monitor_cycles(CPURISCVState *env,
@@ -30,10 +38,11 @@ void riscv_pmu_timer_cb(void *priv);
 void riscv_pmu_init(RISCVCPU *cpu, Error **errp);
 int riscv_pmu_update_event_map(CPURISCVState *env, uint64_t value,
                                uint32_t ctr_idx);
-int riscv_pmu_incr_ctr(RISCVCPU *cpu, enum riscv_pmu_event_idx event_idx);
+int riscv_pmu_incr_ctr(RISCVCPU *cpu, uint32_t event_idx);
 void riscv_pmu_generate_fdt_node(void *fdt, uint32_t cmask, char *pmu_name);
 int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value,
                           uint32_t ctr_idx);
+void riscv_pmu_thead_c9xx_update_irq(CPURISCVState *env);
 void riscv_pmu_update_fixed_ctrs(CPURISCVState *env, privilege_mode_t newpriv,
                                  bool new_virt);
 RISCVException riscv_pmu_read_ctr(CPURISCVState *env, target_ulong *val,

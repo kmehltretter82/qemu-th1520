@@ -65,6 +65,58 @@ static DeviceState *th1520_create_plic(void)
                               th1520_memmap[TH1520_DEV_PLIC].size);
 }
 
+static void th1520_create_pmu_fdt(void *fdt)
+{
+    static const uint32_t events[] = {
+        0x00003, 0x00004, 0x00005, 0x00006,
+        0x00007, 0x00008, 0x00009, 0x0000a,
+        0x10000, 0x10001, 0x10002, 0x10003,
+        0x10010, 0x10011, 0x10012, 0x10013,
+    };
+    static const uint32_t selectors[] = {
+        0x01, 0x02, 0x07, 0x06,
+        0x08, 0x09, 0x0a, 0x0b,
+        0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13,
+    };
+    uint32_t event_ctr_map[ARRAY_SIZE(events) * 3];
+    uint32_t event_selector_map[ARRAY_SIZE(events) * 3];
+    uint32_t raw_event_ctr_map[42 * 5];
+    const uint32_t counter_mask = 0x0007fff8;
+
+    /*
+     * These bindings match the upstream TH1520 DTS.  Several microarchitectural
+     * events remain intentionally zero until they can be calibrated on the
+     * board; see the hardware-validation ledger.
+     */
+    for (size_t i = 0; i < ARRAY_SIZE(events); i++) {
+        event_ctr_map[i * 3] = cpu_to_be32(events[i]);
+        event_ctr_map[i * 3 + 1] = cpu_to_be32(events[i]);
+        event_ctr_map[i * 3 + 2] = cpu_to_be32(counter_mask);
+
+        event_selector_map[i * 3] = cpu_to_be32(events[i]);
+        event_selector_map[i * 3 + 1] = 0;
+        event_selector_map[i * 3 + 2] = cpu_to_be32(selectors[i]);
+    }
+
+    for (size_t i = 0; i < 42; i++) {
+        raw_event_ctr_map[i * 5] = 0;
+        raw_event_ctr_map[i * 5 + 1] = cpu_to_be32(i + 1);
+        raw_event_ctr_map[i * 5 + 2] = cpu_to_be32(UINT32_MAX);
+        raw_event_ctr_map[i * 5 + 3] = cpu_to_be32(UINT32_MAX);
+        raw_event_ctr_map[i * 5 + 4] = cpu_to_be32(counter_mask);
+    }
+
+    qemu_fdt_add_subnode(fdt, "/pmu");
+    qemu_fdt_setprop_string(fdt, "/pmu", "compatible", "riscv,pmu");
+    qemu_fdt_setprop(fdt, "/pmu", "riscv,event-to-mhpmcounters",
+                     event_ctr_map, sizeof(event_ctr_map));
+    qemu_fdt_setprop(fdt, "/pmu", "riscv,event-to-mhpmevent",
+                     event_selector_map, sizeof(event_selector_map));
+    qemu_fdt_setprop(fdt, "/pmu", "riscv,raw-event-to-mhpmcounters",
+                     raw_event_ctr_map, sizeof(raw_event_ctr_map));
+}
+
 static void th1520_soc_init(Object *obj)
 {
     TH1520SoCState *s = RISCV_TH1520_SOC(obj);
@@ -115,7 +167,7 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         th1520_memmap[TH1520_DEV_CLINT].base + RISCV_ACLINT_SWI_SIZE,
         RISCV_ACLINT_DEFAULT_MTIMER_SIZE, 0, TH1520_C910_HARTS,
         RISCV_ACLINT_DEFAULT_MTIMECMP, RISCV_ACLINT_DEFAULT_MTIME,
-        TH1520_TIMEBASE_FREQ, false);
+        TH1520_TIMEBASE_FREQ, true);
 
     /*
      * TH1520 uses a DesignWare APB UART.  serial-mm implements its 16550
@@ -184,6 +236,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     create_fdt_socket_memory(ms->fdt,
                              th1520_memmap[TH1520_DEV_DRAM].base,
                              ms->ram_size, 0, false);
+    th1520_create_pmu_fdt(ms->fdt);
 
     l2_phandle = phandle++;
     qemu_fdt_add_subnode(ms->fdt, "/cpus/l2-cache");

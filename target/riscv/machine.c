@@ -84,11 +84,23 @@ static bool thead_c910_csr_needed(void *opaque)
            object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
 }
 
+static int thead_c910_csr_post_load(void *opaque, int version_id)
+{
+    RISCVCPU *cpu = opaque;
+    CPURISCVState *env = &cpu->env;
+    bool pending = env->th_mcounterinten & env->th_mcounterof;
+
+    riscv_cpu_update_mip(env, MIP_THEAD_C9XX_PMU_OVF,
+                         BOOL_TO_MASK(pending));
+    return 0;
+}
+
 static const VMStateDescription vmstate_thead_c910_csr = {
     .name = "cpu/thead-c910-csr",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .needed = thead_c910_csr_needed,
+    .post_load = thead_c910_csr_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64(env.th_mxstatus, RISCVCPU),
         VMSTATE_UINT64(env.th_mhcr, RISCVCPU),
@@ -97,6 +109,8 @@ static const VMStateDescription vmstate_thead_c910_csr = {
         VMSTATE_UINT64(env.th_mhint2, RISCVCPU),
         VMSTATE_UINT64(env.th_mhint3, RISCVCPU),
         VMSTATE_UINT32(env.th_mcounterwen, RISCVCPU),
+        VMSTATE_UINT32_V(env.th_mcounterinten, RISCVCPU, 2),
+        VMSTATE_UINT32_V(env.th_mcounterof, RISCVCPU, 2),
         VMSTATE_UINT8(env.th_cpuid_index, RISCVCPU),
         VMSTATE_END_OF_LIST()
     }

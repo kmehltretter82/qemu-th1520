@@ -412,6 +412,7 @@ static const char * const riscv_intr_names[] = {
     [IRQ_M_EXT] = "m_external",
     [IRQ_S_GEXT] = "s_guest_external",
     [IRQ_PMU_OVF] = "counter_overflow",
+    [IRQ_THEAD_C9XX_PMU_OVF] = "thead_counter_overflow",
 };
 
 const char *riscv_cpu_get_trap_name(uint64_t cause, bool async)
@@ -3575,6 +3576,8 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_xtheadmempair = true,
         .cfg.ext_xtheadsync = true,
         .cfg.ext_xtheadvector = true,
+        .cfg.thead_c9xx_pmu = true,
+        .cfg.pmu_mask = MAKE_64BIT_MASK(3, 16),
         .cfg.phys_addr_bits = 40,
         .cfg.mmu = true,
         .cfg.vlenb = 128 >> 3,

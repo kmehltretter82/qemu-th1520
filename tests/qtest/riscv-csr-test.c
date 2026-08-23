@@ -22,6 +22,10 @@
 #define CSR_MISELECT        0x350
 #define CSR_MSTATUS         0x300
 #define CSR_MISA            0x301
+#define CSR_MIDELEG         0x303
+#define CSR_MCOUNTINHIBIT   0x320
+#define CSR_MIP             0x344
+#define CSR_MHPMEVENT3      0x323
 #define CSR_SATP            0x180
 #define CSR_VSTART          0x008
 #define CSR_VXSAT           0x009
@@ -36,8 +40,12 @@
 #define CSR_TH_MHINT        0x7c5
 #define CSR_TH_MRVBR        0x7c7
 #define CSR_TH_MCOUNTERWEN  0x7c9
+#define CSR_TH_MCOUNTERINTEN 0x7ca
+#define CSR_TH_MCOUNTEROF   0x7cb
 #define CSR_TH_MHINT2       0x7cc
 #define CSR_TH_MHINT3       0x7cd
+#define CSR_TH_SCOUNTERINTEN 0x5c4
+#define CSR_TH_SCOUNTEROF   0x5c5
 #define CSR_TH_CPUID        0xfc0
 
 static uint64_t get_csr(QTestState *qts, uint32_t csrno)
@@ -119,6 +127,41 @@ static void run_test_thead_c910_csrs(void)
     g_assert_cmphex(get_csr(qts, CSR_TH_MCOR), ==, 3);
     set_csr(qts, CSR_TH_MCOUNTERWEN, UINT64_MAX);
     g_assert_cmphex(get_csr(qts, CSR_TH_MCOUNTERWEN), ==, 0xfffffffd);
+
+    /* C9xx selectors are six-bit WARL values, limited to raw event 42. */
+    set_csr(qts, CSR_MHPMEVENT3, 42);
+    g_assert_cmphex(get_csr(qts, CSR_MHPMEVENT3), ==, 42);
+    set_csr(qts, CSR_MHPMEVENT3, 43);
+    g_assert_cmphex(get_csr(qts, CSR_MHPMEVENT3), ==, 0);
+    /* The qtest accelerator does not realize programmable PMU counters. */
+    set_csr(qts, CSR_MCOUNTINHIBIT, UINT64_MAX);
+    g_assert_cmphex(get_csr(qts, CSR_MCOUNTINHIBIT) & 5, ==, 5);
+    set_csr(qts, CSR_MCOUNTINHIBIT, 0);
+
+    /* Machine access owns all bits except TIME; supervisor sees WEN aliases. */
+    set_csr(qts, CSR_TH_MCOUNTERINTEN, UINT64_MAX);
+    g_assert_cmphex(get_csr(qts, CSR_TH_MCOUNTERINTEN), ==, 0xfffffffd);
+    g_assert_cmphex(get_csr(qts, CSR_TH_SCOUNTERINTEN), ==, 0xfffffffd);
+    set_csr(qts, CSR_TH_MCOUNTERWEN, (1 << 0) | (1 << 3));
+    set_csr(qts, CSR_TH_SCOUNTERINTEN, 1 << 3);
+    g_assert_cmphex(get_csr(qts, CSR_TH_SCOUNTERINTEN), ==, 1 << 3);
+    g_assert_cmphex(get_csr(qts, CSR_TH_MCOUNTERINTEN), ==, 0xfffffffc);
+
+    set_csr(qts, CSR_TH_MCOUNTEROF, (1 << 0) | (1 << 1) |
+                                      (1 << 3) | (1 << 4));
+    g_assert_cmphex(get_csr(qts, CSR_TH_MCOUNTEROF), ==, 0x19);
+    g_assert_cmphex(get_csr(qts, CSR_MIP) & (1 << 17), ==, 1 << 17);
+    set_csr(qts, CSR_MIP, 0);
+    g_assert_cmphex(get_csr(qts, CSR_MIP) & (1 << 17), ==, 1 << 17);
+    g_assert_cmphex(get_csr(qts, CSR_TH_SCOUNTEROF), ==, 0x9);
+    set_csr(qts, CSR_TH_SCOUNTEROF, 1 << 3);
+    g_assert_cmphex(get_csr(qts, CSR_TH_SCOUNTEROF), ==, 1 << 3);
+    g_assert_cmphex(get_csr(qts, CSR_TH_MCOUNTEROF), ==, 0x18);
+    set_csr(qts, CSR_TH_MCOUNTEROF, 0);
+    g_assert_cmphex(get_csr(qts, CSR_MIP) & (1 << 17), ==, 0);
+
+    set_csr(qts, CSR_MIDELEG, 1 << 17);
+    g_assert_cmphex(get_csr(qts, CSR_MIDELEG) & (1 << 17), ==, 1 << 17);
 
     for (size_t i = 0; i < ARRAY_SIZE(cpuid); i++) {
         g_assert_cmphex(get_csr(qts, CSR_TH_CPUID), ==, cpuid[i]);

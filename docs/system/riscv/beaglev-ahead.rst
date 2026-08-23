@@ -17,6 +17,8 @@ The machine currently provides:
   registers and the six T-Head vector CSRs;
 * the C910 Privileged ISA 1.10 identity, Sv39 MMU, 40-bit physical addresses,
   and T-Head custom CSR aperture;
+* 16 C910 programmable performance counters, C9xx counter overflow CSRs and
+  local interrupt 17, plus the board's Linux/OpenSBI PMU event mappings;
 * 4 GiB RAM at ``0x0000000000``;
 * 1.5 MiB SRAM at ``0xffe0000000``;
 * the 1 MiB mask-ROM aperture at ``0xffffd00000``;
@@ -66,8 +68,10 @@ debug register file, reset, and migration state.  Current regression coverage
 is an architectural smoke test rather than the exhaustive and differential
 coverage needed to claim silicon equivalence.  Likewise, MAEE PTE attribute
 bits are accepted but their cacheability and ordering effects are not modeled;
-some custom CSRs remain placeholders and performance events are not
-hardware-accurate.  The TH1520 integration exposes no writable PMP entries,
+some custom CSRs remain placeholders.  Fixed counters, TLB-miss events and the
+C9xx overflow protocol are implemented, but cache, branch, pipeline and other
+microarchitectural performance events are not yet hardware-accurate.  The
+TH1520 integration exposes no writable PMP entries,
 matching public physical-board boot captures, although generic C910
 documentation describes optional PMP configurations.  These uncertainties
 are itemized in the hardware validation ledger.

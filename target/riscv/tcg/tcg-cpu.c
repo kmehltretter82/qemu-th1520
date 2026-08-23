@@ -1254,7 +1254,7 @@ void riscv_tcg_cpu_finalize_features(RISCVCPU *cpu, Error **errp)
             return;
         }
 
-        if (cpu->cfg.ext_sscofpmf) {
+        if (cpu->cfg.ext_sscofpmf || cpu->cfg.thead_c9xx_pmu) {
             cpu->pmu_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                           riscv_pmu_timer_cb, cpu);
         }

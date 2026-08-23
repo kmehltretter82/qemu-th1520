@@ -24,6 +24,7 @@
 #include "cpu_vendorid.h"
 #include "exec/cputlb.h"
 #include "target/riscv/tcg/csr.h"
+#include "target/riscv/tcg/pmu.h"
 
 /* Extended M-mode control registers of T-Head */
 #define CSR_TH_MXSTATUS        0x7c0
@@ -52,10 +53,6 @@
 #define TH_MXSTATUS_INSDE       BIT(19)
 #define TH_MXSTATUS_MHRD        BIT(18)
 #define TH_MXSTATUS_MM          BIT(15)
-#define TH_MXSTATUS_PMDM        BIT(13)
-#define TH_MXSTATUS_PMDS        BIT(11)
-#define TH_MXSTATUS_PMDU        BIT(10)
-
 /* Extended S-mode control registers of T-Head */
 #define CSR_TH_SXSTATUS        0x5c0
 #define CSR_TH_SHCR            0x5c1
@@ -161,13 +158,13 @@ static RISCVException read_th_sxstatus(CPURISCVState *env, int csrno,
 #define TH_C910_MXSTATUS_WRITABLE \
     (THEAD_MXSTATUS_THEADISAEE | THEAD_MXSTATUS_MAEE | \
      TH_MXSTATUS_INSDE | TH_MXSTATUS_MHRD | TH_MXSTATUS_CLINTEE | \
-     TH_MXSTATUS_UCME | TH_MXSTATUS_MM | TH_MXSTATUS_PMDM | \
-     TH_MXSTATUS_PMDS | TH_MXSTATUS_PMDU)
+     TH_MXSTATUS_UCME | TH_MXSTATUS_MM | THEAD_MXSTATUS_PMDM | \
+     THEAD_MXSTATUS_PMDS | THEAD_MXSTATUS_PMDU)
 #define TH_C910_MXSTATUS_RESET \
     (THEAD_MXSTATUS_THEADISAEE | THEAD_MXSTATUS_MAEE | \
      TH_MXSTATUS_CLINTEE | TH_MXSTATUS_UCME | TH_MXSTATUS_MM)
 #define TH_C910_SXSTATUS_WRITABLE \
-    (TH_MXSTATUS_MM | TH_MXSTATUS_PMDS | TH_MXSTATUS_PMDU)
+    (TH_MXSTATUS_MM | THEAD_MXSTATUS_PMDS | THEAD_MXSTATUS_PMDU)
 
 #define TH_C910_MHCR_FIXED       (BIT(8) | BIT(3))
 #define TH_C910_MHCR_WRITABLE \
@@ -202,6 +199,8 @@ void riscv_thead_c910_csr_reset(CPURISCVState *env)
     env->th_mhint2 = 0;
     env->th_mhint3 = TH_C910_MHINT3_RESET;
     env->th_mcounterwen = 0;
+    env->th_mcounterinten = 0;
+    env->th_mcounterof = 0;
     env->th_cpuid_index = 0;
 }
 
@@ -333,6 +332,92 @@ static RISCVException write_c910_mcounterwen(CPURISCVState *env, int csrno,
                                              target_ulong val, uintptr_t ra)
 {
     env->th_mcounterwen = val & TH_C910_MCOUNTERWEN_WRITABLE;
+    return RISCV_EXCP_NONE;
+}
+
+static void c910_reschedule_cleared_overflows(CPURISCVState *env,
+                                               uint32_t cleared)
+{
+    while (cleared) {
+        uint32_t ctr_idx = ctz32(cleared);
+        target_ulong value;
+
+        cleared &= ~BIT(ctr_idx);
+        if (riscv_pmu_read_ctr(env, &value, false, ctr_idx) ==
+            RISCV_EXCP_NONE) {
+            riscv_pmu_setup_timer(env, value, ctr_idx);
+        }
+    }
+}
+
+static RISCVException read_c910_mcounterinten(CPURISCVState *env, int csrno,
+                                               target_ulong *val)
+{
+    *val = env->th_mcounterinten;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mcounterinten(CPURISCVState *env, int csrno,
+                                                target_ulong val,
+                                                uintptr_t ra)
+{
+    env->th_mcounterinten = val & TH_C910_MCOUNTERWEN_WRITABLE;
+    riscv_pmu_thead_c9xx_update_irq(env);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mcounterof(CPURISCVState *env, int csrno,
+                                            target_ulong *val)
+{
+    *val = env->th_mcounterof;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mcounterof(CPURISCVState *env, int csrno,
+                                             target_ulong val, uintptr_t ra)
+{
+    uint32_t old = env->th_mcounterof;
+
+    env->th_mcounterof = val & TH_C910_MCOUNTERWEN_WRITABLE;
+    riscv_pmu_thead_c9xx_update_irq(env);
+    c910_reschedule_cleared_overflows(env, old & ~env->th_mcounterof);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_scounterinten(CPURISCVState *env, int csrno,
+                                               target_ulong *val)
+{
+    *val = env->th_mcounterinten & env->th_mcounterwen;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_scounterinten(CPURISCVState *env, int csrno,
+                                                target_ulong val,
+                                                uintptr_t ra)
+{
+    uint32_t mask = env->th_mcounterwen & TH_C910_MCOUNTERWEN_WRITABLE;
+
+    env->th_mcounterinten = (env->th_mcounterinten & ~mask) | (val & mask);
+    riscv_pmu_thead_c9xx_update_irq(env);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_scounterof(CPURISCVState *env, int csrno,
+                                            target_ulong *val)
+{
+    *val = env->th_mcounterof & env->th_mcounterwen;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_scounterof(CPURISCVState *env, int csrno,
+                                             target_ulong val, uintptr_t ra)
+{
+    uint32_t mask = env->th_mcounterwen & TH_C910_MCOUNTERWEN_WRITABLE;
+    uint32_t old = env->th_mcounterof;
+
+    env->th_mcounterof = (env->th_mcounterof & ~mask) | (val & mask);
+    riscv_pmu_thead_c9xx_update_irq(env);
+    c910_reschedule_cleared_overflows(env, old & ~env->th_mcounterof);
     return RISCV_EXCP_NONE;
 }
 
@@ -676,6 +761,18 @@ const RISCVCSR th_c910_csr_list[] = {
                      read_c910_mcounterwen, write_c910_mcounterwen }
     },
     {
+        .csrno = CSR_TH_MCOUNTERINTEN,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcounterinten", mmode,
+                     read_c910_mcounterinten, write_c910_mcounterinten }
+    },
+    {
+        .csrno = CSR_TH_MCOUNTEROF,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcounterof", mmode,
+                     read_c910_mcounterof, write_c910_mcounterof }
+    },
+    {
         .csrno = CSR_TH_MHINT2,
         .insertion_test = test_thead_c910,
         .csr_ops = { "th.c910.mhint2", mmode, read_c910_mhint2,
@@ -747,6 +844,18 @@ const RISCVCSR th_c910_csr_list[] = {
         .csrno = CSR_TH_SCER,
         .insertion_test = test_thead_c910,
         .csr_ops = { "th.c910.scer", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SCOUNTERINTEN,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.scounterinten", smode,
+                     read_c910_scounterinten, write_c910_scounterinten }
+    },
+    {
+        .csrno = CSR_TH_SCOUNTEROF,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.scounterof", smode,
+                     read_c910_scounterof, write_c910_scounterof }
     },
     {
         .csrno = CSR_TH_SMIR,

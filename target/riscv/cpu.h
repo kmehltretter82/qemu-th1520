@@ -368,6 +368,8 @@ struct CPUArchState {
     uint64_t th_mhint2;
     uint64_t th_mhint3;
     uint32_t th_mcounterwen;
+    uint32_t th_mcounterinten;
+    uint32_t th_mcounterof;
     uint8_t th_cpuid_index;
 
     uint64_t mctrctl;
