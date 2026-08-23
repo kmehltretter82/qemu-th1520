@@ -197,6 +197,13 @@ static TCGTBCPUState riscv_get_tb_cpu_state(CPUState *cs)
     ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, MISA_EXT, env->misa_ext);
     ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, BIG_ENDIAN,
                            mo_endian_env(env) == MO_BE);
+#ifndef CONFIG_USER_ONLY
+    ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEADISAEE,
+                           !cpu->cfg.ext_xtheadmaee ||
+                           (env->th_mxstatus & THEAD_MXSTATUS_THEADISAEE));
+#else
+    ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEADISAEE, 1);
+#endif
 
     return (TCGTBCPUState){
         .pc = env->xl == MXL_RV32 ? env->pc & UINT32_MAX : env->pc,
@@ -1685,6 +1692,15 @@ static void riscv_register_custom_csrs(RISCVCPU *cpu, const RISCVCSR *csr_list)
     }
 }
 
+void riscv_tcg_register_custom_csrs(RISCVCPU *cpu)
+{
+    RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(cpu);
+
+    if (mcc->def->custom_csrs) {
+        riscv_register_custom_csrs(cpu, mcc->def->custom_csrs);
+    }
+}
+
 static inline void riscv_cpu_set_nmi(void *opaque, int irq, int level)
 {
     riscv_cpu_set_rnmi(RISCV_CPU(opaque), irq, level);
@@ -1696,11 +1712,7 @@ static void riscv_tcg_cpu_instance_init(CPUState *cs)
     RISCVCPU *cpu = RISCV_CPU(cs);
     Object *obj = OBJECT(cpu);
 #ifndef CONFIG_USER_ONLY
-    RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(obj);
-
-    if (mcc->def->custom_csrs) {
-        riscv_register_custom_csrs(cpu, mcc->def->custom_csrs);
-    }
+    riscv_tcg_register_custom_csrs(cpu);
     qdev_init_gpio_in_named(DEVICE(cpu), riscv_cpu_set_nmi,
                             "riscv.cpu.rnmi", RNMI_MAX);
 #endif

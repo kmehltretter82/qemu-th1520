@@ -583,9 +583,17 @@ target_ulong pmpcfg_csr_read(CPURISCVState *env, uint32_t reg_index)
 void pmpaddr_csr_write(CPURISCVState *env, uint32_t addr_index,
                        target_ulong val)
 {
+    uint8_t addr_bits = riscv_cpu_cfg(env)->pmp_addr_bits;
+
     trace_pmpaddr_csr_write(env->mhartid, addr_index, val);
     bool is_next_cfg_tor = false;
     uint8_t pmp_regions = riscv_cpu_cfg(env)->pmp_regions;
+
+    /* pmpaddr stores physical address bits [pmp_addr_bits - 1:2]. */
+    g_assert(addr_bits >= 2 && addr_bits <= TARGET_LONG_BITS + 2);
+    if (addr_bits < TARGET_LONG_BITS + 2) {
+        val &= MAKE_64BIT_MASK(0, addr_bits - 2);
+    }
 
     if (addr_index < pmp_regions) {
         if (env->pmp_state.pmp[addr_index].addr_reg == val) {

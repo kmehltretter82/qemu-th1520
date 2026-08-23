@@ -22,6 +22,7 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "cpu_vendorid.h"
+#include "exec/cputlb.h"
 #include "target/riscv/tcg/csr.h"
 
 /* Extended M-mode control registers of T-Head */
@@ -34,6 +35,9 @@
 #define CSR_TH_MCOUNTERWEN     0x7c9
 #define CSR_TH_MCOUNTERINTEN   0x7ca
 #define CSR_TH_MCOUNTEROF      0x7cb
+#define CSR_TH_MHINT2          0x7cc
+#define CSR_TH_MHINT3          0x7cd
+#define CSR_TH_MHINT4          0x7ce
 #define CSR_TH_MCINS           0x7d2
 #define CSR_TH_MCINDEX         0x7d3
 #define CSR_TH_MCDATA0         0x7d4
@@ -44,8 +48,13 @@
 
 /* TH_MXSTATUS bits */
 #define TH_MXSTATUS_UCME        BIT(16)
-#define TH_MXSTATUS_MAEE        BIT(21)
-#define TH_MXSTATUS_THEADISAEE  BIT(22)
+#define TH_MXSTATUS_CLINTEE     BIT(17)
+#define TH_MXSTATUS_INSDE       BIT(19)
+#define TH_MXSTATUS_MHRD        BIT(18)
+#define TH_MXSTATUS_MM          BIT(15)
+#define TH_MXSTATUS_PMDM        BIT(13)
+#define TH_MXSTATUS_PMDS        BIT(11)
+#define TH_MXSTATUS_PMDU        BIT(10)
 
 /* Extended S-mode control registers of T-Head */
 #define CSR_TH_SXSTATUS        0x5c0
@@ -125,7 +134,7 @@ static RISCVException read_th_mxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
     /* We don't set MAEE here, because QEMU does not implement MAEE. */
-    *val = TH_MXSTATUS_UCME | TH_MXSTATUS_THEADISAEE;
+    *val = TH_MXSTATUS_UCME | THEAD_MXSTATUS_THEADISAEE;
     return RISCV_EXCP_NONE;
 }
 
@@ -141,6 +150,198 @@ static RISCVException read_th_sxstatus(CPURISCVState *env, int csrno,
 {
     /* We don't set MAEE here, because QEMU does not implement MAEE. */
     *val = TH_SXSTATUS_UCME | TH_SXSTATUS_THEADISAEE;
+    return RISCV_EXCP_NONE;
+}
+
+/*
+ * C910 values below are derived from openC910 RTL.  TH1520 integration and
+ * silicon-stepping differences remain tracked in the BeagleV Ahead hardware
+ * validation ledger.
+ */
+#define TH_C910_MXSTATUS_WRITABLE \
+    (THEAD_MXSTATUS_THEADISAEE | THEAD_MXSTATUS_MAEE | \
+     TH_MXSTATUS_INSDE | TH_MXSTATUS_MHRD | TH_MXSTATUS_CLINTEE | \
+     TH_MXSTATUS_UCME | TH_MXSTATUS_MM | TH_MXSTATUS_PMDM | \
+     TH_MXSTATUS_PMDS | TH_MXSTATUS_PMDU)
+#define TH_C910_MXSTATUS_RESET \
+    (THEAD_MXSTATUS_THEADISAEE | THEAD_MXSTATUS_MAEE | \
+     TH_MXSTATUS_CLINTEE | TH_MXSTATUS_UCME | TH_MXSTATUS_MM)
+#define TH_C910_SXSTATUS_WRITABLE \
+    (TH_MXSTATUS_MM | TH_MXSTATUS_PMDS | TH_MXSTATUS_PMDU)
+
+#define TH_C910_MHCR_FIXED       (BIT(8) | BIT(3))
+#define TH_C910_MHCR_WRITABLE \
+    (BIT(12) | BIT(7) | BIT(6) | BIT(5) | BIT(4) | \
+     BIT(2) | BIT(1) | BIT(0))
+
+#define TH_C910_MHINT_WRITABLE \
+    (MAKE_64BIT_MASK(21, 4) | BIT(18) | MAKE_64BIT_MASK(16, 2) | \
+     BIT(15) | MAKE_64BIT_MASK(13, 2) | MAKE_64BIT_MASK(8, 4) | \
+     BIT(5) | BIT(3) | BIT(2))
+#define TH_C910_MHINT_RESET      (BIT(17) | BIT(14))
+#define TH_C910_MHINT2_WRITABLE \
+    (MAKE_64BIT_MASK(32, 2) | MAKE_64BIT_MASK(26, 6) | \
+     MAKE_64BIT_MASK(14, 9) | MAKE_64BIT_MASK(9, 5) | \
+     MAKE_64BIT_MASK(0, 5))
+#define TH_C910_MHINT3_WRITABLE  MAKE_64BIT_MASK(0, 30)
+#define TH_C910_MHINT3_RESET     0x10404040
+#define TH_C910_MCOUNTERWEN_WRITABLE \
+    (BIT(0) | MAKE_64BIT_MASK(2, 30))
+
+static const uint32_t th1520_c910_cpuid[] = {
+    0x090c090d, 0x110c9000, 0x260c0001, 0x30530077,
+    0x42080407, 0x50000003, 0x60000a53,
+};
+
+void riscv_thead_c910_csr_reset(CPURISCVState *env)
+{
+    env->th_mxstatus = TH_C910_MXSTATUS_RESET;
+    env->th_mhcr = TH_C910_MHCR_FIXED;
+    env->th_mcor = 0;
+    env->th_mhint = TH_C910_MHINT_RESET;
+    env->th_mhint2 = 0;
+    env->th_mhint3 = TH_C910_MHINT3_RESET;
+    env->th_mcounterwen = 0;
+    env->th_cpuid_index = 0;
+}
+
+static bool test_thead_c910(RISCVCPU *cpu)
+{
+    return object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
+}
+
+static RISCVException read_c910_mxstatus(CPURISCVState *env, int csrno,
+                                         target_ulong *val)
+{
+    *val = env->th_mxstatus | ((target_ulong)env->priv << 30);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mxstatus(CPURISCVState *env, int csrno,
+                                          target_ulong val, uintptr_t ra)
+{
+    uint64_t old = env->th_mxstatus;
+
+    env->th_mxstatus = (old & ~TH_C910_MXSTATUS_WRITABLE) |
+                       (val & TH_C910_MXSTATUS_WRITABLE);
+    if ((old ^ env->th_mxstatus) & THEAD_MXSTATUS_MAEE) {
+        tlb_flush(env_cpu(env));
+    }
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_sxstatus(CPURISCVState *env, int csrno,
+                                         target_ulong *val)
+{
+    return read_c910_mxstatus(env, csrno, val);
+}
+
+static RISCVException write_c910_sxstatus(CPURISCVState *env, int csrno,
+                                          target_ulong val, uintptr_t ra)
+{
+    env->th_mxstatus = (env->th_mxstatus & ~TH_C910_SXSTATUS_WRITABLE) |
+                       (val & TH_C910_SXSTATUS_WRITABLE);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mhcr(CPURISCVState *env, int csrno,
+                                     target_ulong *val)
+{
+    *val = env->th_mhcr;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mhcr(CPURISCVState *env, int csrno,
+                                      target_ulong val, uintptr_t ra)
+{
+    env->th_mhcr = TH_C910_MHCR_FIXED | (val & TH_C910_MHCR_WRITABLE);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mcor(CPURISCVState *env, int csrno,
+                                     target_ulong *val)
+{
+    *val = env->th_mcor;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mcor(CPURISCVState *env, int csrno,
+                                      target_ulong val, uintptr_t ra)
+{
+    /* Cache and branch-predictor commands complete synchronously in QEMU. */
+    env->th_mcor = val & 0x3;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mhint(CPURISCVState *env, int csrno,
+                                      target_ulong *val)
+{
+    *val = env->th_mhint;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mhint(CPURISCVState *env, int csrno,
+                                       target_ulong val, uintptr_t ra)
+{
+    env->th_mhint = val & TH_C910_MHINT_WRITABLE;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mhint2(CPURISCVState *env, int csrno,
+                                       target_ulong *val)
+{
+    *val = env->th_mhint2;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mhint2(CPURISCVState *env, int csrno,
+                                        target_ulong val, uintptr_t ra)
+{
+    env->th_mhint2 = val & TH_C910_MHINT2_WRITABLE;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mhint3(CPURISCVState *env, int csrno,
+                                       target_ulong *val)
+{
+    *val = env->th_mhint3;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mhint3(CPURISCVState *env, int csrno,
+                                        target_ulong val, uintptr_t ra)
+{
+    env->th_mhint3 = val & TH_C910_MHINT3_WRITABLE;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mrvbr(CPURISCVState *env, int csrno,
+                                      target_ulong *val)
+{
+    *val = env->resetvec & MAKE_64BIT_MASK(1, 39);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_mcounterwen(CPURISCVState *env, int csrno,
+                                            target_ulong *val)
+{
+    *val = env->th_mcounterwen;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_mcounterwen(CPURISCVState *env, int csrno,
+                                             target_ulong val, uintptr_t ra)
+{
+    env->th_mcounterwen = val & TH_C910_MCOUNTERWEN_WRITABLE;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException read_c910_cpuid(CPURISCVState *env, int csrno,
+                                      target_ulong *val)
+{
+    *val = th1520_c910_cpuid[env->th_cpuid_index];
+    env->th_cpuid_index = (env->th_cpuid_index + 1) %
+                          ARRAY_SIZE(th1520_c910_cpuid);
     return RISCV_EXCP_NONE;
 }
 
@@ -429,6 +630,148 @@ const RISCVCSR th_csr_list[] = {
         .csrno = CSR_TH_FXCR,
         .insertion_test = test_thead_mvendorid,
         .csr_ops = { "th.fxcr", any, read_unimp_th_csr }
+    },
+    { }
+};
+
+const RISCVCSR th_c910_csr_list[] = {
+    {
+        .csrno = CSR_TH_MXSTATUS,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mxstatus", mmode, read_c910_mxstatus,
+                     write_c910_mxstatus }
+    },
+    {
+        .csrno = CSR_TH_MHCR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mhcr", mmode, read_c910_mhcr,
+                     write_c910_mhcr }
+    },
+    {
+        .csrno = CSR_TH_MCOR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcor", mmode, read_c910_mcor,
+                     write_c910_mcor }
+    },
+    {
+        .csrno = CSR_TH_MCCR2,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mccr2", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MHINT,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mhint", mmode, read_c910_mhint,
+                     write_c910_mhint }
+    },
+    {
+        .csrno = CSR_TH_MRVBR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mrvbr", mmode, read_c910_mrvbr }
+    },
+    {
+        .csrno = CSR_TH_MCOUNTERWEN,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcounterwen", mmode,
+                     read_c910_mcounterwen, write_c910_mcounterwen }
+    },
+    {
+        .csrno = CSR_TH_MHINT2,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mhint2", mmode, read_c910_mhint2,
+                     write_c910_mhint2 }
+    },
+    {
+        .csrno = CSR_TH_MHINT3,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mhint3", mmode, read_c910_mhint3,
+                     write_c910_mhint3 }
+    },
+    {
+        .csrno = CSR_TH_MHINT4,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mhint4", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MCINS,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcins", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MCINDEX,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcindex", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MCDATA0,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcdata0", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MCDATA1,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mcdata1", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_MSMPR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.msmpr", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_CPUID,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.cpuid", mmode, read_c910_cpuid }
+    },
+    {
+        .csrno = CSR_TH_MAPBADDR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.mapbaddr", mmode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SXSTATUS,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.sxstatus", smode, read_c910_sxstatus,
+                     write_c910_sxstatus }
+    },
+    {
+        .csrno = CSR_TH_SHCR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.shcr", smode, read_c910_mhcr }
+    },
+    {
+        .csrno = CSR_TH_SCER2,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.scer2", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SCER,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.scer", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SMIR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.smir", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SMLO0,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.smel", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SMEH,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.smeh", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_SMCIR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.smcir", smode, read_unimp_th_csr }
+    },
+    {
+        .csrno = CSR_TH_FXCR,
+        .insertion_test = test_thead_c910,
+        .csr_ops = { "th.c910.fxcr", any, read_unimp_th_csr }
     },
     { }
 };

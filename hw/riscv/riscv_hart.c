@@ -26,6 +26,9 @@
 #include "qemu/cutils.h"
 #include "hw/core/sysbus.h"
 #include "target/riscv/cpu.h"
+#if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
+#include "target/riscv/tcg/tcg-cpu.h"
+#endif
 #include "hw/core/qdev-properties.h"
 #include "hw/riscv/riscv_hart.h"
 #include "qemu/error-report.h"
@@ -115,6 +118,12 @@ static bool riscv_hart_realize(RISCVHartArrayState *s, int idx,
                                char *cpu_type, Error **errp)
 {
     object_initialize_child(OBJECT(s), "harts[*]", &s->harts[idx], cpu_type);
+#if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
+    /* The qtest accelerator does not run the TCG CPU instance initializer. */
+    if (qtest_enabled()) {
+        riscv_tcg_register_custom_csrs(&s->harts[idx]);
+    }
+#endif
     qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "resetvec", s->resetvec);
 
     if (s->harts[idx].cfg.ext_smrnmi) {

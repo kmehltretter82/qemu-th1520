@@ -76,6 +76,32 @@ static const VMStateDescription vmstate_pmp = {
     }
 };
 
+static bool thead_c910_csr_needed(void *opaque)
+{
+    RISCVCPU *cpu = opaque;
+
+    return tcg_enabled() &&
+           object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
+}
+
+static const VMStateDescription vmstate_thead_c910_csr = {
+    .name = "cpu/thead-c910-csr",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = thead_c910_csr_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT64(env.th_mxstatus, RISCVCPU),
+        VMSTATE_UINT64(env.th_mhcr, RISCVCPU),
+        VMSTATE_UINT64(env.th_mcor, RISCVCPU),
+        VMSTATE_UINT64(env.th_mhint, RISCVCPU),
+        VMSTATE_UINT64(env.th_mhint2, RISCVCPU),
+        VMSTATE_UINT64(env.th_mhint3, RISCVCPU),
+        VMSTATE_UINT32(env.th_mcounterwen, RISCVCPU),
+        VMSTATE_UINT8(env.th_cpuid_index, RISCVCPU),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static bool hyper_needed(void *opaque)
 {
     RISCVCPU *cpu = opaque;
@@ -516,6 +542,7 @@ const VMStateDescription vmstate_riscv_cpu = {
     },
     .subsections = (const VMStateDescription * const []) {
         &vmstate_pmp,
+        &vmstate_thead_c910_csr,
         &vmstate_hyper,
         &vmstate_vector,
         &vmstate_pointermasking,

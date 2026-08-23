@@ -307,6 +307,7 @@ const RISCVIsaExtData isa_edata_arr[] = {
     ISA_EXT_DATA_ENTRY(xtheadfmemidx, PRIV_VERSION_1_11_0, ext_xtheadfmemidx),
     ISA_EXT_DATA_ENTRY(xtheadfmv, PRIV_VERSION_1_11_0, ext_xtheadfmv),
     ISA_EXT_DATA_ENTRY(xtheadmac, PRIV_VERSION_1_11_0, ext_xtheadmac),
+    ISA_EXT_DATA_ENTRY(xtheadmaee, PRIV_VERSION_1_10_0, ext_xtheadmaee),
     ISA_EXT_DATA_ENTRY(xtheadmemidx, PRIV_VERSION_1_11_0, ext_xtheadmemidx),
     ISA_EXT_DATA_ENTRY(xtheadmempair, PRIV_VERSION_1_11_0, ext_xtheadmempair),
     ISA_EXT_DATA_ENTRY(xtheadsync, PRIV_VERSION_1_11_0, ext_xtheadsync),
@@ -1058,6 +1059,10 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
     }
 
     pmp_unlock_entries(env);
+
+    if (object_dynamic_cast(obj, TYPE_RISCV_CPU_THEAD_C910)) {
+        riscv_thead_c910_csr_reset(env);
+    }
 #endif /* ifdef CONFIG_TCG */
 #else
     env->priv = PRV_U;
@@ -1519,6 +1524,11 @@ static void riscv_cpu_init(Object *obj)
     cpu->cfg.pmp_regions = 16;
 #ifndef CONFIG_USER_ONLY
     cpu->cfg.pmp_granularity = MIN_RISCV_PMP_GRANULARITY;
+#ifdef TARGET_RISCV32
+    cpu->cfg.pmp_addr_bits = 34;
+#else
+    cpu->cfg.pmp_addr_bits = 56;
+#endif
 #endif
     cpu->env.vext_ver = VEXT_VERSION_1_00_0;
     cpu->cfg.max_satp_mode = -1;
@@ -3555,16 +3565,18 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_xtheadcondmov = true,
         .cfg.ext_xtheadfmemidx = true,
         .cfg.ext_xtheadmac = true,
+        .cfg.ext_xtheadmaee = true,
         .cfg.ext_xtheadmemidx = true,
         .cfg.ext_xtheadmempair = true,
         .cfg.ext_xtheadsync = true,
         .cfg.pmp = true,
+        .cfg.pmp_addr_bits = 40,
         .cfg.mmu = true,
 
         .cfg.mvendorid = THEAD_VENDOR_ID,
         .cfg.max_satp_mode = VM_1_10_SV39,
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
-        .custom_csrs = th_csr_list,
+        .custom_csrs = th_c910_csr_list,
 #endif
     ),
 

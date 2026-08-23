@@ -25,6 +25,9 @@
 void riscv_cpu_validate_set_extensions(RISCVCPU *cpu, Error **errp);
 void riscv_tcg_cpu_finalize_features(RISCVCPU *cpu, Error **errp);
 bool riscv_cpu_tcg_compatible(RISCVCPU *cpu);
+#ifndef CONFIG_USER_ONLY
+void riscv_tcg_register_custom_csrs(RISCVCPU *cpu);
+#endif
 
 extern const TCGCPUOps riscv_tcg_ops;
 

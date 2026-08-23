@@ -17,67 +17,67 @@
  */
 
 #define REQUIRE_XTHEADBA(ctx) do {               \
-    if (!ctx->cfg_ptr->ext_xtheadba) {           \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadba) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADBB(ctx) do {               \
-    if (!ctx->cfg_ptr->ext_xtheadbb) {           \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadbb) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADBS(ctx) do {               \
-    if (!ctx->cfg_ptr->ext_xtheadbs) {           \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadbs) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADCMO(ctx) do {              \
-    if (!ctx->cfg_ptr->ext_xtheadcmo) {          \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadcmo) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADCONDMOV(ctx) do {          \
-    if (!ctx->cfg_ptr->ext_xtheadcondmov) {      \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadcondmov) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADFMEMIDX(ctx) do {          \
-    if (!ctx->cfg_ptr->ext_xtheadfmemidx) {      \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadfmemidx) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADFMV(ctx) do {              \
-    if (!ctx->cfg_ptr->ext_xtheadfmv) {          \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadfmv) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADMAC(ctx) do {              \
-    if (!ctx->cfg_ptr->ext_xtheadmac) {          \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadmac) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADMEMIDX(ctx) do {           \
-    if (!ctx->cfg_ptr->ext_xtheadmemidx) {       \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadmemidx) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADMEMPAIR(ctx) do {          \
-    if (!ctx->cfg_ptr->ext_xtheadmempair) {      \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadmempair) { \
         return false;                            \
     }                                            \
 } while (0)
 
 #define REQUIRE_XTHEADSYNC(ctx) do {             \
-    if (!ctx->cfg_ptr->ext_xtheadsync) {         \
+    if (!ctx->theadisaee || !ctx->cfg_ptr->ext_xtheadsync) { \
         return false;                            \
     }                                            \
 } while (0)

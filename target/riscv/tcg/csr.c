@@ -1961,10 +1961,15 @@ static target_ulong legalize_xatp(CPURISCVState *env, target_ulong old_xatp,
 {
     target_ulong mask;
     bool vm;
+    uint8_t ppn_bits = riscv_cpu_cfg(env)->pmp_addr_bits - PGSHIFT;
+
+    g_assert(ppn_bits > 0 && ppn_bits <= 44);
     if (riscv_cpu_mxl(env) == MXL_RV32) {
+        val &= SATP32_MODE | SATP32_ASID | MAKE_64BIT_MASK(0, ppn_bits);
         vm = validate_vm(env, get_field(val, SATP32_MODE));
         mask = (val ^ old_xatp) & (SATP32_MODE | SATP32_ASID | SATP32_PPN);
     } else {
+        val &= SATP64_MODE | SATP64_ASID | MAKE_64BIT_MASK(0, ppn_bits);
         vm = validate_vm(env, get_field(val, SATP64_MODE));
         mask = (val ^ old_xatp) & (SATP64_MODE | SATP64_ASID | SATP64_PPN);
     }

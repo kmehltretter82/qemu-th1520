@@ -83,6 +83,8 @@ void riscv_set_csr_ops(int csrno, const riscv_csr_operations *ops);
 
 /* In th_csr.c */
 extern const RISCVCSR th_csr_list[];
+extern const RISCVCSR th_c910_csr_list[];
+void riscv_thead_c910_csr_reset(CPURISCVState *env);
 
 /* Implemented in mips_csr.c */
 extern const RISCVCSR mips_csr_list[];

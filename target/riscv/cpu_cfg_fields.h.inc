@@ -148,6 +148,7 @@ BOOL_FIELD(ext_xtheadcondmov)
 BOOL_FIELD(ext_xtheadfmemidx)
 BOOL_FIELD(ext_xtheadfmv)
 BOOL_FIELD(ext_xtheadmac)
+BOOL_FIELD(ext_xtheadmaee)
 BOOL_FIELD(ext_xtheadmemidx)
 BOOL_FIELD(ext_xtheadmempair)
 BOOL_FIELD(ext_xtheadsync)
@@ -177,6 +178,8 @@ TYPED_FIELD(uint16_t, cbop_blocksize, 0)
 TYPED_FIELD(uint16_t, cboz_blocksize, 0)
 TYPED_FIELD(uint8_t,  pmp_regions, 0)
 TYPED_FIELD(uint32_t, pmp_granularity, 0)
+/* Number of implemented physical-address bits, including the low two bits. */
+TYPED_FIELD(uint8_t,  pmp_addr_bits, 0)
 
 TYPED_FIELD(int8_t, max_satp_mode, -1)
 

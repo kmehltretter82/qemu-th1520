@@ -740,6 +740,11 @@ typedef enum {
 #define PTE_RESERVED(svrsw60t59b)    \
     (svrsw60t59b ? 0x07C0000000000000ULL : 0x1FC0000000000000ULL) /* Reserved bits */
 #define PTE_ATTR            (PTE_N | PTE_PBMT) /* All attributes bits */
+#define PTE_THEAD_MAEE      MAKE_64BIT_MASK(59, 5)
+
+/* T-Head C9xx machine-extension status bits. */
+#define THEAD_MXSTATUS_MAEE       BIT_ULL(21)
+#define THEAD_MXSTATUS_THEADISAEE BIT_ULL(22)
 
 /* Page table PPN shift amount */
 #define PTE_PPN_SHIFT       10

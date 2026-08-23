@@ -360,6 +360,16 @@ struct CPUArchState {
     uint64_t mcause;
     uint64_t mtval;  /* since: priv-1.10.0 */
 
+    /* T-Head C910 custom CSR state. */
+    uint64_t th_mxstatus;
+    uint64_t th_mhcr;
+    uint64_t th_mcor;
+    uint64_t th_mhint;
+    uint64_t th_mhint2;
+    uint64_t th_mhint3;
+    uint32_t th_mcounterwen;
+    uint8_t th_cpuid_index;
+
     uint64_t mctrctl;
     uint32_t sctrdepth;
     uint32_t sctrstatus;
@@ -742,6 +752,7 @@ FIELD(TB_FLAGS, PM_SIGNEXTEND, 31, 1)
 FIELD(EXT_TB_FLAGS, MISA_EXT, 0, 32)
 FIELD(EXT_TB_FLAGS, ALTFMT, 32, 1)
 FIELD(EXT_TB_FLAGS, BIG_ENDIAN, 33, 1)
+FIELD(EXT_TB_FLAGS, THEADISAEE, 34, 1)
 
 #ifdef TARGET_RISCV32
 #define riscv_cpu_mxl(env)  ((void)(env), MXL_RV32)
@@ -759,6 +770,12 @@ static inline const RISCVCPUConfig *riscv_cpu_cfg(CPURISCVState *env)
 }
 
 #if !defined(CONFIG_USER_ONLY)
+static inline bool riscv_thead_maee_enabled(CPURISCVState *env)
+{
+    return riscv_cpu_cfg(env)->ext_xtheadmaee &&
+           (env->th_mxstatus & THEAD_MXSTATUS_MAEE);
+}
+
 static inline privilege_mode_t cpu_address_mode(CPURISCVState *env)
 {
     privilege_mode_t mode = env->priv;

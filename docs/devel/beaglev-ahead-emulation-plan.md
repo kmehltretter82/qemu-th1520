@@ -74,6 +74,9 @@ The implementation must cite and pin the evidence used for each block:
   https://github.com/beagleboard/beaglev-ahead
 * T-Head extension specifications:
   https://github.com/XUANTIE-RV/thead-extension-spec
+* Official openC910 RTL at commit
+  b91c90914c19f114d35c8f6b73408eb241ed847c:
+  https://github.com/XUANTIE-RV/openc910
 * Firmware and kernel versions used by an official BeagleV Ahead image, pinned
   by commit and image hash before compatibility work starts.
 
@@ -118,7 +121,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | Partial C908-oriented skeleton | Implement C910-visible state, WARL behavior, faults, counters, migration |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | Configurable SiFive PLIC exists | Verify or derive a C900/TH1520 wrapper, 240 sources and eight contexts |
 | CLINT/timer | Generic ACLINT SWI/MTIMER exists | Verify C900 layout, 3 MHz timebase, reset and access-size behavior |
 | UART0-5 | Generic 16550 serial-mm exists | Add DW APB wrapper/probe registers, reg-shift 2, 32-bit accesses and clocks |
