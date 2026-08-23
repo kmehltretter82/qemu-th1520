@@ -40,6 +40,12 @@
 #define TH1520_PADCTRL_AOSYS_BASE  0xfffff4a000ULL
 #define TH1520_PADCTRL1_APSYS_BASE 0xffe7f3c000ULL
 #define TH1520_PADCTRL0_APSYS_BASE 0xffec007000ULL
+#define TH1520_I2C0_BASE           0xffe7f20000ULL
+#define TH1520_I2C1_BASE           0xffe7f24000ULL
+#define TH1520_I2C2_BASE           0xffec00c000ULL
+#define TH1520_I2C3_BASE           0xffec014000ULL
+#define TH1520_I2C4_BASE           0xffe7f28000ULL
+#define TH1520_I2C5_BASE           0xfff7f2c000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -102,6 +108,40 @@
 #define DW_GPIO_CONFIG_REG2        0x70
 #define DW_GPIO_CONFIG_REG1        0x74
 
+#define DW_I2C_CON                 0x00
+#define DW_I2C_TAR                 0x04
+#define DW_I2C_DATA_CMD            0x10
+#define DW_I2C_INTR_STAT           0x2c
+#define DW_I2C_INTR_MASK           0x30
+#define DW_I2C_RAW_INTR_STAT       0x34
+#define DW_I2C_RX_TL               0x38
+#define DW_I2C_CLR_INTR            0x40
+#define DW_I2C_CLR_TX_ABRT         0x54
+#define DW_I2C_ENABLE              0x6c
+#define DW_I2C_STATUS              0x70
+#define DW_I2C_RXFLR               0x78
+#define DW_I2C_TX_ABRT_SOURCE      0x80
+#define DW_I2C_SDA_SETUP           0x94
+#define DW_I2C_ACK_GENERAL_CALL    0x98
+#define DW_I2C_ENABLE_STATUS       0x9c
+#define DW_I2C_FS_SPKLEN           0xa0
+#define DW_I2C_HS_SPKLEN           0xa4
+#define DW_I2C_SCL_STUCK_TIMEOUT   0xac
+#define DW_I2C_SDA_STUCK_TIMEOUT   0xb0
+#define DW_I2C_COMP_PARAM1         0xf4
+#define DW_I2C_COMP_VERSION        0xf8
+#define DW_I2C_COMP_TYPE           0xfc
+
+#define DW_I2C_CON_MASTER          BIT(0)
+#define DW_I2C_CON_SPEED_FAST      BIT(2)
+#define DW_I2C_CON_RESTART         BIT(5)
+#define DW_I2C_CON_SLAVE_DISABLE   BIT(6)
+#define DW_I2C_DATA_READ           BIT(8)
+#define DW_I2C_DATA_STOP           BIT(9)
+#define DW_I2C_DATA_RESTART        BIT(10)
+#define DW_I2C_INTR_RX_FULL        BIT(2)
+#define DW_I2C_INTR_TX_ABRT        BIT(6)
+
 #define CSR_TIME                   0xc01
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
@@ -127,6 +167,12 @@
 #define TH1520_GPIO3_IRQ           59
 #define TH1520_GPIO4_IRQ           55
 #define TH1520_AOGPIO_IRQ          76
+#define TH1520_I2C0_IRQ            44
+#define TH1520_I2C1_IRQ            45
+#define TH1520_I2C2_IRQ            46
+#define TH1520_I2C3_IRQ            47
+#define TH1520_I2C4_IRQ            48
+#define TH1520_I2C5_IRQ            49
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
@@ -152,7 +198,20 @@
 #define TH1520_CLK_GPIO0           61
 #define TH1520_CLK_GPIO1           62
 #define TH1520_CLK_GPIO2           63
+#define TH1520_CLK_I2C0            64
+#define TH1520_CLK_I2C1            65
+#define TH1520_CLK_I2C2            66
+#define TH1520_CLK_I2C3            67
+#define TH1520_CLK_I2C4            68
+#define TH1520_CLK_I2C5            69
 #define TH1520_CLK_UART_SCLK       85
+
+#define TH1520_I2C_COMP_PARAM1     0x000f0fee
+#define TH1520_I2C_COMP_VERSION    0x3230322a
+#define TH1520_I2C_COMP_TYPE       0x44570140
+#define TH1520_I2C_INTR_RESET      0x000048ff
+#define TH1520_I2C_INTR_VALID      0x00004fff
+#define BEAGLEV_AHEAD_EEPROM_ADDR  0x50
 
 #define TH1520_PLL_STS             0x080
 #define TH1520_C910_CLK_CFG        0x100
@@ -372,6 +431,14 @@ typedef struct TH1520PadCtrl {
     int32_t clock_id;
 } TH1520PadCtrl;
 
+typedef struct TH1520I2CController {
+    const char *name;
+    uint64_t base;
+    uint32_t irq;
+    uint32_t clock_id;
+    bool board_enabled;
+} TH1520I2CController;
+
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
     { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
@@ -421,6 +488,15 @@ static const TH1520PadCtrl th1520_padctrls[] = {
       TH1520_CLK_PADCTRL1 },
     { "padctrl0-apsys", TH1520_PADCTRL0_APSYS_BASE, 0x1000, 3,
       TH1520_CLK_PADCTRL0 },
+};
+
+static const TH1520I2CController th1520_i2c_controllers[] = {
+    { "i2c0", TH1520_I2C0_BASE, TH1520_I2C0_IRQ, TH1520_CLK_I2C0, true },
+    { "i2c1", TH1520_I2C1_BASE, TH1520_I2C1_IRQ, TH1520_CLK_I2C1, false },
+    { "i2c2", TH1520_I2C2_BASE, TH1520_I2C2_IRQ, TH1520_CLK_I2C2, false },
+    { "i2c3", TH1520_I2C3_BASE, TH1520_I2C3_IRQ, TH1520_CLK_I2C3, false },
+    { "i2c4", TH1520_I2C4_BASE, TH1520_I2C4_IRQ, TH1520_CLK_I2C4, false },
+    { "i2c5", TH1520_I2C5_BASE, TH1520_I2C5_IRQ, TH1520_CLK_I2C5, false },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -1041,6 +1117,61 @@ static void assert_uart_fdt(const void *fdt,
     g_assert_cmpstr(fdt_get_alias(fdt, alias), ==, path);
 }
 
+static void assert_i2c_fdt(const void *fdt,
+                           const TH1520I2CController *controller,
+                           uint32_t clock_phandle)
+{
+    static const char *const compatibles[] = {
+        "thead,th1520-i2c", "snps,designware-i2c"
+    };
+    g_autofree char *path =
+        g_strdup_printf("/soc/i2c@%" PRIx64, controller->base);
+    g_autofree char *eeprom_path =
+        g_strdup_printf("%s/eeprom@%x", path, BEAGLEV_AHEAD_EEPROM_ADDR);
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    assert_fdt_stringlist(fdt, node, "compatible", compatibles,
+                          ARRAY_SIZE(compatibles));
+    assert_fdt_mmio(fdt, node, controller->base, 0x4000);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#address-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#size-cells"), ==, 0);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, controller->clock_id);
+
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, controller->board_enabled ?
+                    "okay" : "disabled");
+
+    node = fdt_path_offset(fdt, eeprom_path);
+    if (!controller->board_enabled) {
+        g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
+        return;
+    }
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "atmel,24c32");
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "reg"), ==,
+                    BEAGLEV_AHEAD_EEPROM_ADDR);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "pagesize"), ==, 32);
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1279,6 +1410,11 @@ static void test_direct_boot_contract(void)
     for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
         assert_uart_fdt(fdt, &th1520_uart_controllers[i],
                         ap_clock_phandle);
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
+        assert_i2c_fdt(fdt, &th1520_i2c_controllers[i],
+                       ap_clock_phandle);
     }
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
@@ -2654,6 +2790,258 @@ static void test_dw_uart_interrupts(void)
     qtest_quit(qts);
 }
 
+static void dw_i2c_enable(QTestState *qts, uint64_t base, uint8_t target,
+                          uint32_t intr_mask)
+{
+    qtest_writel(qts, base + DW_I2C_ENABLE, 0);
+    qtest_readl(qts, base + DW_I2C_CLR_INTR);
+    qtest_writel(qts, base + DW_I2C_CON,
+                  DW_I2C_CON_MASTER | DW_I2C_CON_SPEED_FAST |
+                  DW_I2C_CON_RESTART | DW_I2C_CON_SLAVE_DISABLE);
+    qtest_writel(qts, base + DW_I2C_TAR, target);
+    qtest_writel(qts, base + DW_I2C_RX_TL, 0);
+    qtest_writel(qts, base + DW_I2C_INTR_MASK, intr_mask);
+    qtest_writel(qts, base + DW_I2C_ENABLE, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ENABLE_STATUS), ==, 1);
+}
+
+static void dw_i2c_disable(QTestState *qts, uint64_t base)
+{
+    qtest_writel(qts, base + DW_I2C_ENABLE, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ENABLE_STATUS), ==, 0);
+}
+
+static void dw_i2c_eeprom_write(QTestState *qts, uint16_t address,
+                                const uint8_t *data, size_t len)
+{
+    uint64_t base = TH1520_I2C0_BASE;
+
+    g_assert_cmpuint(len, >, 0);
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, address >> 8);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, address & 0xff);
+    for (size_t i = 0; i < len; i++) {
+        uint32_t command = data[i];
+
+        if (i == len - 1) {
+            command |= DW_I2C_DATA_STOP;
+        }
+        qtest_writel(qts, base + DW_I2C_DATA_CMD, command);
+    }
+    dw_i2c_disable(qts, base);
+}
+
+static void dw_i2c_eeprom_queue_read(QTestState *qts, uint16_t address,
+                                     uint32_t intr_mask)
+{
+    uint64_t base = TH1520_I2C0_BASE;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR, intr_mask);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, address >> 8);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, address & 0xff);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD,
+                  DW_I2C_DATA_READ | DW_I2C_DATA_RESTART |
+                  DW_I2C_DATA_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 1);
+}
+
+static uint8_t dw_i2c_eeprom_read(QTestState *qts, uint16_t address)
+{
+    uint64_t base = TH1520_I2C0_BASE;
+    uint8_t value;
+
+    dw_i2c_eeprom_queue_read(qts, address, 0);
+    value = qtest_readl(qts, base + DW_I2C_DATA_CMD);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 0);
+    dw_i2c_disable(qts, base);
+    return value;
+}
+
+static uint8_t dw_i2c_eeprom_current_read(QTestState *qts)
+{
+    uint64_t base = TH1520_I2C0_BASE;
+    uint8_t value;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD,
+                  DW_I2C_DATA_READ | DW_I2C_DATA_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 1);
+    value = qtest_readl(qts, base + DW_I2C_DATA_CMD);
+    dw_i2c_disable(qts, base);
+    return value;
+}
+
+static void assert_dw_i2c_reset_state(QTestState *qts, uint64_t base)
+{
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_INTR_MASK), ==,
+                    TH1520_I2C_INTR_RESET);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_STATUS), ==, 6);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ENABLE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ENABLE_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_SDA_SETUP), ==, 0x64);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ACK_GENERAL_CALL), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_SCL_STUCK_TIMEOUT), ==,
+                    UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_SDA_STUCK_TIMEOUT), ==,
+                    UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_PARAM1), ==,
+                    TH1520_I2C_COMP_PARAM1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_VERSION), ==,
+                    TH1520_I2C_COMP_VERSION);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_TYPE), ==,
+                    TH1520_I2C_COMP_TYPE);
+}
+
+static void test_dw_i2c_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
+        uint64_t base = th1520_i2c_controllers[i].base;
+
+        assert_dw_i2c_reset_state(qts, base);
+        qtest_writel(qts, base + DW_I2C_INTR_MASK, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_INTR_MASK), ==,
+                        TH1520_I2C_INTR_VALID);
+        qtest_writel(qts, base + DW_I2C_COMP_PARAM1, 0);
+        qtest_writel(qts, base + DW_I2C_COMP_VERSION, 0);
+        qtest_writel(qts, base + DW_I2C_COMP_TYPE, 0);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_PARAM1), ==,
+                        TH1520_I2C_COMP_PARAM1);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_VERSION), ==,
+                        TH1520_I2C_COMP_VERSION);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_TYPE), ==,
+                        TH1520_I2C_COMP_TYPE);
+
+        qtest_writel(qts, base + DW_I2C_FS_SPKLEN, 0);
+        qtest_writel(qts, base + DW_I2C_HS_SPKLEN, 0);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
+        qtest_writel(qts, base + DW_I2C_ENABLE, 1);
+        qtest_writel(qts, base + DW_I2C_FS_SPKLEN, 7);
+        qtest_writel(qts, base + DW_I2C_HS_SPKLEN, 7);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
+        dw_i2c_disable(qts, base);
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
+        assert_dw_i2c_reset_state(qts, th1520_i2c_controllers[i].base);
+    }
+    qtest_quit(qts);
+}
+
+static void test_dw_i2c_eeprom(void)
+{
+    static const uint8_t edge_data[] = { 0x12, 0x34, 0x56 };
+    const uint8_t next_page = 0xa5;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x000), ==, 0xff);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0xfff), ==, 0xff);
+
+    /* End one 32-byte page without depending on unsupported page wrapping. */
+    dw_i2c_eeprom_write(qts, 0x01d, edge_data, ARRAY_SIZE(edge_data));
+    dw_i2c_eeprom_write(qts, 0x020, &next_page, 1);
+    for (size_t i = 0; i < ARRAY_SIZE(edge_data); i++) {
+        g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x01d + i), ==,
+                        edge_data[i]);
+    }
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, next_page);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x01d), ==, edge_data[0]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, next_page);
+    qtest_quit(qts);
+}
+
+static void test_dw_i2c_eeprom_backing(void)
+{
+    uint8_t initial[4096];
+    uint8_t actual[4096];
+    const uint8_t replacement = 0x77;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *path = NULL;
+    QTestState *qts;
+    int fd;
+
+    for (size_t i = 0; i < sizeof(initial); i++) {
+        initial[i] = i ^ (i >> 4) ^ 0xa5;
+    }
+    fd = g_file_open_tmp("beaglev-ahead-eeprom-XXXXXX", &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(pwrite(fd, initial, sizeof(initial), 0), ==,
+                    sizeof(initial));
+    g_assert_cmpint(fsync(fd), ==, 0);
+    close(fd);
+
+    qts = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=none,id=board-eeprom,format=raw,file=%s "
+        "-global at24c-eeprom.drive=board-eeprom", path);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x000), ==, initial[0x000]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x123), ==, initial[0x123]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0xfff), ==, initial[0xfff]);
+    dw_i2c_eeprom_write(qts, 0x123, &replacement, 1);
+    qtest_quit(qts);
+
+    fd = open(path, O_RDONLY);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(read(fd, actual, sizeof(actual)), ==, sizeof(actual));
+    close(fd);
+    initial[0x123] = replacement;
+    g_assert_cmpmem(actual, sizeof(actual), initial, sizeof(initial));
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_dw_i2c_interrupts(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
+        const TH1520I2CController *controller =
+            &th1520_i2c_controllers[i];
+        uint64_t base = controller->base;
+
+        qtest_writel(qts, C900_PLIC_PRIORITY(controller->irq), 5);
+        c900_plic_set_enable(qts, 1, controller->irq, true);
+        dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR + 1,
+                      DW_I2C_INTR_TX_ABRT);
+        qtest_writel(qts, base + DW_I2C_DATA_CMD,
+                      0xa5 | DW_I2C_DATA_STOP);
+
+        g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                      DW_I2C_INTR_TX_ABRT);
+        g_assert_true(qtest_readl(qts, base + DW_I2C_INTR_STAT) &
+                      DW_I2C_INTR_TX_ABRT);
+        g_assert_true(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE) &
+                      BIT(0));
+        g_assert_true(c900_plic_pending(qts, controller->irq));
+        assert_only_irq(qts, 0);
+        g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                        controller->irq);
+        assert_no_irq(qts);
+
+        qtest_readl(qts, base + DW_I2C_CLR_TX_ABRT);
+        g_assert_false(qtest_readl(qts, base + DW_I2C_INTR_STAT) &
+                       DW_I2C_INTR_TX_ABRT);
+        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE), ==,
+                        0);
+        qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
+        dw_i2c_disable(qts, base);
+        c900_plic_set_enable(qts, 1, controller->irq, false);
+        assert_no_irq(qts);
+    }
+
+    qtest_quit(qts);
+}
+
 static void assert_padctrl_reset_state(QTestState *qts,
                                        const TH1520PadCtrl *controller)
 {
@@ -3226,6 +3614,59 @@ static void wait_for_migration_complete(QTestState *qts)
         g_usleep(10000);
     }
     g_error("migration did not complete within 30 seconds");
+}
+
+static void test_dw_i2c_migration(void)
+{
+    static const uint8_t contents[] = { 0xa5, 0x5a };
+    uint64_t base = TH1520_I2C0_BASE;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-i2c-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    dw_i2c_eeprom_write(src, 0x123, contents, ARRAY_SIZE(contents));
+    dw_i2c_eeprom_queue_read(src, 0x123, DW_I2C_INTR_RX_FULL);
+    g_assert_true(qtest_readl(src, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_RX_FULL);
+    g_assert_true(qtest_readl(src, base + DW_I2C_INTR_STAT) &
+                  DW_I2C_INTR_RX_FULL);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, base + DW_I2C_RXFLR), ==, 1);
+    g_assert_true(qtest_readl(dst, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_RX_FULL);
+    g_assert_true(qtest_readl(dst, base + DW_I2C_INTR_STAT) &
+                  DW_I2C_INTR_RX_FULL);
+    g_assert_cmphex(qtest_readl(dst, base + DW_I2C_DATA_CMD), ==,
+                    contents[0]);
+    g_assert_cmphex(qtest_readl(dst, base + DW_I2C_RXFLR), ==, 0);
+    dw_i2c_disable(dst, base);
+
+    /* The EEPROM data and its post-read address counter both migrate. */
+    g_assert_cmphex(dw_i2c_eeprom_current_read(dst), ==, contents[1]);
+    qtest_system_reset(dst);
+    g_assert_cmphex(dw_i2c_eeprom_read(dst, 0x124), ==, contents[1]);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_padctrl_migration(void)
@@ -3990,6 +4431,16 @@ int main(int argc, char **argv)
                        test_dw_gpio_interrupts);
         qtest_add_func("/beaglev-ahead/dw-gpio/migration",
                        test_dw_gpio_migration);
+        qtest_add_func("/beaglev-ahead/dw-i2c/registers",
+                       test_dw_i2c_registers);
+        qtest_add_func("/beaglev-ahead/dw-i2c/eeprom",
+                       test_dw_i2c_eeprom);
+        qtest_add_func("/beaglev-ahead/dw-i2c/eeprom-backing",
+                       test_dw_i2c_eeprom_backing);
+        qtest_add_func("/beaglev-ahead/dw-i2c/interrupts",
+                       test_dw_i2c_interrupts);
+        qtest_add_func("/beaglev-ahead/dw-i2c/migration",
+                       test_dw_i2c_migration);
         qtest_add_func("/beaglev-ahead/dmac/registers",
                        test_dmac_registers);
         qtest_add_func("/beaglev-ahead/dmac/direct-transfer",
