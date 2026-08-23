@@ -57,5 +57,11 @@ run-test-thead-c900-clint: test-thead-c900-clint
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 
+EXTRA_RUNS += run-test-thead-c900-plic
+test-thead-c900-plic: test-thead-c900-plic.o
+run-test-thead-c900-plic: test-thead-c900-plic
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 # We don't currently support the multiarch system tests
 undefine MULTIARCH_TESTS

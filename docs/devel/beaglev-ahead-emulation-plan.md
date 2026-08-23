@@ -131,7 +131,7 @@ validation.
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
-| PLIC | Configurable SiFive PLIC exists | Verify or derive a C900/TH1520 wrapper, 240 sources and eight contexts |
+| PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | UART0-5 | Generic 16550 serial-mm exists | Add DW APB wrapper/probe registers, reg-shift 2, 32-bit accesses and clocks |
 | I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
@@ -170,15 +170,19 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * a reusable C900 CLINT derived from pinned openC910 RTL and OpenSBI behavior,
   with exact M/S software and timer banks, four-hart wiring, a 3 MHz time CSR,
   reset and migration state, qtests for every output, and a TCG privilege/CSR
-  delivery test; and
+  delivery test;
+* a reusable C900 PLIC with the Linux-established 240-source/eight-context
+  topology and public-RTL delegation, pending, priority, arbitration,
+  trigger, claim/complete, reset and migration behavior, plus qtests for all
+  contexts and a TCG M/S/U privilege and interrupt-delivery test; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
-The CLINT portion of the Phase 1 interrupt gate is implemented, but Phase 1 is
-not closed: the C900 PLIC, UART, SMP payload, Linux, sanitizer, and migration
-gates remain.  Phases 2 and 3 likewise retain their exhaustive and physical-
-differential gates.  All provisional behavior is linked to an open item in the
-companion ledger.
+The C900 PLIC and CLINT portions of the Phase 1 interrupt gate are implemented,
+but Phase 1 is not closed: the exact UART, SMP payload, Linux, sanitizer, and
+whole-machine migration gates remain.  Phases 2 and 3 likewise retain their
+exhaustive and physical-differential gates.  All provisional behavior is
+linked to an open item in the companion ledger.
 
 ## Intended source architecture
 

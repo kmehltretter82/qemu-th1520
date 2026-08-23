@@ -92,6 +92,10 @@ config SIFIVE_PLIC
 config THEAD_C900_CLINT
     bool
 
+config THEAD_C900_PLIC
+    bool
+    select MSI_NONBROKEN
+
 config GOLDFISH_PIC
     bool
 

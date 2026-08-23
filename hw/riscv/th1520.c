@@ -23,8 +23,8 @@
 #include "hw/char/serial-mm.h"
 #include "hw/core/loader.h"
 #include "hw/core/sysbus.h"
-#include "hw/intc/sifive_plic.h"
 #include "hw/intc/thead_c900_clint.h"
+#include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/unimp.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
@@ -46,24 +46,6 @@ static GlobalProperty beaglev_ahead_cpu_defaults[] = {
     /* CPU-011: do not advertise standardized Sdtrig without evidence. */
     { TYPE_RISCV_CPU_THEAD_C910, "debug", "off" },
 };
-
-static DeviceState *th1520_create_plic(void)
-{
-    g_autofree char *hart_config =
-        riscv_plic_hart_config_string(TH1520_C910_HARTS);
-
-    return sifive_plic_create(th1520_memmap[TH1520_DEV_PLIC].base,
-                              hart_config, TH1520_C910_HARTS, 0,
-                              TH1520_PLIC_NUM_SOURCES,
-                              TH1520_PLIC_NUM_PRIORITIES,
-                              TH1520_PLIC_PRIORITY_BASE,
-                              TH1520_PLIC_PENDING_BASE,
-                              TH1520_PLIC_ENABLE_BASE,
-                              TH1520_PLIC_ENABLE_STRIDE,
-                              TH1520_PLIC_CONTEXT_BASE,
-                              TH1520_PLIC_CONTEXT_STRIDE,
-                              th1520_memmap[TH1520_DEV_PLIC].size);
-}
 
 static void th1520_create_pmu_fdt(void *fdt)
 {
@@ -125,6 +107,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_RISCV_HART_ARRAY);
     object_initialize_child(obj, "clint", &s->clint,
                             TYPE_THEAD_C900_CLINT);
+    object_initialize_child(obj, "plic", &s->plic,
+                            TYPE_THEAD_C900_PLIC);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "hartid-base", 0);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "num-harts",
                          TH1520_C910_HARTS);
@@ -137,6 +121,11 @@ static void th1520_soc_init(Object *obj)
                          TH1520_C910_HARTS);
     qdev_prop_set_uint32(DEVICE(&s->clint), "timebase-freq",
                          TH1520_TIMEBASE_FREQ);
+    qdev_prop_set_uint32(DEVICE(&s->plic), "hartid-base", 0);
+    qdev_prop_set_uint32(DEVICE(&s->plic), "num-harts",
+                         TH1520_C910_HARTS);
+    qdev_prop_set_uint32(DEVICE(&s->plic), "num-sources",
+                         TH1520_PLIC_NUM_SOURCES);
 }
 
 static void th1520_soc_realize(DeviceState *dev, Error **errp)
@@ -166,7 +155,19 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                 th1520_memmap[TH1520_DEV_BROM].base,
                                 &s->brom);
 
-    s->plic = th1520_create_plic();
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->plic), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->plic), 0,
+                    th1520_memmap[TH1520_DEV_PLIC].base);
+    for (int i = 0; i < TH1520_C910_HARTS; i++) {
+        DeviceState *cpu = DEVICE(qemu_get_cpu(i));
+
+        qdev_connect_gpio_out_named(DEVICE(&s->plic), "mext", i,
+                                    qdev_get_gpio_in(cpu, IRQ_M_EXT));
+        qdev_connect_gpio_out_named(DEVICE(&s->plic), "sext", i,
+                                    qdev_get_gpio_in(cpu, IRQ_S_EXT));
+    }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->clint), errp)) {
         return;
@@ -195,7 +196,8 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                 th1520_memmap[TH1520_DEV_UART0].base,
                                 th1520_memmap[TH1520_DEV_UART0].size);
     serial_mm_init(system_memory, th1520_memmap[TH1520_DEV_UART0].base, 2,
-                   qdev_get_gpio_in(s->plic, TH1520_UART0_IRQ),
+                   qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                          TH1520_UART0_IRQ),
                    TH1520_UART_INPUT_FREQ / 16, serial_hd(0),
                    DEVICE_LITTLE_ENDIAN);
 }

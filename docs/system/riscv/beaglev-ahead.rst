@@ -22,7 +22,9 @@ The machine currently provides:
 * 4 GiB RAM at ``0x0000000000``;
 * 1.5 MiB SRAM at ``0xffe0000000``;
 * the 1 MiB mask-ROM aperture at ``0xffffd00000``;
-* a 240-source PLIC at ``0xffd8000000``;
+* a 240-source C900 PLIC at ``0xffd8000000``, with eight M/S contexts,
+  T-Head privilege delegation, writable pending state, and per-source
+  edge/level inputs;
 * a C900 CLINT at ``0xffdc000000``, with four-hart MSIP, MTIMECMP,
   SSIP, and STIMECMP banks and a 3 MHz architectural timer; and
 * the UART0 16550 register subset at ``0xffe7014000`` and PLIC interrupt 36.
@@ -79,6 +81,19 @@ are itemized in the hardware validation ledger.
 
 Peripheral limitations
 ----------------------
+
+The PLIC follows the public C900 RTL rather than QEMU's generic SiFive model.
+It implements five-bit priority and threshold fields, the machine-only
+supervisor-delegation register at offset ``0x1ffffc``, writable pending words,
+shared M/S arbitration, completion-qualified active state, and level
+re-pending.  Its reset, all eight contexts, priority and tie-breaking rules,
+edge/level inputs, privilege faults, CPU interrupt delivery, and migration
+state have focused tests.  Linux establishes the TH1520 source count and
+context topology, but the openC910 integration is not the TH1520 synthesis.
+Consequently, the physical priority width, complete edge/level map,
+security/AMP configuration, simultaneous-event ordering, and reset-domain
+behavior remain hardware-validation items.  SoC inputs without a proved
+trigger type currently default to level-sensitive.
 
 The CLINT follows the public openC910 register layout: it has separate
 machine and supervisor software/compare banks, 32-bit registers, and no

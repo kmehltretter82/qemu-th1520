@@ -9,6 +9,7 @@
 
 #include "hw/core/boards.h"
 #include "hw/intc/thead_c900_clint.h"
+#include "hw/intc/thead_c900_plic.h"
 #include "hw/riscv/riscv_hart.h"
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
@@ -21,7 +22,7 @@ struct TH1520SoCState {
     MemoryRegion sram;
     MemoryRegion brom;
     THeadC900CLINTState clint;
-    DeviceState *plic;
+    THeadC900PLICState plic;
 };
 
 #define TYPE_BEAGLEV_AHEAD_MACHINE MACHINE_TYPE_NAME("beaglev-ahead")
@@ -50,13 +51,6 @@ enum {
 /* riscv,ndev describes IDs 1..240; QEMU's PLIC count includes ID zero. */
 #define TH1520_PLIC_NDEV 240
 #define TH1520_PLIC_NUM_SOURCES (TH1520_PLIC_NDEV + 1)
-#define TH1520_PLIC_NUM_PRIORITIES 7
-#define TH1520_PLIC_PRIORITY_BASE 0x000000
-#define TH1520_PLIC_PENDING_BASE 0x001000
-#define TH1520_PLIC_ENABLE_BASE 0x002000
-#define TH1520_PLIC_ENABLE_STRIDE 0x80
-#define TH1520_PLIC_CONTEXT_BASE 0x200000
-#define TH1520_PLIC_CONTEXT_STRIDE 0x1000
 
 #define TH1520_UART0_IRQ 36
 #define TH1520_UART_INPUT_FREQ 100000000
