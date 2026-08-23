@@ -34,7 +34,9 @@ class RiscvOpenSBI(QemuSystemTest):
                                  'Platform Timer Device       : aclint-mtimer @ 3000000Hz')
         wait_for_console_pattern(self, 'Platform Console Device     : uart8250')
         wait_for_console_pattern(self, 'Boot HART Priv Version      : v1.10')
-        wait_for_console_pattern(self, 'Boot HART PMP Address Bits  : 38')
+        wait_for_console_pattern(self, 'Boot HART PMP Count         : 0')
+        wait_for_console_pattern(self, 'Boot HART PMP Address Bits  : 0')
+        wait_for_console_pattern(self, 'Boot HART MHPM Info         : 16 (0x0007fff8)')
 
     def test_riscv_sifive_u(self):
         self.set_machine('sifive_u')

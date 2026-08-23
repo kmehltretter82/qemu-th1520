@@ -1264,7 +1264,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
             }
 
             ppn = (pte >> PTE_PPN_SHIFT) &
-                  MAKE_64BIT_MASK(0, riscv_cpu_cfg(env)->pmp_addr_bits -
+                  MAKE_64BIT_MASK(0, riscv_cpu_cfg(env)->phys_addr_bits -
                                      PGSHIFT);
         }
 

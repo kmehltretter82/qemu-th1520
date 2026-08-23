@@ -23,7 +23,6 @@
 #define CSR_MSTATUS         0x300
 #define CSR_MISA            0x301
 #define CSR_SATP            0x180
-#define CSR_PMPADDR0        0x3b0
 #define CSR_VSTART          0x008
 #define CSR_VXSAT           0x009
 #define CSR_VXRM            0x00a
@@ -126,9 +125,6 @@ static void run_test_thead_c910_csrs(void)
     }
     g_assert_cmphex(get_csr(qts, CSR_TH_CPUID), ==, cpuid[0]);
 
-    set_csr(qts, CSR_PMPADDR0, UINT64_MAX);
-    g_assert_cmphex(get_csr(qts, CSR_PMPADDR0), ==,
-                    (1ULL << 38) - 1);
     set_csr(qts, CSR_SATP, (8ULL << 60) | ((1ULL << 60) - 1));
     g_assert_cmphex(get_csr(qts, CSR_SATP), ==, satp_expected);
 

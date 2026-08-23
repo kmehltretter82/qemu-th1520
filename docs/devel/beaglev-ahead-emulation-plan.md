@@ -154,8 +154,9 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * a dependency-minimal ``beaglev-ahead`` machine with four ``thead-c910``
   harts, the physical RAM/SRAM/ROM map, PLIC, CLINT, UART0, generated DT, and
   direct OpenSBI/kernel boot;
-* C910 scalar identity, 40-bit physical-address constraints, the initial
-  custom CSR bank, migration state, and provisional MAEE PTE acceptance;
+* C910 scalar identity, 40-bit physical-address constraints, the TH1520
+  no-PMP configuration, the initial custom CSR bank, migration state, and
+  provisional MAEE PTE acceptance;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
   and CSR behavior, debugger/migration integration, and focused qtest/TCG
   smoke coverage; and

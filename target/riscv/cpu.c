@@ -1528,9 +1528,9 @@ static void riscv_cpu_init(Object *obj)
 #ifndef CONFIG_USER_ONLY
     cpu->cfg.pmp_granularity = MIN_RISCV_PMP_GRANULARITY;
 #ifdef TARGET_RISCV32
-    cpu->cfg.pmp_addr_bits = 34;
+    cpu->cfg.phys_addr_bits = 34;
 #else
-    cpu->cfg.pmp_addr_bits = 56;
+    cpu->cfg.phys_addr_bits = 56;
 #endif
 #endif
     cpu->env.vext_ver = VEXT_VERSION_1_00_0;
@@ -3575,8 +3575,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_xtheadmempair = true,
         .cfg.ext_xtheadsync = true,
         .cfg.ext_xtheadvector = true,
-        .cfg.pmp = true,
-        .cfg.pmp_addr_bits = 40,
+        .cfg.phys_addr_bits = 40,
         .cfg.mmu = true,
         .cfg.vlenb = 128 >> 3,
         .cfg.elen = 64,
