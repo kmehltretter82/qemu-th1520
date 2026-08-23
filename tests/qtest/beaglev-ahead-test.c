@@ -26,6 +26,11 @@
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
 #define TH1520_AP_RESET_BASE       0xffef014000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
+#define TH1520_UART1_BASE          0xffe7f00000ULL
+#define TH1520_UART2_BASE          0xffec010000ULL
+#define TH1520_UART3_BASE          0xffe7f04000ULL
+#define TH1520_UART4_BASE          0xfff7f08000ULL
+#define TH1520_UART5_BASE          0xfff7f0c000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -64,6 +69,12 @@
 #define DW_UART_UCV                (TH1520_UART0_BASE + 0xf8)
 #define DW_UART_CTR                (TH1520_UART0_BASE + 0xfc)
 
+#define DW_UART_IER_DLH_OFFSET     0x04
+#define DW_UART_IIR_FCR_OFFSET     0x08
+#define DW_UART_LSR_OFFSET         0x14
+#define DW_UART_SCR_OFFSET         0x1c
+#define DW_UART_CTR_OFFSET         0xfc
+
 #define CSR_TIME                   0xc01
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
@@ -78,6 +89,11 @@
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 
 #define TH1520_UART0_IRQ           36
+#define TH1520_UART1_IRQ           37
+#define TH1520_UART2_IRQ           38
+#define TH1520_UART3_IRQ           39
+#define TH1520_UART4_IRQ           40
+#define TH1520_UART5_IRQ           41
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
@@ -92,6 +108,11 @@
 #define TH1520_CLK_GMAC_AXI        48
 #define TH1520_CLK_GMAC0           50
 #define TH1520_CLK_UART0_PCLK      55
+#define TH1520_CLK_UART1_PCLK      56
+#define TH1520_CLK_UART2_PCLK      57
+#define TH1520_CLK_UART3_PCLK      58
+#define TH1520_CLK_UART4_PCLK      59
+#define TH1520_CLK_UART5_PCLK      60
 #define TH1520_CLK_UART_SCLK       85
 
 #define TH1520_PLL_STS             0x080
@@ -280,6 +301,15 @@ typedef struct TH1520GMACController {
     bool board_enabled;
 } TH1520GMACController;
 
+typedef struct TH1520UARTController {
+    const char *name;
+    uint64_t base;
+    uint32_t size;
+    uint32_t irq;
+    uint32_t pclk_id;
+    bool board_enabled;
+} TH1520UARTController;
+
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
     { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
@@ -291,6 +321,21 @@ static const TH1520GMACController th1520_gmac_controllers[] = {
       TH1520_GMAC0_IRQ, true },
     { "gmac1", TH1520_GMAC1_BASE, TH1520_GMAC1_APB_BASE,
       TH1520_GMAC1_IRQ, false },
+};
+
+static const TH1520UARTController th1520_uart_controllers[] = {
+    { "uart0", TH1520_UART0_BASE, 0x100,  TH1520_UART0_IRQ,
+      TH1520_CLK_UART0_PCLK, true },
+    { "uart1", TH1520_UART1_BASE, 0x100,  TH1520_UART1_IRQ,
+      TH1520_CLK_UART1_PCLK, false },
+    { "uart2", TH1520_UART2_BASE, 0x4000, TH1520_UART2_IRQ,
+      TH1520_CLK_UART2_PCLK, false },
+    { "uart3", TH1520_UART3_BASE, 0x100,  TH1520_UART3_IRQ,
+      TH1520_CLK_UART3_PCLK, false },
+    { "uart4", TH1520_UART4_BASE, 0x4000, TH1520_UART4_IRQ,
+      TH1520_CLK_UART4_PCLK, false },
+    { "uart5", TH1520_UART5_BASE, 0x4000, TH1520_UART5_IRQ,
+      TH1520_CLK_UART5_PCLK, false },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -673,6 +718,52 @@ static void assert_dmac_fdt(const void *fdt, uint32_t clock_phandle)
     }
 }
 
+static void assert_uart_fdt(const void *fdt,
+                            const TH1520UARTController *controller,
+                            uint32_t clock_phandle)
+{
+    static const char *const clock_names[] = { "baudclk", "apb_pclk" };
+    g_autofree char *path =
+        g_strdup_printf("/soc/serial@%" PRIx64, controller->base);
+    const fdt32_t *cells;
+    const char *text;
+    char alias[8];
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dw-apb-uart");
+    assert_fdt_mmio(fdt, node, controller->base, controller->size);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, TH1520_CLK_UART_SCLK);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, controller->pclk_id);
+    assert_fdt_stringlist(fdt, node, "clock-names", clock_names,
+                          ARRAY_SIZE(clock_names));
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "reg-shift"), ==, 2);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "reg-io-width"), ==, 4);
+
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, controller->board_enabled ?
+                    "okay" : "disabled");
+    snprintf(alias, sizeof(alias), "serial%u",
+             (unsigned)(controller - th1520_uart_controllers));
+    g_assert_cmpstr(fdt_get_alias(fdt, alias), ==, path);
+}
+
 static void test_direct_boot_contract(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -762,19 +853,10 @@ static void test_direct_boot_contract(void)
                            ap_clock_phandle);
     }
 
-    clock_offset = fdt_path_offset(fdt, "/soc/serial@ffe7014000");
-    g_assert_cmpint(clock_offset, >=, 0);
-    cold_boot_harts = fdt_getprop(fdt, clock_offset, "clocks", &len);
-    g_assert_nonnull(cold_boot_harts);
-    g_assert_cmpint(len, ==, 4 * sizeof(*cold_boot_harts));
-    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[0]), ==,
-                    ap_clock_phandle);
-    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[1]), ==,
-                    TH1520_CLK_UART_SCLK);
-    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[2]), ==,
-                    ap_clock_phandle);
-    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[3]), ==,
-                    TH1520_CLK_UART0_PCLK);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        assert_uart_fdt(fdt, &th1520_uart_controllers[i],
+                        ap_clock_phandle);
+    }
 
     g_assert_cmpint(fdt_path_offset(fdt, "/dmac-clock"), ==,
                     -FDT_ERR_NOTFOUND);
@@ -1951,6 +2033,52 @@ static void assert_dw_uart_reset_state(QTestState *qts)
     g_assert_cmphex(qtest_readl(qts, DW_UART_CTR), ==, 0x44570110);
 }
 
+static void test_dw_uart_instances(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        const TH1520UARTController *controller =
+            &th1520_uart_controllers[i];
+        uint64_t base = controller->base;
+
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_IER_DLH_OFFSET),
+                        ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_IIR_FCR_OFFSET),
+                        ==, UART_IIR_NO_INT);
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_LSR_OFFSET), ==,
+                        UART_LSR_THRE | UART_LSR_TEMT);
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_CTR_OFFSET), ==,
+                        0x44570110);
+
+        qtest_writel(qts, C900_PLIC_PRIORITY(controller->irq), 5);
+        c900_plic_set_enable(qts, 1, controller->irq, true);
+        qtest_writel(qts, base + DW_UART_IER_DLH_OFFSET, UART_IER_THRI);
+        g_assert_true(c900_plic_pending(qts, controller->irq));
+        assert_only_irq(qts, 0);
+        g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                        controller->irq);
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_IIR_FCR_OFFSET), ==,
+                        UART_IIR_THRI);
+        qtest_writel(qts, base + DW_UART_IER_DLH_OFFSET, 0);
+        qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
+        c900_plic_set_enable(qts, 1, controller->irq, false);
+        assert_no_irq(qts);
+
+        qtest_writel(qts, base + DW_UART_SCR_OFFSET, 0x40 + i);
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_SCR_OFFSET), ==,
+                        0x40 + i);
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        g_assert_cmphex(qtest_readl(qts, th1520_uart_controllers[i].base +
+                                    DW_UART_SCR_OFFSET), ==, 0);
+    }
+    qtest_quit(qts);
+}
+
 static void test_dw_uart_registers(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -2785,6 +2913,10 @@ static void test_dw_uart_migration(void)
     qtest_writel(src, DW_UART_DLF, 0xb);
     qtest_writel(src, DW_UART_LCR, 3);
     qtest_writel(src, DW_UART_SCR, 0x5a);
+    for (size_t i = 1; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        qtest_writel(src, th1520_uart_controllers[i].base +
+                     DW_UART_SCR_OFFSET, 0x60 + i);
+    }
 
     qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_FRAME_FILTER, 0x80000401);
     qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE, 0x00020180);
@@ -2810,6 +2942,10 @@ static void test_dw_uart_migration(void)
     wait_for_migration_complete(dst);
 
     g_assert_cmphex(qtest_readl(dst, DW_UART_SCR), ==, 0x5a);
+    for (size_t i = 1; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        g_assert_cmphex(qtest_readl(dst, th1520_uart_controllers[i].base +
+                                    DW_UART_SCR_OFFSET), ==, 0x60 + i);
+    }
     g_assert_cmphex(qtest_readl(dst, DW_UART_DLF), ==, 0xb);
     g_assert_cmphex(qtest_readl(dst, DW_UART_LCR), ==, 3);
     g_assert_cmphex(qtest_readl(dst, DW_UART_IIR_FCR) & 0xf, ==,
@@ -2900,6 +3036,10 @@ static void test_whole_machine_migration(void)
     qtest_writel(src, DW_UART_DLF, 0xb);
     qtest_writel(src, DW_UART_LCR, 3);
     qtest_writel(src, DW_UART_SCR, 0x5a);
+    for (size_t i = 1; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        qtest_writel(src, th1520_uart_controllers[i].base +
+                     DW_UART_SCR_OFFSET, 0x60 + i);
+    }
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -2945,6 +3085,10 @@ static void test_whole_machine_migration(void)
     g_assert_cmphex(qtest_readl(dst, DW_UART_LCR), ==, 3);
     g_assert_cmphex(qtest_readl(dst, DW_UART_DLF), ==, 0xb);
     g_assert_cmphex(qtest_readl(dst, DW_UART_SCR), ==, 0x5a);
+    for (size_t i = 1; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        g_assert_cmphex(qtest_readl(dst, th1520_uart_controllers[i].base +
+                                    DW_UART_SCR_OFFSET), ==, 0x60 + i);
+    }
     qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
     g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
     g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
@@ -3042,6 +3186,8 @@ int main(int argc, char **argv)
                             &c900_clint_banks[3], test_c900_clint_bank);
         qtest_add_func("/beaglev-ahead/c900-clint/migration",
                        test_c900_clint_migration);
+        qtest_add_func("/beaglev-ahead/dw-uart/instances",
+                       test_dw_uart_instances);
         qtest_add_func("/beaglev-ahead/dw-uart/registers",
                        test_dw_uart_registers);
         qtest_add_func("/beaglev-ahead/dw-uart/configurable-features",

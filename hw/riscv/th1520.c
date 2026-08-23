@@ -47,6 +47,11 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
     [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
+    [TH1520_DEV_UART1] = { 0xffe7f00000, 0x00000100 },
+    [TH1520_DEV_UART2] = { 0xffec010000, 0x00004000 },
+    [TH1520_DEV_UART3] = { 0xffe7f04000, 0x00000100 },
+    [TH1520_DEV_UART4] = { 0xfff7f08000, 0x00004000 },
+    [TH1520_DEV_UART5] = { 0xfff7f0c000, 0x00004000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -62,6 +67,33 @@ static const int th1520_mshc_memmap[TH1520_MSHC_COUNT] = {
     TH1520_DEV_EMMC,
     TH1520_DEV_SDIO0,
     TH1520_DEV_SDIO1,
+};
+
+static const int th1520_uart_memmap[TH1520_UART_COUNT] = {
+    TH1520_DEV_UART0,
+    TH1520_DEV_UART1,
+    TH1520_DEV_UART2,
+    TH1520_DEV_UART3,
+    TH1520_DEV_UART4,
+    TH1520_DEV_UART5,
+};
+
+static const uint32_t th1520_uart_irqs[TH1520_UART_COUNT] = {
+    TH1520_UART0_IRQ,
+    TH1520_UART1_IRQ,
+    TH1520_UART2_IRQ,
+    TH1520_UART3_IRQ,
+    TH1520_UART4_IRQ,
+    TH1520_UART5_IRQ,
+};
+
+static const uint32_t th1520_uart_pclk_ids[TH1520_UART_COUNT] = {
+    TH1520_CLK_UART0_PCLK,
+    TH1520_CLK_UART1_PCLK,
+    TH1520_CLK_UART2_PCLK,
+    TH1520_CLK_UART3_PCLK,
+    TH1520_CLK_UART4_PCLK,
+    TH1520_CLK_UART5_PCLK,
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -144,6 +176,9 @@ static void th1520_create_pmu_fdt(void *fdt)
 
 static void th1520_soc_init(Object *obj)
 {
+    static const char *const uart_names[TH1520_UART_COUNT] = {
+        "uart0", "uart1", "uart2", "uart3", "uart4", "uart5",
+    };
     static const char *const mshc_names[TH1520_MSHC_COUNT] = {
         "emmc", "sdio0", "sdio1",
     };
@@ -165,7 +200,12 @@ static void th1520_soc_init(Object *obj)
                             TYPE_TH1520_AP_CLOCK);
     object_initialize_child(obj, "ap-reset", &s->ap_reset,
                             TYPE_TH1520_AP_RESET);
-    object_initialize_child(obj, "uart0", &s->uart0, TYPE_DW_APB_UART);
+    for (int i = 0; i < TH1520_UART_COUNT; i++) {
+        object_initialize_child(obj, uart_names[i], &s->uart[i],
+                                TYPE_DW_APB_UART);
+        qdev_prop_set_uint32(DEVICE(&s->uart[i]), "baudbase",
+                             TH1520_UART_INPUT_FREQ / 16);
+    }
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
                          TH1520_DMAC_CHANNELS);
@@ -210,8 +250,6 @@ static void th1520_soc_init(Object *obj)
                          TH1520_C910_HARTS);
     qdev_prop_set_uint32(DEVICE(&s->plic), "num-sources",
                          TH1520_PLIC_NUM_SOURCES);
-    qdev_prop_set_uint32(DEVICE(&s->uart0), "baudbase",
-                         TH1520_UART_INPUT_FREQ / 16);
 }
 
 static void th1520_soc_realize(DeviceState *dev, Error **errp)
@@ -285,15 +323,25 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                     qdev_get_gpio_in(cpu, IRQ_S_TIMER));
     }
 
-    qdev_prop_set_chr(DEVICE(&s->uart0), "chardev", serial_hd(0));
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->uart0), errp)) {
-        return;
+    for (int i = 0; i < TH1520_UART_COUNT; i++) {
+        SysBusDevice *uart = SYS_BUS_DEVICE(&s->uart[i]);
+
+        /*
+         * The DW register model occupies 0x100 bytes.  Linux describes a
+         * 0x4000-byte silicon aperture for UART2, UART4 and UART5, but the
+         * behavior of the reserved portion is not established (UART-001).
+         * Leave it unmapped until it can be checked on physical hardware.
+         */
+        qdev_prop_set_chr(DEVICE(uart), "chardev", serial_hd(i));
+        if (!sysbus_realize(uart, errp)) {
+            return;
+        }
+        sysbus_mmio_map(uart, 0,
+                        th1520_memmap[th1520_uart_memmap[i]].base);
+        sysbus_connect_irq(uart, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  th1520_uart_irqs[i]));
     }
-    sysbus_mmio_map(SYS_BUS_DEVICE(&s->uart0), 0,
-                    th1520_memmap[TH1520_DEV_UART0].base);
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->uart0), 0,
-                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
-                                              TH1520_UART0_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
         return;
@@ -390,7 +438,6 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t phy_phandle;
     g_autofree char *plic_name = NULL;
     g_autofree char *clint_name = NULL;
-    g_autofree char *uart_name = NULL;
     g_autofree char *dmac_name = NULL;
     int fdt_size;
 
@@ -534,26 +581,32 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                           "/soc/reset-controller@ffef014000", "phandle",
                           ap_reset_phandle);
 
-    uart_name = g_strdup_printf("/soc/serial@%" HWADDR_PRIx,
-                                th1520_memmap[TH1520_DEV_UART0].base);
-    qemu_fdt_add_subnode(ms->fdt, uart_name);
-    qemu_fdt_setprop_string(ms->fdt, uart_name, "compatible",
-                            "snps,dw-apb-uart");
-    qemu_fdt_setprop_sized_cells(ms->fdt, uart_name, "reg", 2,
-                                 th1520_memmap[TH1520_DEV_UART0].base, 2,
-                                 th1520_memmap[TH1520_DEV_UART0].size);
-    qemu_fdt_setprop_cells(ms->fdt, uart_name, "interrupts",
-                           TH1520_UART0_IRQ, 4);
-    qemu_fdt_setprop_cells(ms->fdt, uart_name, "clocks",
-                           ap_clock_phandle, TH1520_CLK_UART_SCLK,
-                           ap_clock_phandle, TH1520_CLK_UART0_PCLK);
-    qemu_fdt_setprop_string_array(ms->fdt, uart_name, "clock-names",
-                                  (char **)&uart_clock_names,
-                                  ARRAY_SIZE(uart_clock_names));
-    qemu_fdt_setprop_cell(ms->fdt, uart_name, "reg-shift", 2);
-    qemu_fdt_setprop_cell(ms->fdt, uart_name, "reg-io-width", 4);
-    qemu_fdt_setprop_string(ms->fdt, uart_name, "status", "okay");
-    qemu_fdt_setprop_string(ms->fdt, "/aliases", "serial0", uart_name);
+    for (int i = 0; i < TH1520_UART_COUNT; i++) {
+        const MemMapEntry *map = &th1520_memmap[th1520_uart_memmap[i]];
+        g_autofree char *name =
+            g_strdup_printf("/soc/serial@%" HWADDR_PRIx, map->base);
+        char alias[8];
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string(ms->fdt, name, "compatible",
+                                "snps,dw-apb-uart");
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
+                                     2, map->size);
+        qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
+                               th1520_uart_irqs[i], 4);
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                               ap_clock_phandle, TH1520_CLK_UART_SCLK,
+                               ap_clock_phandle, th1520_uart_pclk_ids[i]);
+        qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                      (char **)&uart_clock_names,
+                                      ARRAY_SIZE(uart_clock_names));
+        qemu_fdt_setprop_cell(ms->fdt, name, "reg-shift", 2);
+        qemu_fdt_setprop_cell(ms->fdt, name, "reg-io-width", 4);
+        qemu_fdt_setprop_string(ms->fdt, name, "status",
+                                i ? "disabled" : "okay");
+        snprintf(alias, sizeof(alias), "serial%d", i);
+        qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, name);
+    }
     qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path",
                             "serial0:115200n8");
 
