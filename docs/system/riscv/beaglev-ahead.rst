@@ -37,6 +37,10 @@ The machine currently provides:
   ``0xfff7f2c000``, connected to PLIC sources 44 through 49.  I2C0 is enabled
   for the board's 4 KiB FT24C32A-compatible EEPROM at address ``0x50``; I2C1
   through I2C5 are present but board-disabled;
+* two four-counter DesignWare APB timer components at ``0xffefc32000`` and
+  ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
+  sources 16 through 23.  All eight individual timer nodes remain disabled in
+  the board device tree, matching upstream Linux;
 * six DesignWare APB GPIO controllers at ``0xffec005000``, ``0xffec006000``,
   ``0xffe7f34000``, ``0xffe7f38000``, ``0xfffff52000``, and
   ``0xfffff41000``.  Their 157 Linux-described GPIO lines support input,
@@ -62,10 +66,10 @@ The machine currently provides:
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
-GPIO, pinctrl, storage, memory, and cache topology bindings as upstream
-Linux's TH1520 device tree, augmented with the schematic-established board
-EEPROM.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every
-C910 hart.
+APB timer, GPIO, pinctrl, storage, memory, and cache topology bindings as
+upstream Linux's TH1520 device tree, augmented with the
+schematic-established board EEPROM.  It advertises ``xtheadvector`` and
+``thead,vlenb = <16>`` for every C910 hart.
 
 Boot options
 ------------
@@ -86,6 +90,11 @@ QEMU loads firmware at the beginning of RAM, places a supplied Linux kernel
 after it, generates the device tree, and installs a small reset trampoline in
 the mask-ROM aperture.  ``-bios none`` is also accepted for low-level tests
 that load all code explicitly.
+
+Passing ``-dtb file.dtb`` replaces the generated tree and passes that external
+tree through the same firmware handoff.  This is useful for controlled driver
+experiments; the supplied tree remains responsible for describing the real
+machine topology correctly.
 
 All four C910 harts currently enter that trampoline.  The FW_DYNAMIC handoff
 selects hart 0 for relocation, and an OpenSBI configuration node restricts its
@@ -210,6 +219,33 @@ Factory contents and layout, the fitted board revision and the schematic's
 GPIO2_22-related write-protect network must be checked on the owner's board
 before those behaviors are modeled.
 
+The two APB timer components use a reusable four-counter DesignWare model.
+Each counter has load, current-value, control, EOI and interrupt-status
+registers at the 0x14-byte hardware stride.  Periodic and free-running
+countdown, interrupt masking, raw and masked aggregate status, per-counter and
+aggregate EOI, the component-version register, reset and migration are
+modeled.  The TH1520 integration uses a common fixed 125 MHz input, component
+version ``0x3231322a`` and eight independent level-high PLIC routes.
+
+The model retains the four second-load and protection registers and preserves
+the PWM control bit, but it does not infer cascade wiring or drive a physical
+PWM output.  The second-load value consequently has no waveform effect.
+Per-counter synthesized clocks, AP clock-gate/reset coupling, pulse-versus-
+level synthesis choices, exact enable/reload/zero-count edges, wider bus
+transactions and cold/warm reset-domain behavior remain hardware-validation
+items.  Only aligned 32-bit accesses are currently accepted.
+
+Upstream Linux leaves all eight TH1520 nodes disabled.  Its generic
+``dw_apb_timer_of`` path also tries to create a PLIC-backed clockevent during
+early ``time_init()``, before the RISC-V PLIC IRQ domain or the TH1520 clock
+provider is available.  Enabling a node unchanged therefore is not a supported
+mainline configuration.  A controlled Linux 7.2 validation build selected one
+channel as a clocksource and supplied its known 125 MHz rate directly; the
+standard DW APB clocksource code registered ``timer`` and booted through a
+freestanding init.  Interrupt delivery is independently exercised by a
+bare-metal payload through PLIC source 16.  These test-only Linux changes are
+not part of QEMU or a proposed Linux fix.
+
 The six GPIO controllers use a reusable one-port DesignWare APB model.  The
 model implements software data and direction, external pin sampling, combined
 edge/level interrupt generation, polarity, enable/mask, edge EOI, synchronous
@@ -298,13 +334,13 @@ the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
-CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, all six GPIO
-controllers, all three pad controllers, storage and GMAC state in one stream.
-Focused migration tests additionally preserve an in-flight I2C read and
-EEPROM address pointer plus completed AXI-DMAC data/register/interrupt state.
-Together with the focused device tests, the complete 57-test board gate runs
-in the full,
-dependency-minimal and ASan/UBSan builds.  The
+CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, both APB
+timer components, all six GPIO controllers, all three pad controllers, storage
+and GMAC state in one stream.  Focused migration tests additionally preserve
+an in-flight I2C read and EEPROM address pointer, a running APB timer with a
+latched interrupt, plus completed AXI-DMAC data/register/interrupt state.
+Together with the focused device tests, the complete 62-test board gate runs
+in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
@@ -312,8 +348,9 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera, video codecs, GPU,
-NPU, the C906 and E902 auxiliary cores, DSPs, security blocks, the secure DMA
+SPI and timer PWM outputs, RTC/watchdog, USB, PCIe, display, audio, camera,
+video codecs, GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security
+blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
 Electrical pad routing and GPIO-connected PHY/Wi-Fi/card-detect signals are
 not wired yet.  The remaining storage, Ethernet and general-DMA gaps are
