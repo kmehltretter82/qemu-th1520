@@ -20,6 +20,7 @@
 #include "hw/net/th1520_gmac.h"
 #include "hw/riscv/riscv_hart.h"
 #include "hw/sd/dwcmshc.h"
+#include "hw/ssi/dw_apb_ssi.h"
 #include "hw/timer/dw_apb_timer.h"
 
 #define TH1520_MSHC_COUNT 3
@@ -28,6 +29,7 @@
 #define TH1520_GPIO_COUNT 6
 #define TH1520_PADCTRL_COUNT 3
 #define TH1520_I2C_COUNT 6
+#define TH1520_SPI_COUNT 1
 #define TH1520_TIMER_GROUP_COUNT 2
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
@@ -47,6 +49,7 @@ struct TH1520SoCState {
     DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
     TH1520PadCtrlState padctrl[TH1520_PADCTRL_COUNT];
     DesignWareI2CState i2c[TH1520_I2C_COUNT];
+    DWAPBSSIState spi[TH1520_SPI_COUNT];
     DWAPBTimerState timer[TH1520_TIMER_GROUP_COUNT];
     Clock *timer_clk;
     DWAxiDMACState dmac0;
@@ -93,6 +96,7 @@ enum {
     TH1520_DEV_I2C3,
     TH1520_DEV_I2C4,
     TH1520_DEV_I2C5,
+    TH1520_DEV_SPI0,
     TH1520_DEV_TIMER0_3,
     TH1520_DEV_TIMER4_7,
     TH1520_DEV_DMAC0,
@@ -121,6 +125,7 @@ enum {
 #define TH1520_CLK_GMAC_AXI 48
 #define TH1520_CLK_GPIO3 49
 #define TH1520_CLK_GMAC0 50
+#define TH1520_CLK_SPI 54
 #define TH1520_CLK_UART0_PCLK 55
 #define TH1520_CLK_UART1_PCLK 56
 #define TH1520_CLK_UART2_PCLK 57
@@ -168,6 +173,8 @@ enum {
 #define TH1520_I2C_COMPONENT_TYPE 0x44570140
 #define TH1520_I2C_INTR_MASK_RESET 0x000048ff
 #define TH1520_I2C_INTR_MASK_VALID 0x00004fff
+
+#define TH1520_SPI0_IRQ 54
 
 #define TH1520_TIMER0_IRQ 16
 #define TH1520_TIMER4_IRQ 20

@@ -69,6 +69,7 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_I2C3]  = { 0xffec014000, 0x00004000 },
     [TH1520_DEV_I2C4]  = { 0xffe7f28000, 0x00004000 },
     [TH1520_DEV_I2C5]  = { 0xfff7f2c000, 0x00004000 },
+    [TH1520_DEV_SPI0]  = { 0xffe700c000, 0x00001000 },
     [TH1520_DEV_TIMER0_3] = { 0xffefc32000, 0x00001000 },
     [TH1520_DEV_TIMER4_7] = { 0xffffc33000, 0x00001000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
@@ -183,10 +184,21 @@ typedef struct TH1520TimerInfo {
     uint32_t first_irq;
 } TH1520TimerInfo;
 
+typedef struct TH1520SPIInfo {
+    const char *name;
+    int memmap;
+    uint32_t irq;
+    uint32_t clock_id;
+} TH1520SPIInfo;
+
 static const TH1520TimerInfo
 th1520_timer_info[TH1520_TIMER_GROUP_COUNT] = {
     { "timer0-3", TH1520_DEV_TIMER0_3, TH1520_TIMER0_IRQ },
     { "timer4-7", TH1520_DEV_TIMER4_7, TH1520_TIMER4_IRQ },
+};
+
+static const TH1520SPIInfo th1520_spi_info[TH1520_SPI_COUNT] = {
+    { "spi0", TH1520_DEV_SPI0, TH1520_SPI0_IRQ, TH1520_CLK_SPI },
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -332,6 +344,10 @@ static void th1520_soc_init(Object *obj)
         qdev_prop_set_uint32(i2c, "scl-stuck-timeout-reset", UINT32_MAX);
         qdev_prop_set_uint32(i2c, "sda-stuck-timeout-reset", UINT32_MAX);
         qdev_prop_set_uint32(i2c, "ack-general-call-reset", 1);
+    }
+    for (int i = 0; i < TH1520_SPI_COUNT; i++) {
+        object_initialize_child(obj, th1520_spi_info[i].name, &s->spi[i],
+                                TYPE_DW_APB_SSI);
     }
     s->timer_clk = clock_new(obj, "timer-clock");
     clock_set_hz(s->timer_clk, TH1520_TIMER_INPUT_FREQ);
@@ -511,6 +527,19 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         }
         sysbus_mmio_map(i2c, 0, th1520_memmap[info->memmap].base);
         sysbus_connect_irq(i2c, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  info->irq));
+    }
+
+    for (int i = 0; i < TH1520_SPI_COUNT; i++) {
+        const TH1520SPIInfo *info = &th1520_spi_info[i];
+        SysBusDevice *spi = SYS_BUS_DEVICE(&s->spi[i]);
+
+        if (!sysbus_realize(spi, errp)) {
+            return;
+        }
+        sysbus_mmio_map(spi, 0, th1520_memmap[info->memmap].base);
+        sysbus_connect_irq(spi, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   info->irq));
     }
@@ -853,6 +882,9 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const gmac_clock_names[] = {
         "stmmaceth", "pclk", "apb"
     };
+    static const char *const spi_compat[] = {
+        "thead,th1520-spi", "snps,dw-apb-ssi"
+    };
     MachineState *ms = MACHINE(s);
     uint32_t intc_phandles[TH1520_C910_HARTS];
     uint32_t plic_cells[TH1520_C910_HARTS * 4];
@@ -1171,6 +1203,29 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop_cell(ms->fdt, eeprom, "pagesize",
                                   BEAGLEV_AHEAD_EEPROM_PAGE_SIZE);
         }
+    }
+
+    for (int i = 0; i < TH1520_SPI_COUNT; i++) {
+        const TH1520SPIInfo *info = &th1520_spi_info[i];
+        const MemMapEntry *map = &th1520_memmap[info->memmap];
+        g_autofree char *name =
+            g_strdup_printf("/soc/spi@%" HWADDR_PRIx, map->base);
+        char alias[8];
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string_array(ms->fdt, name, "compatible",
+                                      (char **)&spi_compat,
+                                      ARRAY_SIZE(spi_compat));
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
+                                     2, map->size);
+        qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", info->irq, 4);
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                               info->clock_id);
+        qemu_fdt_setprop_cell(ms->fdt, name, "#address-cells", 1);
+        qemu_fdt_setprop_cell(ms->fdt, name, "#size-cells", 0);
+        qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
+        snprintf(alias, sizeof(alias), "spi%d", i);
+        qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, name);
     }
 
     for (int group = 0; group < TH1520_TIMER_GROUP_COUNT; group++) {

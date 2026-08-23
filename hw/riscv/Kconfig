@@ -16,6 +16,7 @@ config BEAGLEV_AHEAD
     select DEVICE_TREE
     select DESIGNWARE_I2C
     select DW_APB_GPIO
+    select DW_APB_SSI
     select DW_APB_TIMER
     select DW_APB_UART
     select DW_AXI_DMAC
