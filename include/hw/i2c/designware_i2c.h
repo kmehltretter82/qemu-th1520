@@ -51,6 +51,18 @@ struct DesignWareI2CState {
     Fifo8    rx_fifo;
 
     DesignWareI2CStatus status;
+
+    /* Synthesis parameters and reset values exposed through QOM. */
+    uint32_t component_parameters;
+    uint32_t component_version;
+    uint32_t component_type;
+    uint32_t intr_mask_reset;
+    uint32_t intr_mask_valid;
+    uint32_t fs_spklen_reset;
+    uint32_t hs_spklen_reset;
+    uint32_t scl_stuck_timeout_reset;
+    uint32_t sda_stuck_timeout_reset;
+    uint32_t ack_general_call_reset;
 };
 
 #endif /* DESIGNWARE_I2C_H */

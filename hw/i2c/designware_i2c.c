@@ -9,6 +9,7 @@
 #include "qemu/osdep.h"
 
 #include "hw/i2c/designware_i2c.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -35,6 +36,7 @@ REG32(DW_IC_TAR,                0x04) /* I2C target address */
     FIELD(DW_IC_TAR, GC_OR_START,         10,  1)
     FIELD(DW_IC_TAR, ADDRESS,              0, 10)
 REG32(DW_IC_SAR,                0x08) /* I2C slave address */
+REG32(DW_IC_HS_MADDR,           0x0c) /* High speed master mode code address */
 REG32(DW_IC_DATA_CMD,           0x10)
     FIELD(DW_IC_DATA_CMD, RESTART, 10, 1)
     FIELD(DW_IC_DATA_CMD, STOP,     9, 1)
@@ -44,11 +46,15 @@ REG32(DW_IC_SS_SCL_HCNT,        0x14) /* Standard speed i2c clock scl high count
 REG32(DW_IC_SS_SCL_LCNT,        0x18) /* Standard speed i2c clock scl low count */
 REG32(DW_IC_FS_SCL_HCNT,        0x1c) /* Fast or fast plus i2c clock scl high count */
 REG32(DW_IC_FS_SCL_LCNT,        0x20) /* Fast or fast plus i2c clock scl low count */
+REG32(DW_IC_HS_SCL_HCNT,        0x24) /* High speed i2c clock scl high count */
+REG32(DW_IC_HS_SCL_LCNT,        0x28) /* High speed i2c clock scl low count */
 REG32(DW_IC_INTR_STAT,          0x2c)
 REG32(DW_IC_INTR_MASK,          0x30) /* I2C Interrupt Mask */
 REG32(DW_IC_RAW_INTR_STAT,      0x34) /* I2C raw interrupt status */
     /* DW_IC_INTR_STAT/INTR_MASK/RAW_INTR_STAT fields */
     SHARED_FIELD(DW_IC_INTR_RESTART_DET, 12, 1)
+    SHARED_FIELD(DW_IC_INTR_MASTER_ON_HOLD, 13, 1)
+    SHARED_FIELD(DW_IC_INTR_SCL_STUCK_AT_LOW, 14, 1)
     SHARED_FIELD(DW_IC_INTR_GEN_CALL,    11, 1)
     SHARED_FIELD(DW_IC_INTR_START_DET,   10, 1)
     SHARED_FIELD(DW_IC_INTR_STOP_DET,    9, 1)
@@ -63,7 +69,9 @@ REG32(DW_IC_RAW_INTR_STAT,      0x34) /* I2C raw interrupt status */
     SHARED_FIELD(DW_IC_INTR_RX_UNDER,    0, 1)
 
 #define DW_IC_INTR_ANY_MASK                \
-            (DW_IC_INTR_RESTART_DET_MASK | \
+            (DW_IC_INTR_SCL_STUCK_AT_LOW_MASK | \
+             DW_IC_INTR_MASTER_ON_HOLD_MASK | \
+             DW_IC_INTR_RESTART_DET_MASK | \
              DW_IC_INTR_GEN_CALL_MASK    | \
              DW_IC_INTR_START_DET_MASK   | \
              DW_IC_INTR_STOP_DET_MASK    | \
@@ -79,7 +87,8 @@ REG32(DW_IC_RAW_INTR_STAT,      0x34) /* I2C raw interrupt status */
 
 #define DW_IC_INTR_ANY_SW_CLEAR_MASK       \
             (DW_IC_INTR_ANY_MASK         & \
-            ~(DW_IC_INTR_TX_EMPTY_MASK   | \
+            ~(DW_IC_INTR_MASTER_ON_HOLD_MASK | \
+              DW_IC_INTR_TX_EMPTY_MASK   | \
               DW_IC_INTR_RX_FULL_MASK))
 
 REG32(DW_IC_RX_TL,              0x38) /* I2C receive FIFO threshold */
@@ -139,8 +148,13 @@ REG32(DW_IC_ENABLE_STATUS,      0x9c) /* I2C enable status */
     FIELD(DW_IC_ENABLE_STATUS, SLV_DISABLED_WHILE_BUSY, 1, 1)
     FIELD(DW_IC_ENABLE_STATUS, IC_EN,                   0, 1)
 REG32(DW_IC_FS_SPKLEN,          0xa0) /* I2C SS, FS or FM+ spike suppression limit */
+REG32(DW_IC_HS_SPKLEN,          0xa4) /* I2C HS spike suppression limit */
 REG32(DW_IC_CLR_RESTART_DET,    0xa8)
+REG32(DW_IC_SCL_STUCK_AT_LOW_TIMEOUT, 0xac)
+REG32(DW_IC_SDA_STUCK_AT_LOW_TIMEOUT, 0xb0)
+REG32(DW_IC_CLR_SCL_STUCK_DET,  0xb4)
 REG32(DW_IC_SMBUS_INTR_MASK,    0xcc) /* SMBus Interrupt Mask */
+REG32(DW_IC_REG_TIMEOUT_RST,    0xf0)
 REG32(DW_IC_COMP_PARAM_1,       0xf4) /* Component parameter */
     FIELD(DW_IC_COMP_PARAM_1, TX_FIFO_SIZE,       16, 8)
     FIELD(DW_IC_COMP_PARAM_1, RX_FIFO_SIZE,        8, 8)
@@ -204,6 +218,7 @@ static uint64_t dw_ic_clr_intr_reg_post_read(RegisterInfo *reg, uint64_t value)
     switch (reg->access->addr) {
     case A_DW_IC_CLR_INTR:
         s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_ANY_SW_CLEAR_MASK;
+        s->regs[R_DW_IC_TX_ABRT_SOURCE] = 0;
         break;
     case A_DW_IC_CLR_RX_UNDER:
         s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_RX_UNDER_MASK;
@@ -219,6 +234,7 @@ static uint64_t dw_ic_clr_intr_reg_post_read(RegisterInfo *reg, uint64_t value)
         break;
     case A_DW_IC_CLR_TX_ABRT:
         s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_TX_ABRT_MASK;
+        s->regs[R_DW_IC_TX_ABRT_SOURCE] = 0;
         break;
     case A_DW_IC_CLR_RX_DONE:
         s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_RX_DONE_MASK;
@@ -237,6 +253,10 @@ static uint64_t dw_ic_clr_intr_reg_post_read(RegisterInfo *reg, uint64_t value)
         break;
     case A_DW_IC_CLR_RESTART_DET:
         s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_RESTART_DET_MASK;
+        break;
+    case A_DW_IC_CLR_SCL_STUCK_DET:
+        s->regs[R_DW_IC_RAW_INTR_STAT] &=
+            ~DW_IC_INTR_SCL_STUCK_AT_LOW_MASK;
         break;
     default:
         g_assert_not_reached();
@@ -288,6 +308,32 @@ static uint64_t dw_ic_con_reg_pre_write(RegisterInfo *reg, uint64_t value)
     }
 
     return value;
+}
+
+static uint64_t dw_ic_disabled_reg_pre_write(RegisterInfo *reg,
+                                              uint64_t value)
+{
+    DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
+
+    if (s->regs[R_DW_IC_ENABLE] & R_DW_IC_ENABLE_ENABLE_MASK) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: write to %s while controller is enabled\n",
+                      DEVICE(s)->canonical_path, reg->access->name);
+        return s->regs[reg->access->addr / sizeof(uint32_t)];
+    }
+
+    return value;
+}
+
+static uint64_t dw_ic_spklen_reg_pre_write(RegisterInfo *reg, uint64_t value)
+{
+    DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
+
+    if (s->regs[R_DW_IC_ENABLE] & R_DW_IC_ENABLE_ENABLE_MASK) {
+        return dw_ic_disabled_reg_pre_write(reg, value);
+    }
+
+    return MAX(value, 1);
 }
 
 static void dw_i2c_reset_to_idle(DesignWareI2CState *s)
@@ -414,6 +460,14 @@ static void dw_ic_intr_mask_reg_post_write(RegisterInfo *reg, uint64_t value)
     dw_i2c_update_irq(s);
 }
 
+static uint64_t dw_ic_intr_mask_reg_pre_write(RegisterInfo *reg,
+                                               uint64_t value)
+{
+    DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
+
+    return value & s->intr_mask_valid;
+}
+
 static uint64_t dw_ic_enable_reg_pre_write(RegisterInfo *reg, uint64_t value)
 {
     DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
@@ -508,32 +562,47 @@ static const RegisterAccessInfo designware_i2c_regs_info[] = {
     },{ .name  = "DW_IC_TAR", .addr = A_DW_IC_TAR,
         .reset =     0x1055,
         .unimp = 0xfffff000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
     },{ .name  = "DW_IC_SAR", .addr = A_DW_IC_SAR,
         .reset =       0x55,
         .unimp = 0xfffffc00,
         .post_read = dw_ic_unsupported_reg_post_read,
         .pre_write = dw_ic_unsupported_reg_pre_write,
+    },{ .name  = "DW_IC_HS_MADDR", .addr = A_DW_IC_HS_MADDR,
+        .unimp = 0xfffffff8,
+        .pre_write = dw_ic_disabled_reg_pre_write,
     },{ .name  = "DW_IC_DATA_CMD", .addr = A_DW_IC_DATA_CMD,
         .post_read = dw_ic_data_cmd_reg_post_read,
         .post_write = dw_ic_data_cmd_reg_post_write,
     },{ .name  = "DW_IC_SS_SCL_HCNT", .addr = A_DW_IC_SS_SCL_HCNT,
         .reset =      0x190,
         .unimp = 0xffff0000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
     },{ .name  = "DW_IC_SS_SCL_LCNT", .addr = A_DW_IC_SS_SCL_LCNT,
         .reset =      0x1d6,
         .unimp = 0xffff0000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
     },{ .name  = "DW_IC_FS_SCL_HCNT", .addr = A_DW_IC_FS_SCL_HCNT,
         .reset =       0x3c,
         .unimp = 0xffff0000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
     },{ .name  = "DW_IC_FS_SCL_LCNT", .addr = A_DW_IC_FS_SCL_LCNT,
         .reset =       0x82,
         .unimp = 0xffff0000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
+    },{ .name  = "DW_IC_HS_SCL_HCNT", .addr = A_DW_IC_HS_SCL_HCNT,
+        .unimp = 0xffff0000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
+    },{ .name  = "DW_IC_HS_SCL_LCNT", .addr = A_DW_IC_HS_SCL_LCNT,
+        .unimp = 0xffff0000,
+        .pre_write = dw_ic_disabled_reg_pre_write,
     },{ .name  = "DW_IC_INTR_STAT", .addr = A_DW_IC_INTR_STAT,
         .ro    = 0xffffffff,
         .post_read = dw_ic_intr_stat_reg_post_read,
     },{ .name  = "DW_IC_INTR_MASK", .addr = A_DW_IC_INTR_MASK,
         .reset =      0x8ff,
         .unimp = 0xffff8000,
+        .pre_write = dw_ic_intr_mask_reg_pre_write,
         .post_write = dw_ic_intr_mask_reg_post_write,
     },{ .name  = "DW_IC_RAW_INTR_STAT", .addr = A_DW_IC_RAW_INTR_STAT,
         .ro    = 0xffffffff,
@@ -607,20 +676,34 @@ static const RegisterAccessInfo designware_i2c_regs_info[] = {
         .reset =       0x64,
         .unimp = 0xffffff00,
     },{ .name  = "DW_IC_ACK_GENERAL_CALL", .addr = A_DW_IC_ACK_GENERAL_CALL,
-        .post_read = dw_ic_unsupported_reg_post_read,
-        .pre_write = dw_ic_unsupported_reg_pre_write,
+        .unimp = 0xfffffffe,
     },{ .name  = "DW_IC_ENABLE_STATUS", .addr = A_DW_IC_ENABLE_STATUS,
         .ro    = 0xffffffff,
     },{ .name  = "DW_IC_FS_SPKLEN", .addr = A_DW_IC_FS_SPKLEN,
         .reset =        0x2,
         .ro    = 0xffffff00,
+        .pre_write = dw_ic_spklen_reg_pre_write,
+    },{ .name  = "DW_IC_HS_SPKLEN", .addr = A_DW_IC_HS_SPKLEN,
+        .ro    = 0xffffff00,
+        .pre_write = dw_ic_spklen_reg_pre_write,
     },{ .name  = "DW_IC_CLR_RESTART_DET", .addr = A_DW_IC_CLR_RESTART_DET,
         .ro    = 0xffffffff,
+        .post_read = dw_ic_clr_intr_reg_post_read,
+    },{ .name  = "DW_IC_SCL_STUCK_AT_LOW_TIMEOUT",
+        .addr = A_DW_IC_SCL_STUCK_AT_LOW_TIMEOUT,
+        .pre_write = dw_ic_disabled_reg_pre_write,
+    },{ .name  = "DW_IC_SDA_STUCK_AT_LOW_TIMEOUT",
+        .addr = A_DW_IC_SDA_STUCK_AT_LOW_TIMEOUT,
+    },{ .name  = "DW_IC_CLR_SCL_STUCK_DET",
+        .addr = A_DW_IC_CLR_SCL_STUCK_DET,
+        .ro = 0xffffffff,
         .post_read = dw_ic_clr_intr_reg_post_read,
     },{ .name  = "DW_IC_SMBUS_INTR_MASK", .addr = A_DW_IC_SMBUS_INTR_MASK,
         /* No SMBus interrupts are implemented, Linux updates the mask */
         .reset =      0x7ff,
         .unimp = 0xfffff800,
+    },{ .name  = "DW_IC_REG_TIMEOUT_RST", .addr = A_DW_IC_REG_TIMEOUT_RST,
+        .ro    = 0xffffffff,
     },{ .name  = "DW_IC_COMP_PARAM_1", .addr = A_DW_IC_COMP_PARAM_1,
         .reset = /* HAS_DMA and HC_COUNT_VAL are disabled */
             ((2 << R_DW_IC_COMP_PARAM_1_APB_DATA_WIDTH_32_SHIFT) |
@@ -661,9 +744,25 @@ static void designware_i2c_enter_reset(Object *obj, ResetType type)
     DesignWareI2CState *s = DESIGNWARE_I2C(obj);
     unsigned int i;
 
+    if (i2c_bus_busy(s->bus)) {
+        i2c_end_transfer(s->bus);
+    }
+
     for (i = 0; i < ARRAY_SIZE(s->regs); ++i) {
         register_reset(&s->regs_info[i]);
     }
+
+    s->regs[R_DW_IC_INTR_MASK] = s->intr_mask_reset;
+    s->regs[R_DW_IC_ACK_GENERAL_CALL] = s->ack_general_call_reset;
+    s->regs[R_DW_IC_FS_SPKLEN] = s->fs_spklen_reset;
+    s->regs[R_DW_IC_HS_SPKLEN] = s->hs_spklen_reset;
+    s->regs[R_DW_IC_SCL_STUCK_AT_LOW_TIMEOUT] =
+        s->scl_stuck_timeout_reset;
+    s->regs[R_DW_IC_SDA_STUCK_AT_LOW_TIMEOUT] =
+        s->sda_stuck_timeout_reset;
+    s->regs[R_DW_IC_COMP_PARAM_1] = s->component_parameters;
+    s->regs[R_DW_IC_COMP_VERSION] = s->component_version;
+    s->regs[R_DW_IC_COMP_TYPE] = s->component_type;
 
     fifo8_reset(&s->rx_fifo);
 
@@ -677,10 +776,24 @@ static void designware_i2c_hold_reset(Object *obj, ResetType type)
     qemu_irq_lower(s->irq);
 }
 
+static int designware_i2c_post_load(void *opaque, int version_id)
+{
+    DesignWareI2CState *s = opaque;
+
+    if (s->regs[R_DW_IC_RXFLR] != fifo8_num_used(&s->rx_fifo) ||
+        s->status > DW_I2C_STATUS_RECEIVING) {
+        return -EINVAL;
+    }
+
+    dw_i2c_update_irq(s);
+    return 0;
+}
+
 static const VMStateDescription vmstate_designware_i2c = {
     .name = TYPE_DESIGNWARE_I2C,
     .version_id = 0,
     .minimum_version_id = 0,
+    .post_load = designware_i2c_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, DesignWareI2CState, DESIGNWARE_I2C_R_MAX),
         VMSTATE_FIFO8(rx_fifo, DesignWareI2CState),
@@ -719,6 +832,29 @@ static void designware_i2c_finalize(Object *obj)
     fifo8_destroy(&s->rx_fifo);
 }
 
+static const Property designware_i2c_properties[] = {
+    DEFINE_PROP_UINT32("component-parameters", DesignWareI2CState,
+                       component_parameters, 0x000f0fae),
+    DEFINE_PROP_UINT32("component-version", DesignWareI2CState,
+                       component_version, 0x3132302a),
+    DEFINE_PROP_UINT32("component-type", DesignWareI2CState,
+                       component_type, 0x44570140),
+    DEFINE_PROP_UINT32("intr-mask-reset", DesignWareI2CState,
+                       intr_mask_reset, 0x000008ff),
+    DEFINE_PROP_UINT32("intr-mask-valid", DesignWareI2CState,
+                       intr_mask_valid, 0x00007fff),
+    DEFINE_PROP_UINT32("fs-spklen-reset", DesignWareI2CState,
+                       fs_spklen_reset, 2),
+    DEFINE_PROP_UINT32("hs-spklen-reset", DesignWareI2CState,
+                       hs_spklen_reset, 0),
+    DEFINE_PROP_UINT32("scl-stuck-timeout-reset", DesignWareI2CState,
+                       scl_stuck_timeout_reset, 0),
+    DEFINE_PROP_UINT32("sda-stuck-timeout-reset", DesignWareI2CState,
+                       sda_stuck_timeout_reset, 0),
+    DEFINE_PROP_UINT32("ack-general-call-reset", DesignWareI2CState,
+                       ack_general_call_reset, 0),
+};
+
 static void designware_i2c_class_init(ObjectClass *klass, const void *data)
 {
     ResettableClass *rc = RESETTABLE_CLASS(klass);
@@ -726,6 +862,7 @@ static void designware_i2c_class_init(ObjectClass *klass, const void *data)
 
     dc->desc = "Designware I2C";
     dc->vmsd = &vmstate_designware_i2c;
+    device_class_set_props(dc, designware_i2c_properties);
     rc->phases.enter = designware_i2c_enter_reset;
     rc->phases.hold = designware_i2c_hold_reset;
 
