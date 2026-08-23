@@ -11,6 +11,7 @@
 #include "hw/char/dw_apb_uart.h"
 #include "hw/dma/dw_axi_dmac.h"
 #include "hw/gpio/dw_apb_gpio.h"
+#include "hw/i2c/designware_i2c.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
@@ -25,6 +26,7 @@
 #define TH1520_UART_COUNT 6
 #define TH1520_GPIO_COUNT 6
 #define TH1520_PADCTRL_COUNT 3
+#define TH1520_I2C_COUNT 6
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
 OBJECT_DECLARE_SIMPLE_TYPE(TH1520SoCState, RISCV_TH1520_SOC)
@@ -42,6 +44,7 @@ struct TH1520SoCState {
     DWAPBUARTState uart[TH1520_UART_COUNT];
     DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
     TH1520PadCtrlState padctrl[TH1520_PADCTRL_COUNT];
+    DesignWareI2CState i2c[TH1520_I2C_COUNT];
     DWAxiDMACState dmac0;
     DWGMACState gmac[TH1520_GMAC_COUNT];
     TH1520GMACAPBState gmac_apb[TH1520_GMAC_COUNT];
@@ -80,6 +83,12 @@ enum {
     TH1520_DEV_PADCTRL_AOSYS,
     TH1520_DEV_PADCTRL1_APSYS,
     TH1520_DEV_PADCTRL0_APSYS,
+    TH1520_DEV_I2C0,
+    TH1520_DEV_I2C1,
+    TH1520_DEV_I2C2,
+    TH1520_DEV_I2C3,
+    TH1520_DEV_I2C4,
+    TH1520_DEV_I2C5,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
@@ -115,6 +124,12 @@ enum {
 #define TH1520_CLK_GPIO0 61
 #define TH1520_CLK_GPIO1 62
 #define TH1520_CLK_GPIO2 63
+#define TH1520_CLK_I2C0 64
+#define TH1520_CLK_I2C1 65
+#define TH1520_CLK_I2C2 66
+#define TH1520_CLK_I2C3 67
+#define TH1520_CLK_I2C4 68
+#define TH1520_CLK_I2C5 69
 #define TH1520_CLK_UART_SCLK 85
 
 /* riscv,ndev describes IDs 1..240; QEMU's PLIC count includes ID zero. */
@@ -135,6 +150,22 @@ enum {
 #define TH1520_GPIO3_IRQ 59
 #define TH1520_GPIO4_IRQ 55
 #define TH1520_AOGPIO_IRQ 76
+
+#define TH1520_I2C0_IRQ 44
+#define TH1520_I2C1_IRQ 45
+#define TH1520_I2C2_IRQ 46
+#define TH1520_I2C3_IRQ 47
+#define TH1520_I2C4_IRQ 48
+#define TH1520_I2C5_IRQ 49
+#define TH1520_I2C_COMPONENT_PARAMETERS 0x000f0fee
+#define TH1520_I2C_COMPONENT_VERSION 0x3230322a
+#define TH1520_I2C_COMPONENT_TYPE 0x44570140
+#define TH1520_I2C_INTR_MASK_RESET 0x000048ff
+#define TH1520_I2C_INTR_MASK_VALID 0x00004fff
+
+#define BEAGLEV_AHEAD_EEPROM_ADDRESS 0x50
+#define BEAGLEV_AHEAD_EEPROM_SIZE 4096
+#define BEAGLEV_AHEAD_EEPROM_PAGE_SIZE 32
 
 #define TH1520_DMAC0_IRQ 27
 #define TH1520_DMAC_CHANNELS 4

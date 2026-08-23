@@ -31,6 +31,7 @@
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
+#include "hw/nvram/eeprom_at24c.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
 #include "hw/riscv/machines-qom.h"
@@ -61,6 +62,12 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_PADCTRL_AOSYS] = { 0xfffff4a000, 0x00002000 },
     [TH1520_DEV_PADCTRL1_APSYS] = { 0xffe7f3c000, 0x00001000 },
     [TH1520_DEV_PADCTRL0_APSYS] = { 0xffec007000, 0x00001000 },
+    [TH1520_DEV_I2C0]  = { 0xffe7f20000, 0x00004000 },
+    [TH1520_DEV_I2C1]  = { 0xffe7f24000, 0x00004000 },
+    [TH1520_DEV_I2C2]  = { 0xffec00c000, 0x00004000 },
+    [TH1520_DEV_I2C3]  = { 0xffec014000, 0x00004000 },
+    [TH1520_DEV_I2C4]  = { 0xffe7f28000, 0x00004000 },
+    [TH1520_DEV_I2C5]  = { 0xfff7f2c000, 0x00004000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -149,6 +156,22 @@ th1520_padctrl_info[TH1520_PADCTRL_COUNT] = {
       TH1520_CLK_PADCTRL1 },
     { "padctrl0-apsys", TH1520_DEV_PADCTRL0_APSYS, 3,
       TH1520_CLK_PADCTRL0 },
+};
+
+typedef struct TH1520I2CInfo {
+    const char *name;
+    int memmap;
+    uint32_t irq;
+    uint32_t clock_id;
+} TH1520I2CInfo;
+
+static const TH1520I2CInfo th1520_i2c_info[TH1520_I2C_COUNT] = {
+    { "i2c0", TH1520_DEV_I2C0, TH1520_I2C0_IRQ, TH1520_CLK_I2C0 },
+    { "i2c1", TH1520_DEV_I2C1, TH1520_I2C1_IRQ, TH1520_CLK_I2C1 },
+    { "i2c2", TH1520_DEV_I2C2, TH1520_I2C2_IRQ, TH1520_CLK_I2C2 },
+    { "i2c3", TH1520_DEV_I2C3, TH1520_I2C3_IRQ, TH1520_CLK_I2C3 },
+    { "i2c4", TH1520_DEV_I2C4, TH1520_I2C4_IRQ, TH1520_CLK_I2C4 },
+    { "i2c5", TH1520_DEV_I2C5, TH1520_I2C5_IRQ, TH1520_CLK_I2C5 },
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -272,6 +295,28 @@ static void th1520_soc_init(Object *obj)
                                 &s->padctrl[i], TYPE_TH1520_PADCTRL);
         qdev_prop_set_uint8(DEVICE(&s->padctrl[i]), "pad-group",
                             th1520_padctrl_info[i].group);
+    }
+    for (int i = 0; i < TH1520_I2C_COUNT; i++) {
+        DeviceState *i2c;
+
+        object_initialize_child(obj, th1520_i2c_info[i].name, &s->i2c[i],
+                                TYPE_DESIGNWARE_I2C);
+        i2c = DEVICE(&s->i2c[i]);
+        qdev_prop_set_uint32(i2c, "component-parameters",
+                             TH1520_I2C_COMPONENT_PARAMETERS);
+        qdev_prop_set_uint32(i2c, "component-version",
+                             TH1520_I2C_COMPONENT_VERSION);
+        qdev_prop_set_uint32(i2c, "component-type",
+                             TH1520_I2C_COMPONENT_TYPE);
+        qdev_prop_set_uint32(i2c, "intr-mask-reset",
+                             TH1520_I2C_INTR_MASK_RESET);
+        qdev_prop_set_uint32(i2c, "intr-mask-valid",
+                             TH1520_I2C_INTR_MASK_VALID);
+        qdev_prop_set_uint32(i2c, "fs-spklen-reset", 1);
+        qdev_prop_set_uint32(i2c, "hs-spklen-reset", 1);
+        qdev_prop_set_uint32(i2c, "scl-stuck-timeout-reset", UINT32_MAX);
+        qdev_prop_set_uint32(i2c, "sda-stuck-timeout-reset", UINT32_MAX);
+        qdev_prop_set_uint32(i2c, "ack-general-call-reset", 1);
     }
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
@@ -431,6 +476,19 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
             return;
         }
         sysbus_mmio_map(padctrl, 0, th1520_memmap[info->memmap].base);
+    }
+
+    for (int i = 0; i < TH1520_I2C_COUNT; i++) {
+        const TH1520I2CInfo *info = &th1520_i2c_info[i];
+        SysBusDevice *i2c = SYS_BUS_DEVICE(&s->i2c[i]);
+
+        if (!sysbus_realize(i2c, errp)) {
+            return;
+        }
+        sysbus_mmio_map(i2c, 0, th1520_memmap[info->memmap].base);
+        sysbus_connect_irq(i2c, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  info->irq));
     }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
@@ -740,6 +798,9 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const uart_clock_names[] = {
         "baudclk", "apb_pclk"
     };
+    static const char *const i2c_compat[] = {
+        "thead,th1520-i2c", "snps,designware-i2c"
+    };
     static const char *const dmac_clock_names[] = {
         "core-clk", "cfgr-clk"
     };
@@ -1038,6 +1099,40 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path",
                             "serial0:115200n8");
 
+    for (int i = 0; i < TH1520_I2C_COUNT; i++) {
+        const TH1520I2CInfo *info = &th1520_i2c_info[i];
+        const MemMapEntry *map = &th1520_memmap[info->memmap];
+        g_autofree char *name =
+            g_strdup_printf("/soc/i2c@%" HWADDR_PRIx, map->base);
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string_array(ms->fdt, name, "compatible",
+                                      (char **)&i2c_compat,
+                                      ARRAY_SIZE(i2c_compat));
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
+                                     2, map->size);
+        qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", info->irq, 4);
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                               info->clock_id);
+        qemu_fdt_setprop_cell(ms->fdt, name, "#address-cells", 1);
+        qemu_fdt_setprop_cell(ms->fdt, name, "#size-cells", 0);
+        qemu_fdt_setprop_string(ms->fdt, name, "status",
+                                i ? "disabled" : "okay");
+
+        if (i == 0) {
+            g_autofree char *eeprom = g_strdup_printf(
+                "%s/eeprom@%x", name, BEAGLEV_AHEAD_EEPROM_ADDRESS);
+
+            qemu_fdt_add_subnode(ms->fdt, eeprom);
+            qemu_fdt_setprop_string(ms->fdt, eeprom, "compatible",
+                                    "atmel,24c32");
+            qemu_fdt_setprop_cell(ms->fdt, eeprom, "reg",
+                                  BEAGLEV_AHEAD_EEPROM_ADDRESS);
+            qemu_fdt_setprop_cell(ms->fdt, eeprom, "pagesize",
+                                  BEAGLEV_AHEAD_EEPROM_PAGE_SIZE);
+        }
+    }
+
     dmac_name = g_strdup_printf("/soc/dma-controller@%" HWADDR_PRIx,
                                 th1520_memmap[TH1520_DEV_DMAC0].base);
     qemu_fdt_add_subnode(ms->fdt, dmac_name);
@@ -1203,6 +1298,18 @@ static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
     }
 }
 
+static void beaglev_ahead_attach_eeprom(BeagleVAheadState *s)
+{
+    g_autofree uint8_t *contents = g_malloc(BEAGLEV_AHEAD_EEPROM_SIZE);
+
+    /* Factory-programmed, board-unique bytes are deliberately not invented. */
+    memset(contents, 0xff, BEAGLEV_AHEAD_EEPROM_SIZE);
+    at24c_eeprom_init_rom(s->soc.i2c[0].bus,
+                          BEAGLEV_AHEAD_EEPROM_ADDRESS,
+                          BEAGLEV_AHEAD_EEPROM_SIZE, contents,
+                          BEAGLEV_AHEAD_EEPROM_SIZE);
+}
+
 static void beaglev_ahead_machine_done(Notifier *notifier, void *data)
 {
     BeagleVAheadState *s = container_of(notifier, BeagleVAheadState,
@@ -1272,6 +1379,7 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     beaglev_ahead_attach_storage(s);
+    beaglev_ahead_attach_eeprom(s);
 
     beaglev_ahead_create_fdt(s);
 
