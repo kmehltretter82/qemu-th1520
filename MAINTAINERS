@@ -1799,6 +1799,7 @@ F: hw/intc/thead_c900_plic.c
 F: hw/misc/th1520_cpr.c
 F: hw/net/th1520_gmac.c
 F: hw/riscv/th1520.c
+F: hw/timer/dw_apb_timer.c
 F: include/hw/char/dw_apb_uart.h
 F: include/hw/dma/dw_axi_dmac.h
 F: include/hw/gpio/dw_apb_gpio.h
@@ -1807,11 +1808,13 @@ F: include/hw/intc/thead_c900_plic.h
 F: include/hw/misc/th1520_cpr.h
 F: include/hw/net/th1520_gmac.h
 F: include/hw/riscv/th1520.h
+F: include/hw/timer/dw_apb_timer.h
 F: target/riscv/*theadvector*
 F: target/riscv/tcg/*theadvector*
 F: target/riscv/tcg/th_csr.c
 F: tests/qtest/beaglev-ahead-test.c
 F: tests/tcg/riscv64/test-beaglev-ahead-*
+F: tests/tcg/riscv64/test-dw-apb-timer.S
 F: tests/tcg/riscv64/test-dw-apb-uart.S
 F: tests/tcg/riscv64/test-thead-*
 

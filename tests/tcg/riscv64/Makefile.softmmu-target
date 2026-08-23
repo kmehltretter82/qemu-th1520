@@ -69,6 +69,12 @@ run-test-dw-apb-uart: test-dw-apb-uart
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 
+EXTRA_RUNS += run-test-dw-apb-timer
+test-dw-apb-timer: test-dw-apb-timer.o
+run-test-dw-apb-timer: test-dw-apb-timer
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 EXTRA_RUNS += run-test-beaglev-ahead-smp
 test-beaglev-ahead-smp: test-beaglev-ahead-smp.o
 run-test-beaglev-ahead-smp: test-beaglev-ahead-smp

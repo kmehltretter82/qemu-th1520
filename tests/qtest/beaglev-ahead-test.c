@@ -46,6 +46,8 @@
 #define TH1520_I2C3_BASE           0xffec014000ULL
 #define TH1520_I2C4_BASE           0xffe7f28000ULL
 #define TH1520_I2C5_BASE           0xfff7f2c000ULL
+#define TH1520_TIMER0_3_BASE       0xffefc32000ULL
+#define TH1520_TIMER4_7_BASE       0xffffc33000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -142,6 +144,24 @@
 #define DW_I2C_INTR_RX_FULL        BIT(2)
 #define DW_I2C_INTR_TX_ABRT        BIT(6)
 
+#define DW_TIMER_STRIDE            0x14
+#define DW_TIMER_LOAD_COUNT        0x00
+#define DW_TIMER_CURRENT_VALUE     0x04
+#define DW_TIMER_CONTROL           0x08
+#define DW_TIMER_EOI               0x0c
+#define DW_TIMER_INT_STATUS        0x10
+#define DW_TIMERS_INT_STATUS       0xa0
+#define DW_TIMERS_EOI              0xa4
+#define DW_TIMERS_RAW_INT_STATUS   0xa8
+#define DW_TIMERS_COMP_VERSION     0xac
+#define DW_TIMER_LOAD_COUNT2(n)    (0xb0 + 4 * (n))
+#define DW_TIMER_PROTECTION(n)     (0xd0 + 4 * (n))
+
+#define DW_TIMER_ENABLE            BIT(0)
+#define DW_TIMER_PERIODIC          BIT(1)
+#define DW_TIMER_INT_MASK          BIT(2)
+#define DW_TIMER_PWM               BIT(3)
+
 #define CSR_TIME                   0xc01
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
@@ -173,6 +193,7 @@
 #define TH1520_I2C3_IRQ            47
 #define TH1520_I2C4_IRQ            48
 #define TH1520_I2C5_IRQ            49
+#define TH1520_TIMER0_IRQ          16
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
@@ -212,6 +233,8 @@
 #define TH1520_I2C_INTR_RESET      0x000048ff
 #define TH1520_I2C_INTR_VALID      0x00004fff
 #define BEAGLEV_AHEAD_EEPROM_ADDR  0x50
+#define TH1520_TIMER_COMP_VERSION  0x3231322a
+#define TH1520_TIMER_TICK_NS       8
 
 #define TH1520_PLL_STS             0x080
 #define TH1520_C910_CLK_CFG        0x100
@@ -439,6 +462,14 @@ typedef struct TH1520I2CController {
     bool board_enabled;
 } TH1520I2CController;
 
+typedef struct TH1520Timer {
+    const char *name;
+    uint64_t base;
+    uint64_t component_base;
+    uint32_t channel;
+    uint32_t irq;
+} TH1520Timer;
+
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
     { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
@@ -497,6 +528,25 @@ static const TH1520I2CController th1520_i2c_controllers[] = {
     { "i2c3", TH1520_I2C3_BASE, TH1520_I2C3_IRQ, TH1520_CLK_I2C3, false },
     { "i2c4", TH1520_I2C4_BASE, TH1520_I2C4_IRQ, TH1520_CLK_I2C4, false },
     { "i2c5", TH1520_I2C5_BASE, TH1520_I2C5_IRQ, TH1520_CLK_I2C5, false },
+};
+
+static const TH1520Timer th1520_timers[] = {
+    { "timer0", TH1520_TIMER0_3_BASE + 0 * DW_TIMER_STRIDE,
+      TH1520_TIMER0_3_BASE, 0, TH1520_TIMER0_IRQ + 0 },
+    { "timer1", TH1520_TIMER0_3_BASE + 1 * DW_TIMER_STRIDE,
+      TH1520_TIMER0_3_BASE, 1, TH1520_TIMER0_IRQ + 1 },
+    { "timer2", TH1520_TIMER0_3_BASE + 2 * DW_TIMER_STRIDE,
+      TH1520_TIMER0_3_BASE, 2, TH1520_TIMER0_IRQ + 2 },
+    { "timer3", TH1520_TIMER0_3_BASE + 3 * DW_TIMER_STRIDE,
+      TH1520_TIMER0_3_BASE, 3, TH1520_TIMER0_IRQ + 3 },
+    { "timer4", TH1520_TIMER4_7_BASE + 0 * DW_TIMER_STRIDE,
+      TH1520_TIMER4_7_BASE, 0, TH1520_TIMER0_IRQ + 4 },
+    { "timer5", TH1520_TIMER4_7_BASE + 1 * DW_TIMER_STRIDE,
+      TH1520_TIMER4_7_BASE, 1, TH1520_TIMER0_IRQ + 5 },
+    { "timer6", TH1520_TIMER4_7_BASE + 2 * DW_TIMER_STRIDE,
+      TH1520_TIMER4_7_BASE, 2, TH1520_TIMER0_IRQ + 6 },
+    { "timer7", TH1520_TIMER4_7_BASE + 3 * DW_TIMER_STRIDE,
+      TH1520_TIMER4_7_BASE, 3, TH1520_TIMER0_IRQ + 7 },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -1172,6 +1222,42 @@ static void assert_i2c_fdt(const void *fdt,
     g_assert_cmphex(fdt_prop_u32(fdt, node, "pagesize"), ==, 32);
 }
 
+static void assert_timer_fdt(const void *fdt, const TH1520Timer *timer,
+                             uint32_t clock_phandle)
+{
+    g_autofree char *path =
+        g_strdup_printf("/soc/timer@%" PRIx64, timer->base);
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dw-apb-timer");
+    assert_fdt_mmio(fdt, node, timer->base, DW_TIMER_STRIDE);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, timer->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                    TH1520_CLK_PERI_APB_PCLK);
+    text = fdt_getprop(fdt, node, "clock-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "timer");
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "disabled");
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1417,6 +1503,10 @@ static void test_direct_boot_contract(void)
                        ap_clock_phandle);
     }
 
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
+        assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
+    }
+
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
         gpio_phandles[i] = assert_gpio_fdt(fdt,
                                            &th1520_gpio_controllers[i],
@@ -1458,6 +1548,51 @@ static void test_direct_boot_contract(void)
     }
 
     qtest_quit(qts);
+}
+
+static void test_external_dtb(void)
+{
+    enum { FDT_BUFFER_SIZE = 4096 };
+    static const char marker[] = "beaglev-ahead-external-dtb";
+    g_autoptr(GError) error = NULL;
+    g_autofree char *path = NULL;
+    g_autofree uint8_t *source_fdt = g_malloc0(FDT_BUFFER_SIZE);
+    g_autofree uint8_t *guest_fdt = NULL;
+    struct fdt_header header;
+    const char *value;
+    QTestState *qts;
+    uint64_t fdt_addr;
+    int fdt_size;
+    int fd;
+    int len;
+
+    g_assert_cmpint(fdt_create_empty_tree(source_fdt, FDT_BUFFER_SIZE), ==, 0);
+    g_assert_cmpint(fdt_setprop_string(source_fdt, 0,
+                                      "qemu,external-dtb-test", marker), ==, 0);
+
+    fd = g_file_open_tmp("beaglev-ahead-test-XXXXXX.dtb", &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    g_assert_true(g_file_set_contents(path, (const char *)source_fdt,
+                                     fdt_totalsize(source_fdt), &error));
+    g_assert_no_error(error);
+
+    qts = qtest_initf("-machine beaglev-ahead -bios none -dtb %s", path);
+    fdt_addr = qtest_readq(qts, BROM_RESET_FDT_ADDR);
+    qtest_memread(qts, fdt_addr, &header, sizeof(header));
+    g_assert_cmpint(fdt_check_header(&header), ==, 0);
+    fdt_size = fdt_totalsize(&header);
+    guest_fdt = g_malloc(fdt_size);
+    qtest_memread(qts, fdt_addr, guest_fdt, fdt_size);
+
+    value = fdt_getprop(guest_fdt, 0, "qemu,external-dtb-test", &len);
+    g_assert_nonnull(value);
+    g_assert_cmpint(len, ==, sizeof(marker));
+    g_assert_cmpstr(value, ==, marker);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_ap_clock_registers(void)
@@ -3042,6 +3177,191 @@ static void test_dw_i2c_interrupts(void)
     qtest_quit(qts);
 }
 
+static void assert_dw_timer_reset_state(QTestState *qts, uint64_t base)
+{
+    for (unsigned int channel = 0; channel < 4; channel++) {
+        uint64_t timer = base + channel * DW_TIMER_STRIDE;
+
+        g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_LOAD_COUNT), ==,
+                        0);
+        g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==,
+                        0x80000000);
+        g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CONTROL), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==,
+                        0);
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + DW_TIMER_LOAD_COUNT2(channel)),
+                        ==, 0);
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + DW_TIMER_PROTECTION(channel)),
+                        ==, 2);
+    }
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_INT_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_RAW_INT_STATUS), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_COMP_VERSION), ==,
+                    TH1520_TIMER_COMP_VERSION);
+}
+
+static void test_dw_timer_registers(void)
+{
+    static const uint64_t components[] = {
+        TH1520_TIMER0_3_BASE, TH1520_TIMER4_7_BASE,
+    };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t component = 0; component < ARRAY_SIZE(components);
+         component++) {
+        uint64_t base = components[component];
+
+        assert_dw_timer_reset_state(qts, base);
+        for (unsigned int channel = 0; channel < 4; channel++) {
+            uint64_t timer = base + channel * DW_TIMER_STRIDE;
+            uint32_t load2 = 0x10203040 + channel + component * 0x100;
+
+            qtest_writel(qts, timer + DW_TIMER_CONTROL,
+                          DW_TIMER_ENABLE | DW_TIMER_PERIODIC |
+                          DW_TIMER_INT_MASK | DW_TIMER_PWM);
+            g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CONTROL), ==,
+                            0xf);
+            qtest_writel(qts, timer + DW_TIMER_CONTROL, 0);
+            qtest_writel(qts, base + DW_TIMER_LOAD_COUNT2(channel), load2);
+            qtest_writel(qts, base + DW_TIMER_PROTECTION(channel),
+                          UINT32_MAX);
+            g_assert_cmphex(qtest_readl(
+                                qts, base + DW_TIMER_LOAD_COUNT2(channel)),
+                            ==, load2);
+            g_assert_cmphex(qtest_readl(
+                                qts, base + DW_TIMER_PROTECTION(channel)),
+                            ==, 7);
+        }
+    }
+
+    qtest_system_reset(qts);
+    for (size_t component = 0; component < ARRAY_SIZE(components);
+         component++) {
+        assert_dw_timer_reset_state(qts, components[component]);
+    }
+    qtest_quit(qts);
+}
+
+static void test_dw_timer_timing(void)
+{
+    const uint64_t base = TH1520_TIMER0_3_BASE;
+    const uint64_t timer = base;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+
+    /* Periodic mode expires on the third 125 MHz tick and then reloads. */
+    qtest_writel(qts, timer + DW_TIMER_LOAD_COUNT, 3);
+    qtest_writel(qts, timer + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_clock_step(qts, 3 * TH1520_TIMER_TICK_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_INT_STATUS), ==,
+                    BIT(0));
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_RAW_INT_STATUS), ==,
+                    BIT(0));
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_EOI), ==, 0);
+
+    qtest_clock_step(qts, TH1520_TIMER_TICK_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 3);
+
+    qtest_clock_step(qts, 3 * TH1520_TIMER_TICK_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 1);
+    qtest_writel(qts, timer + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC | DW_TIMER_INT_MASK);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_RAW_INT_STATUS), ==,
+                    BIT(0));
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_EOI), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_RAW_INT_STATUS), ==,
+                    0);
+
+    /* Clearing ENABLE pauses rather than discarding the current count. */
+    qtest_writel(qts, timer + DW_TIMER_CONTROL, DW_TIMER_PERIODIC);
+    qtest_writel(qts, timer + DW_TIMER_LOAD_COUNT, 5);
+    qtest_writel(qts, timer + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_clock_step(qts, 2 * TH1520_TIMER_TICK_NS + 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 3);
+    qtest_writel(qts, timer + DW_TIMER_CONTROL, DW_TIMER_PERIODIC);
+    qtest_clock_step(qts, 100 * TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 3);
+
+    /* Free-running mode uses LOAD_COUNT once, then wraps to all ones. */
+    qtest_writel(qts, timer + DW_TIMER_LOAD_COUNT, 2);
+    qtest_writel(qts, timer + DW_TIMER_CONTROL, DW_TIMER_ENABLE);
+    qtest_clock_step(qts, 2 * TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 1);
+    qtest_readl(qts, timer + DW_TIMER_EOI);
+    qtest_clock_step(qts, TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==,
+                    UINT32_MAX);
+    qtest_clock_step(qts, TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_CURRENT_VALUE), ==,
+                    UINT32_MAX - 1);
+
+    qtest_writel(qts, timer + DW_TIMER_CONTROL, 0);
+    qtest_writel(qts, timer + DW_TIMER_LOAD_COUNT, 1);
+    qtest_writel(qts, timer + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_INT_MASK);
+    qtest_clock_step(qts, TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_TIMERS_RAW_INT_STATUS), ==,
+                    BIT(0));
+    qtest_writel(qts, timer + DW_TIMER_CONTROL, DW_TIMER_ENABLE);
+    g_assert_cmphex(qtest_readl(qts, timer + DW_TIMER_INT_STATUS), ==, 1);
+    qtest_readl(qts, timer + DW_TIMER_EOI);
+
+    qtest_quit(qts);
+}
+
+static void test_dw_timer_interrupt_routes(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
+        const TH1520Timer *timer = &th1520_timers[i];
+
+        qtest_writel(qts, C900_PLIC_PRIORITY(timer->irq), 5);
+        c900_plic_set_enable(qts, 1, timer->irq, true);
+        qtest_writel(qts, timer->base + DW_TIMER_LOAD_COUNT, 1);
+        qtest_writel(qts, timer->base + DW_TIMER_CONTROL, DW_TIMER_ENABLE);
+        qtest_clock_step(qts, TH1520_TIMER_TICK_NS);
+
+        g_assert_true(c900_plic_pending(qts, timer->irq));
+        assert_only_irq(qts, 0);
+        g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                        timer->irq);
+        assert_no_irq(qts);
+        g_assert_cmphex(qtest_readl(qts,
+                                    timer->component_base +
+                                    DW_TIMERS_RAW_INT_STATUS), ==,
+                        BIT(timer->channel));
+        qtest_readl(qts, timer->base + DW_TIMER_EOI);
+        qtest_writel(qts, timer->base + DW_TIMER_CONTROL, 0);
+        qtest_writel(qts, C900_PLIC_CLAIM(1), timer->irq);
+        c900_plic_set_enable(qts, 1, timer->irq, false);
+        assert_no_irq(qts);
+    }
+    qtest_quit(qts);
+}
+
 static void assert_padctrl_reset_state(QTestState *qts,
                                        const TH1520PadCtrl *controller)
 {
@@ -3614,6 +3934,113 @@ static void wait_for_migration_complete(QTestState *qts)
         g_usleep(10000);
     }
     g_error("migration did not complete within 30 seconds");
+}
+
+static void test_dw_timer_migration(void)
+{
+    const TH1520Timer *running = &th1520_timers[2];
+    const TH1520Timer *pending = &th1520_timers[5];
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-timer-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    qtest_writel(src, running->base + DW_TIMER_LOAD_COUNT, 10);
+    qtest_writel(src, running->base + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_clock_step(src, 3 * TH1520_TIMER_TICK_NS + 1);
+    g_assert_cmphex(qtest_readl(src,
+                                running->base + DW_TIMER_CURRENT_VALUE),
+                    ==, 7);
+
+    qtest_writel(src, pending->base + DW_TIMER_LOAD_COUNT, 1);
+    qtest_writel(src, pending->base + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_INT_MASK);
+    qtest_writel(src,
+                  pending->component_base + DW_TIMER_LOAD_COUNT2(3),
+                  0x89abcdef);
+    qtest_writel(src,
+                  pending->component_base + DW_TIMER_PROTECTION(3), 5);
+    qtest_clock_step(src, TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(src,
+                                running->base + DW_TIMER_CURRENT_VALUE),
+                    ==, 6);
+    g_assert_cmphex(qtest_readl(src,
+                                pending->component_base +
+                                DW_TIMERS_RAW_INT_STATUS), ==,
+                    BIT(pending->channel));
+    g_assert_cmphex(qtest_readl(src,
+                                pending->base + DW_TIMER_INT_STATUS), ==,
+                    0);
+
+    /* Migration preserves absolute virtual timer deadlines. */
+    g_assert_cmpint(qtest_clock_set(dst,
+                                    4 * TH1520_TIMER_TICK_NS + 1), ==,
+                    4 * TH1520_TIMER_TICK_NS + 1);
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                running->base + DW_TIMER_CURRENT_VALUE),
+                    ==, 6);
+    g_assert_cmphex(qtest_readl(dst, running->base + DW_TIMER_CONTROL), ==,
+                    DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    g_assert_cmphex(qtest_readl(dst,
+                                pending->component_base +
+                                DW_TIMERS_RAW_INT_STATUS), ==,
+                    BIT(pending->channel));
+    g_assert_cmphex(qtest_readl(dst,
+                                pending->base + DW_TIMER_INT_STATUS), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(
+                        dst,
+                        pending->component_base + DW_TIMER_LOAD_COUNT2(3)),
+                    ==, 0x89abcdef);
+    g_assert_cmphex(qtest_readl(
+                        dst,
+                        pending->component_base + DW_TIMER_PROTECTION(3)),
+                    ==, 5);
+
+    qtest_writel(dst, pending->base + DW_TIMER_CONTROL, DW_TIMER_ENABLE);
+    g_assert_cmphex(qtest_readl(dst,
+                                pending->base + DW_TIMER_INT_STATUS), ==,
+                    1);
+    qtest_readl(dst, pending->base + DW_TIMER_EOI);
+    qtest_writel(dst, pending->base + DW_TIMER_CONTROL, 0);
+
+    qtest_clock_step(dst, 6 * TH1520_TIMER_TICK_NS - 2);
+    g_assert_cmphex(qtest_readl(dst,
+                                running->base + DW_TIMER_CURRENT_VALUE),
+                    ==, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                running->base + DW_TIMER_INT_STATUS), ==,
+                    0);
+    qtest_clock_step(dst, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                running->base + DW_TIMER_CURRENT_VALUE),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(dst,
+                                running->base + DW_TIMER_INT_STATUS), ==,
+                    1);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_dw_i2c_migration(void)
@@ -4415,6 +4842,8 @@ int main(int argc, char **argv)
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/beaglev-ahead/boot/direct-contract",
                        test_direct_boot_contract);
+        qtest_add_func("/beaglev-ahead/boot/external-dtb",
+                       test_external_dtb);
         qtest_add_func("/beaglev-ahead/cpr/clock-registers",
                        test_ap_clock_registers);
         qtest_add_func("/beaglev-ahead/cpr/reset-registers",
@@ -4441,6 +4870,14 @@ int main(int argc, char **argv)
                        test_dw_i2c_interrupts);
         qtest_add_func("/beaglev-ahead/dw-i2c/migration",
                        test_dw_i2c_migration);
+        qtest_add_func("/beaglev-ahead/dw-timer/registers",
+                       test_dw_timer_registers);
+        qtest_add_func("/beaglev-ahead/dw-timer/timing",
+                       test_dw_timer_timing);
+        qtest_add_func("/beaglev-ahead/dw-timer/interrupt-routes",
+                       test_dw_timer_interrupt_routes);
+        qtest_add_func("/beaglev-ahead/dw-timer/migration",
+                       test_dw_timer_migration);
         qtest_add_func("/beaglev-ahead/dmac/registers",
                        test_dmac_registers);
         qtest_add_func("/beaglev-ahead/dmac/direct-transfer",
