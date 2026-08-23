@@ -15,6 +15,7 @@ config BEAGLEV_AHEAD
     depends on RISCV64
     select DEVICE_TREE
     select DW_APB_UART
+    select DWCMSHC
     select THEAD_C900_CLINT
     select THEAD_C900_PLIC
 

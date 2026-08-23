@@ -16,12 +16,14 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "system/device_tree.h"
+#include "system/blockdev.h"
 #include "system/system.h"
 #include "system/memory.h"
 #include "target/riscv/cpu.h"
 #include "target/riscv/cpu_bits.h"
 #include "hw/char/dw_apb_uart.h"
 #include "hw/core/loader.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
@@ -29,6 +31,7 @@
 #include "hw/riscv/fdt-common.h"
 #include "hw/riscv/machines-qom.h"
 #include "hw/riscv/th1520.h"
+#include "hw/sd/sd.h"
 
 #include <libfdt.h>
 
@@ -38,7 +41,22 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
+    [TH1520_DEV_EMMC]  = { 0xffe7080000, 0x00010000 },
+    [TH1520_DEV_SDIO0] = { 0xffe7090000, 0x00010000 },
+    [TH1520_DEV_SDIO1] = { 0xffe70a0000, 0x00010000 },
     [TH1520_DEV_BROM]  = { 0xffffd00000, 0x00100000 },
+};
+
+static const int th1520_mshc_memmap[TH1520_MSHC_COUNT] = {
+    TH1520_DEV_EMMC,
+    TH1520_DEV_SDIO0,
+    TH1520_DEV_SDIO1,
+};
+
+static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
+    TH1520_EMMC_IRQ,
+    TH1520_SDIO0_IRQ,
+    TH1520_SDIO1_IRQ,
 };
 
 static GlobalProperty beaglev_ahead_cpu_defaults[] = {
@@ -100,6 +118,9 @@ static void th1520_create_pmu_fdt(void *fdt)
 
 static void th1520_soc_init(Object *obj)
 {
+    static const char *const mshc_names[TH1520_MSHC_COUNT] = {
+        "emmc", "sdio0", "sdio1",
+    };
     TH1520SoCState *s = RISCV_TH1520_SOC(obj);
 
     object_initialize_child(obj, "c910-cpus", &s->c910_cpus,
@@ -109,6 +130,10 @@ static void th1520_soc_init(Object *obj)
     object_initialize_child(obj, "plic", &s->plic,
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "uart0", &s->uart0, TYPE_DW_APB_UART);
+    for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
+        object_initialize_child(obj, mshc_names[i], &s->mshc[i],
+                                TYPE_DWC_MSHC);
+    }
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "hartid-base", 0);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "num-harts",
                          TH1520_C910_HARTS);
@@ -198,6 +223,19 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->uart0), 0,
                        qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                               TH1520_UART0_IRQ));
+
+    for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
+        SysBusDevice *mshc = SYS_BUS_DEVICE(&s->mshc[i]);
+
+        if (!sysbus_realize(mshc, errp)) {
+            return;
+        }
+        sysbus_mmio_map(mshc, 0,
+                        th1520_memmap[th1520_mshc_memmap[i]].base);
+        sysbus_connect_irq(mshc, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  th1520_mshc_irqs[i]));
+    }
 }
 
 static void th1520_soc_class_init(ObjectClass *oc, const void *data)
@@ -231,6 +269,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t l2_phandle;
     uint32_t plic_phandle;
     uint32_t uart_clock_phandle;
+    uint32_t mshc_clock_phandle;
     g_autofree char *plic_name = NULL;
     g_autofree char *clint_name = NULL;
     g_autofree char *uart_name = NULL;
@@ -361,6 +400,68 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_string(ms->fdt, "/aliases", "serial0", uart_name);
     qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path",
                             "serial0:115200n8");
+
+    mshc_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/mshc-clock");
+    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "clock-frequency",
+                          TH1520_MSHC_INPUT_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "clock-output-names",
+                            "emmc-sdio");
+    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "phandle",
+                          mshc_clock_phandle);
+
+    for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
+        const MemMapEntry *map = &th1520_memmap[th1520_mshc_memmap[i]];
+        g_autofree char *name =
+            g_strdup_printf("/soc/mmc@%" HWADDR_PRIx, map->base);
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string(ms->fdt, name, "compatible",
+                                "thead,th1520-dwcmshc");
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
+                                     2, map->size);
+        qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
+                               th1520_mshc_irqs[i], 4);
+        qemu_fdt_setprop_cell(ms->fdt, name, "clocks",
+                              mshc_clock_phandle);
+        qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "core");
+        qemu_fdt_setprop_cell(ms->fdt, name, "max-frequency",
+                              TH1520_MSHC_INPUT_FREQ);
+        qemu_fdt_setprop_cell(ms->fdt, name, "bus-width", i ? 4 : 8);
+        qemu_fdt_setprop_string(ms->fdt, name, "status", "okay");
+
+        if (i == 0) {
+            qemu_fdt_setprop(ms->fdt, name, "mmc-hs400-1_8v", NULL, 0);
+            qemu_fdt_setprop(ms->fdt, name, "non-removable", NULL, 0);
+            qemu_fdt_setprop(ms->fdt, name, "no-sd", NULL, 0);
+            qemu_fdt_setprop(ms->fdt, name, "no-sdio", NULL, 0);
+        } else if (i == 2) {
+            /* The CYW43012 SDIO function is a later device milestone. */
+            qemu_fdt_setprop(ms->fdt, name, "non-removable", NULL, 0);
+            qemu_fdt_setprop(ms->fdt, name, "keep-power-in-suspend",
+                             NULL, 0);
+        }
+    }
+}
+
+static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
+{
+    for (int i = 0; i < 2; i++) {
+        DriveInfo *dinfo = drive_get(IF_SD, 0, i);
+        DeviceState *card;
+
+        if (!dinfo) {
+            continue;
+        }
+
+        card = qdev_new(i == 0 ? TYPE_EMMC : TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        qdev_realize_and_unref(card, s->soc.mshc[i].bus, &error_fatal);
+    }
 }
 
 static void beaglev_ahead_machine_done(Notifier *notifier, void *data)
@@ -431,6 +532,8 @@ static void beaglev_ahead_machine_init(MachineState *ms)
                             TYPE_RISCV_TH1520_SOC);
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
+    beaglev_ahead_attach_storage(s);
+
     beaglev_ahead_create_fdt(s);
 
     s->machine_done.notify = beaglev_ahead_machine_done;
@@ -455,6 +558,7 @@ static void beaglev_ahead_machine_class_init(ObjectClass *oc,
     mc->valid_cpu_types = valid_cpu_types;
     mc->default_ram_size = 4 * GiB;
     mc->default_ram_id = "beaglev-ahead.ram";
+    mc->block_default_type = IF_SD;
     mc->no_cdrom = true;
     compat_props_add(mc->compat_props, beaglev_ahead_cpu_defaults,
                      G_N_ELEMENTS(beaglev_ahead_cpu_defaults));

@@ -136,7 +136,7 @@ validation.
 | UART0-5 | Generic 16550 support exists; this workspace adds a reusable DW APB wrapper and integrates UART0 | Verify TH1520 synthesis values and bus behavior, complete optional shadow/DMA/RS-485 behavior, clocks/resets, and integrate UART1-5 |
 | I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
 | USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
-| SD/eMMC | SD card and generic SDHCI foundations exist | New DWC MSHC controller/glue, PHY, tuning, CQE and three instances |
+| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
 | Ethernet | No Synopsys DWMAC/stmmac model found | New GMAC 3.70a, MDIO and RTL8211F-facing behavior |
 | SPI/QSPI | Generic SSI/flash infrastructure exists | New DW APB SSI and TH1520 QSPI/XIP integration |
 | GPIO/pinctrl/PWM | No matching DW APB GPIO or TH1520 pinctrl/PWM | New reusable IP and TH1520 glue |
@@ -183,6 +183,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   qtests, and a guest-executed access/interrupt test.  Unproved shadow, DMA,
   and RS-485 blocks are deliberately omitted rather than exposed as partial
   features; and
+* a reusable DesignWare Mobile Storage Host Controller wrapper with the
+  TH1520's 64 KiB aperture, vendor pointers, v4.20 capabilities, vendor and
+  PHY register state, deterministic power-good/DLL-lock behavior, VMState,
+  and all three eMMC/SDIO instances at their physical addresses and PLIC
+  sources.  Generic SDHCI now accepts v4 controllers, preserves Host Control 2,
+  implements Auto CMD23 and 128-bit 64-address ADMA2 descriptors, and restores
+  its interrupt output after migration; and
 * a deterministic direct-boot contract that selects hart 0 for both the
   FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
   four-hart M-mode payload whose ordered UART transcript proves that harts
@@ -222,8 +229,13 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 27 board qtests in each normal build and
-the ASan/UBSan dependency-minimal build, including whole-machine migration;
+The focused gate currently comprises 35 board qtests in the normal,
+dependency-minimal and ASan/UBSan builds, including eight storage tests for the
+generated DT, exact controller/
+PHY reset and masks, all three PLIC routes, configurable unknown synthesis IDs,
+eMMC PIO read/write, SD Auto CMD23 with a 64-bit ADMA descriptor and buffer
+above 4 GiB, and device migration.  The complete gate includes whole-machine
+migration;
 C910 CSR identity tests; XTheadVector, PMU, CLINT, PLIC, UART and four-hart
 guest payloads; and an S-mode SBI identity probe.  The instrumented Linux run
 selects hart 0, brings up all four CPUs and probes the C900 PLIC before its
@@ -232,6 +244,13 @@ panic are separately established by the normal full and minimal boots.  This
 snapshot proves only the boot-critical interfaces exercised by those tests;
 it does not resolve a hardware-only ledger item or imply stock-image
 compatibility.
+
+With a blank 64 MiB image attached as storage unit 0, the same pinned Linux
+kernel binds all three ``thead,th1520-dwcmshc`` nodes, reports 64-bit ADMA, and
+enumerates the image as a high-speed ``QEMU!!`` eMMC block device.  This proves
+the mainline driver/controller contract through block discovery, not eMMC 5.1,
+HS400, filesystem integrity, CQE, SDIO Wi-Fi, physical-card GPIOs, or mask-ROM
+boot behavior.
 
 ## Intended source architecture
 
@@ -398,6 +417,13 @@ Gate P5:
 * DHCP, IPv4/IPv6, TCP/UDP, checksum/offload, multicast and sustained traffic
   pass while stressing noncoherent DMA;
 * an official board root filesystem boots unmodified to multi-user.
+
+Status: in progress.  The legacy storage submilestone is implemented and has
+register, IRQ, PIO, v4 64-bit ADMA2, reset, DT, migration, and mainline-Linux
+probe coverage.  CQE/ADMA3, eMMC 5.1/HS400 and boot/RPMB behavior, SDIO Wi-Fi,
+card-detect/write-protect wiring, error injection, the general/secure DMACs,
+both Ethernet controllers, block stress, stock-image boot, and every remaining
+P5 acceptance item are still open.  P5 is therefore not closed.
 
 ### Phase 6 — clocks, reset, power and control I/O
 

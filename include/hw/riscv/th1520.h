@@ -12,6 +12,9 @@
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/sd/dwcmshc.h"
+
+#define TH1520_MSHC_COUNT 3
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
 OBJECT_DECLARE_SIMPLE_TYPE(TH1520SoCState, RISCV_TH1520_SOC)
@@ -25,6 +28,7 @@ struct TH1520SoCState {
     THeadC900CLINTState clint;
     THeadC900PLICState plic;
     DWAPBUARTState uart0;
+    DWCMSHCState mshc[TH1520_MSHC_COUNT];
 };
 
 #define TYPE_BEAGLEV_AHEAD_MACHINE MACHINE_TYPE_NAME("beaglev-ahead")
@@ -43,6 +47,9 @@ enum {
     TH1520_DEV_CLINT,
     TH1520_DEV_SRAM,
     TH1520_DEV_UART0,
+    TH1520_DEV_EMMC,
+    TH1520_DEV_SDIO0,
+    TH1520_DEV_SDIO1,
     TH1520_DEV_BROM,
 };
 
@@ -56,5 +63,10 @@ enum {
 
 #define TH1520_UART0_IRQ 36
 #define TH1520_UART_INPUT_FREQ 100000000
+
+#define TH1520_EMMC_IRQ 62
+#define TH1520_SDIO0_IRQ 64
+#define TH1520_SDIO1_IRQ 71
+#define TH1520_MSHC_INPUT_FREQ 198000000
 
 #endif /* HW_RISCV_TH1520_H */

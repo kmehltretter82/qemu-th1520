@@ -6,7 +6,12 @@
 
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"
+#include "qemu/bswap.h"
+#include "qemu/units.h"
+#include "hw/sd/sdhci.h"
+#include "hw/sd/sdhci-internal.h"
 #include "libqtest.h"
+#include "libqos/sdhci-cmd.h"
 #include "qobject/qdict.h"
 
 #include <libfdt.h>
@@ -17,6 +22,9 @@
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
+#define TH1520_EMMC_BASE           0xffe7080000ULL
+#define TH1520_SDIO0_BASE          0xffe7090000ULL
+#define TH1520_SDIO1_BASE          0xffe70a0000ULL
 #define C900_MSIP(hart)            (TH1520_CLINT_BASE + 0x0000 + 4 * (hart))
 #define C900_MTIMECMP(hart)        (TH1520_CLINT_BASE + 0x4000 + 8 * (hart))
 #define C900_SSIP(hart)            (TH1520_CLINT_BASE + 0xc000 + 4 * (hart))
@@ -61,6 +69,51 @@
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 
 #define TH1520_UART0_IRQ           36
+#define TH1520_EMMC_IRQ            62
+#define TH1520_SDIO0_IRQ           64
+#define TH1520_SDIO1_IRQ           71
+
+#define DWCMSHC_VENDOR_POINTER     0x0e8
+#define DWCMSHC_PHY_CNFG           0x300
+#define DWCMSHC_PHY_CMDPAD_CNFG    0x304
+#define DWCMSHC_PHY_DATAPAD_CNFG   0x306
+#define DWCMSHC_PHY_CLKPAD_CNFG    0x308
+#define DWCMSHC_PHY_STBPAD_CNFG    0x30a
+#define DWCMSHC_PHY_RSTNPAD_CNFG   0x30c
+#define DWCMSHC_PHY_PRBS_SEED      0x318
+#define DWCMSHC_PHY_DLL_CNFG1      0x31e
+#define DWCMSHC_PHY_SMPLDL_CNFG    0x320
+#define DWCMSHC_PHY_DLL_CTRL       0x324
+#define DWCMSHC_PHY_DLL_STATUS     0x32e
+#define DWCMSHC_PHY_DLLDBG_MLKDC   0x330
+#define DWCMSHC_PHY_DLLDBG_SLKDC   0x332
+#define DWCMSHC_MSHC_VER_ID        0x500
+#define DWCMSHC_MSHC_VER_TYPE      0x504
+#define DWCMSHC_MSHC_CTRL          0x508
+#define DWCMSHC_MBIU_CTRL          0x510
+#define DWCMSHC_EMMC_CTRL          0x52c
+#define DWCMSHC_BOOT_CTRL          0x52e
+#define DWCMSHC_AT_CTRL            0x540
+#define DWCMSHC_AT_STAT            0x544
+#define DWCMSHC_EMBEDDED_CTRL      0xf6c
+
+#define DWCMSHC_VENDOR_POINTER_RESET 0x01800500
+#define DWCMSHC_CAPABILITIES_RESET   0x080081773f6dc881ULL
+#define DWCMSHC_MAX_CURRENT_RESET    0x0000000000191919ULL
+#define DWCMSHC_HOST_VERSION_RESET   0x0005
+#define DWCMSHC_AT_CTRL_RESET        0x03000005
+#define DWCMSHC_AT_STAT_RESET        0x00000006
+
+#define DWCMSHC_PHY_RSTN           BIT(0)
+#define DWCMSHC_PHY_PWRGOOD        BIT(1)
+#define DWCMSHC_DLL_ENABLE         BIT(0)
+#define DWCMSHC_DLL_UPDATE         BIT(2)
+#define DWCMSHC_DLL_LOCK           BIT(0)
+
+#define DWCMSHC_TEST_IMAGE_SIZE    (1 * MiB)
+#define DWCMSHC_BLOCK_SIZE         512
+#define DWCMSHC_ADMA_DESC_ADDR     (TH1520_SRAM_BASE + 0x10000)
+#define DWCMSHC_ADMA_DATA_ADDR     (TH1520_SRAM_BASE + 0x20000)
 
 #define BROM_RESET_FDT_ADDR        (TH1520_BROM_BASE + 32)
 #define BROM_FW_DYNAMIC_INFO       (TH1520_BROM_BASE + 40)
@@ -105,6 +158,19 @@ typedef struct C900PLICContext {
     uint32_t context;
     uint32_t hart;
 } C900PLICContext;
+
+typedef struct DWCMSHCController {
+    const char *name;
+    uint64_t base;
+    uint32_t irq;
+    uint32_t bus_width;
+} DWCMSHCController;
+
+static const DWCMSHCController dwcmshc_controllers[] = {
+    { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
+    { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
+    { "sdio1", TH1520_SDIO1_BASE, TH1520_SDIO1_IRQ, 4 },
+};
 
 static const C900PLICContext c900_plic_contexts[] = {
     { "mext", 0, 0 }, { "sext", 1, 0 },
@@ -196,6 +262,90 @@ static void enable_uart0_supervisor_irq(QTestState *qts)
     c900_plic_set_enable(qts, 1, TH1520_UART0_IRQ, true);
 }
 
+static uint32_t fdt_prop_u32(const void *fdt, int node, const char *name)
+{
+    const fdt32_t *prop;
+    int len;
+
+    prop = fdt_getprop(fdt, node, name, &len);
+    g_assert_nonnull(prop);
+    g_assert_cmpint(len, ==, sizeof(*prop));
+    return fdt32_to_cpu(*prop);
+}
+
+static void assert_fdt_bool(const void *fdt, int node, const char *name,
+                            bool present)
+{
+    int len;
+    const void *prop = fdt_getprop(fdt, node, name, &len);
+
+    if (present) {
+        g_assert_nonnull(prop);
+        g_assert_cmpint(len, ==, 0);
+    } else {
+        g_assert_null(prop);
+        g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+    }
+}
+
+static void assert_dwcmshc_fdt(const void *fdt,
+                               const DWCMSHCController *controller,
+                               uint32_t clock_phandle)
+{
+    g_autofree char *path =
+        g_strdup_printf("/soc/mmc@%" PRIx64, controller->base);
+    const fdt32_t *cells;
+    const char *text;
+    int node;
+    int len;
+
+    node = fdt_path_offset(fdt, path);
+    g_assert_cmpint(node, >=, 0);
+
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "thead,th1520-dwcmshc");
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "okay");
+    text = fdt_getprop(fdt, node, "clock-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "core");
+
+    cells = fdt_getprop(fdt, node, "reg", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->base >> 32);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                    (uint32_t)controller->base);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, 0);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, 0x10000);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "clocks"), ==,
+                    clock_phandle);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "max-frequency"), ==,
+                    198000000);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "bus-width"), ==,
+                    controller->bus_width);
+
+    assert_fdt_bool(fdt, node, "mmc-hs400-1_8v",
+                    controller->base == TH1520_EMMC_BASE);
+    assert_fdt_bool(fdt, node, "no-sd",
+                    controller->base == TH1520_EMMC_BASE);
+    assert_fdt_bool(fdt, node, "no-sdio",
+                    controller->base == TH1520_EMMC_BASE);
+    assert_fdt_bool(fdt, node, "non-removable",
+                    controller->base != TH1520_SDIO0_BASE);
+    assert_fdt_bool(fdt, node, "keep-power-in-suspend",
+                    controller->base == TH1520_SDIO1_BASE);
+}
+
 static void test_direct_boot_contract(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -205,6 +355,8 @@ static void test_direct_boot_contract(void)
     g_autofree uint8_t *fdt = NULL;
     uint64_t fdt_addr;
     uint32_t cpu0_phandle;
+    uint32_t mshc_clock_phandle;
+    int clock_offset;
     int config_offset;
     int cpu0_offset;
     int fdt_size;
@@ -244,6 +396,193 @@ static void test_direct_boot_contract(void)
     g_assert_cmpint(len, ==, sizeof(*cold_boot_harts));
     g_assert_cmphex(fdt32_to_cpu(*cold_boot_harts), ==, cpu0_phandle);
 
+    clock_offset = fdt_path_offset(fdt, "/mshc-clock");
+    g_assert_cmpint(clock_offset, >=, 0);
+    compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "fixed-clock");
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    198000000);
+    mshc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(mshc_clock_phandle, !=, 0);
+
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        assert_dwcmshc_fdt(fdt, &dwcmshc_controllers[i],
+                           mshc_clock_phandle);
+    }
+
+    qtest_quit(qts);
+}
+
+static void assert_dwcmshc_reset_state(QTestState *qts, uint64_t base)
+{
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_VENDOR_POINTER), ==,
+                    DWCMSHC_VENDOR_POINTER_RESET);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_VENDOR_POINTER), ==,
+                    0x500);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_VENDOR_POINTER + 2), ==,
+                    0x180);
+    g_assert_cmphex(qtest_readq(qts, base + SDHC_CAPAB), ==,
+                    DWCMSHC_CAPABILITIES_RESET);
+    g_assert_cmphex(qtest_readq(qts, base + SDHC_MAXCURR), ==,
+                    DWCMSHC_MAX_CURRENT_RESET);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HCVER), ==,
+                    DWCMSHC_HOST_VERSION_RESET);
+    g_assert_cmphex(qtest_readb(qts, base + SDHC_HOSTCTL), ==, 0);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + SDHC_ARGUMENT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + SDHC_ADMASYSADDR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + SDHC_ADMASYSADDR + 4), ==, 0);
+
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_MSHC_VER_ID), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_MSHC_VER_TYPE), ==, 0);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_MSHC_CTRL), ==, 1);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_MBIU_CTRL), ==, 0x0f);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_EMMC_CTRL), ==, 0x0c);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_BOOT_CTRL), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_AT_CTRL), ==,
+                    DWCMSHC_AT_CTRL_RESET);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_AT_STAT), ==,
+                    DWCMSHC_AT_STAT_RESET);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_EMBEDDED_CTRL), ==, 0);
+
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_CNFG), ==, 0);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_CMDPAD_CNFG), ==,
+                    0x0440);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_DATAPAD_CNFG), ==,
+                    0x0440);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_CLKPAD_CNFG), ==,
+                    0x0440);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_STBPAD_CNFG), ==,
+                    0x0440);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_RSTNPAD_CNFG), ==,
+                    0x0440);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_PRBS_SEED), ==,
+                    0xffff);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_SMPLDL_CNFG), ==,
+                    0x0e);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLL_STATUS), ==, 0);
+}
+
+static void test_dwcmshc_registers(void)
+{
+    const uint64_t base = TH1520_EMMC_BASE;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        assert_dwcmshc_reset_state(qts, dwcmshc_controllers[i].base);
+    }
+
+    qtest_writel(qts, base + DWCMSHC_VENDOR_POINTER, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_VENDOR_POINTER), ==,
+                    DWCMSHC_VENDOR_POINTER_RESET);
+    qtest_writel(qts, base + DWCMSHC_MSHC_VER_ID, UINT32_MAX);
+    qtest_writel(qts, base + DWCMSHC_MSHC_VER_TYPE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_MSHC_VER_ID), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_MSHC_VER_TYPE), ==, 0);
+
+    qtest_writeb(qts, base + DWCMSHC_MSHC_CTRL, UINT8_MAX);
+    qtest_writeb(qts, base + DWCMSHC_MBIU_CTRL, UINT8_MAX);
+    qtest_writew(qts, base + DWCMSHC_EMMC_CTRL, UINT16_MAX);
+    qtest_writew(qts, base + DWCMSHC_BOOT_CTRL, UINT16_MAX);
+    qtest_writel(qts, base + DWCMSHC_AT_CTRL, UINT32_MAX);
+    qtest_writel(qts, base + DWCMSHC_AT_STAT, 0xa5a5a5a5);
+    qtest_writel(qts, base + DWCMSHC_EMBEDDED_CTRL, 0x89abcdef);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_MSHC_CTRL), ==, 0x11);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_MBIU_CTRL), ==, 0x0f);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_EMMC_CTRL), ==, 0x070f);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_BOOT_CTRL), ==, 0xf100);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_AT_CTRL), ==,
+                    0x7f1f0f1f);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_AT_STAT), ==,
+                    0x000000a5);
+    g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_EMBEDDED_CTRL), ==,
+                    0x09230000);
+
+    qtest_writew(qts, base + DWCMSHC_PHY_CMDPAD_CNFG, UINT16_MAX);
+    g_assert_cmphex(qtest_readw(qts, base + DWCMSHC_PHY_CMDPAD_CNFG), ==,
+                    0x1fff);
+    qtest_writeb(qts, base + DWCMSHC_PHY_DLL_CNFG1, 0x55);
+    qtest_writeb(qts, base + DWCMSHC_PHY_CNFG, DWCMSHC_PHY_RSTN);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_CNFG), ==,
+                    DWCMSHC_PHY_RSTN | DWCMSHC_PHY_PWRGOOD);
+    qtest_writeb(qts, base + DWCMSHC_PHY_DLL_CTRL,
+                  DWCMSHC_DLL_ENABLE | DWCMSHC_DLL_UPDATE);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLL_CTRL), ==,
+                    DWCMSHC_DLL_ENABLE);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLL_STATUS), ==,
+                    DWCMSHC_DLL_LOCK);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLLDBG_MLKDC), ==,
+                    0x55);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLLDBG_SLKDC), ==,
+                    0x55);
+    qtest_writeb(qts, base + DWCMSHC_PHY_CNFG, 0);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_CNFG), ==, 0);
+    g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLL_STATUS), ==, 0);
+
+    /* The three 64 KiB apertures must contain independent state. */
+    assert_dwcmshc_reset_state(qts, TH1520_SDIO0_BASE);
+    assert_dwcmshc_reset_state(qts, TH1520_SDIO1_BASE);
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        assert_dwcmshc_reset_state(qts, dwcmshc_controllers[i].base);
+    }
+    qtest_quit(qts);
+}
+
+static void test_dwcmshc_configurable_ids(void)
+{
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none "
+        "-global dwcmshc.mshc-version-id=0x3130302a "
+        "-global dwcmshc.mshc-version-type=0x4457432a");
+
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        uint64_t base = dwcmshc_controllers[i].base;
+
+        g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_MSHC_VER_ID), ==,
+                        0x3130302a);
+        g_assert_cmphex(qtest_readl(qts, base + DWCMSHC_MSHC_VER_TYPE), ==,
+                        0x4457432a);
+    }
+    qtest_quit(qts);
+}
+
+static void test_dwcmshc_interrupt(const void *opaque)
+{
+    const DWCMSHCController *controller = opaque;
+    uint64_t base = controller->base;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(controller->irq), 5);
+    c900_plic_set_enable(qts, 1, controller->irq, true);
+
+    qtest_writew(qts, base + SDHC_CLKCON,
+                  SDHC_CLOCK_SDCLK_EN | SDHC_CLOCK_INT_STABLE |
+                  SDHC_CLOCK_INT_EN);
+    qtest_writew(qts, base + SDHC_ERRINTSTSEN,
+                  SDHC_EISEN_CMDTIMEOUT);
+    qtest_writew(qts, base + SDHC_ERRINTSIGEN,
+                  SDHC_EISEN_CMDTIMEOUT);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0,
+                   (13 << 8) | SDHC_CMD_RESPONSE);
+
+    g_assert_true(qtest_readw(qts, base + SDHC_NORINTSTS) & SDHC_NIS_ERR);
+    g_assert_true(qtest_readw(qts, base + SDHC_ERRINTSTS) &
+                  SDHC_EIS_CMDTIMEOUT);
+    g_assert_true(c900_plic_pending(qts, controller->irq));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    controller->irq);
+    assert_no_irq(qts);
+
+    qtest_writew(qts, base + SDHC_ERRINTSTS, SDHC_EIS_CMDTIMEOUT);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
+    g_assert_false(c900_plic_pending(qts, controller->irq));
+    assert_no_irq(qts);
     qtest_quit(qts);
 }
 
@@ -697,6 +1036,240 @@ static void test_c900_clint_bank(const void *opaque)
     qtest_quit(qts);
 }
 
+static char *dwcmshc_create_image(const void *initial, size_t initial_size)
+{
+    g_autoptr(GError) error = NULL;
+    char *path = NULL;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-storage-XXXXXX", &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_nonnull(path);
+    g_assert_cmpint(ftruncate(fd, DWCMSHC_TEST_IMAGE_SIZE), ==, 0);
+    if (initial_size) {
+        g_assert_cmpint(pwrite(fd, initial, initial_size, 0), ==,
+                        initial_size);
+    }
+    g_assert_cmpint(fsync(fd), ==, 0);
+    close(fd);
+    return path;
+}
+
+static void dwcmshc_enable_card(QTestState *qts, uint64_t base)
+{
+    qtest_writeb(qts, base + SDHC_SWRST, SDHC_RESET_ALL);
+    qtest_writeb(qts, base + SDHC_PWRCON,
+                  SDHC_POWER_ON | (7 << R_SDHC_PWRCON_BUS_VOLTAGE_SHIFT));
+    qtest_writew(qts, base + SDHC_CLKCON,
+                  SDHC_CLOCK_SDCLK_EN | SDHC_CLOCK_INT_STABLE |
+                  SDHC_CLOCK_INT_EN);
+    g_assert_true(qtest_readl(qts, base + SDHC_PRNSTS) &
+                  SDHC_CARD_PRESENT);
+}
+
+static void dwcmshc_init_sd(QTestState *qts, uint64_t base)
+{
+    uint16_t rca;
+
+    dwcmshc_enable_card(qts, base);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0, 0 << 8);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0, SDHC_APP_CMD);
+    sdhci_cmd_regs(qts, base, 0, 0, 0x41200000, 0, 41 << 8);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0,
+                   SDHC_ALL_SEND_CID | SDHC_CMD_RESPONSE);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0,
+                   SDHC_SEND_RELATIVE_ADDR | SDHC_CMD_RESPONSE);
+    rca = qtest_readl(qts, base + SDHC_RSPREG0) >> 16;
+    g_assert_cmphex(rca, !=, 0);
+    sdhci_cmd_regs(qts, base, 0, 0, rca << 16, 0,
+                   SDHC_SELECT_DESELECT_CARD | SDHC_CMD_RESPONSE);
+}
+
+static void dwcmshc_init_emmc(QTestState *qts, uint64_t base)
+{
+    const uint32_t rca = 1;
+
+    dwcmshc_enable_card(qts, base);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0, 0 << 8);
+    sdhci_cmd_regs(qts, base, 0, 0, 0x40ff8080, 0,
+                   (1 << 8) | SDHC_CMD_RESPONSE);
+    sdhci_cmd_regs(qts, base, 0, 0, 0, 0,
+                   SDHC_ALL_SEND_CID | SDHC_CMD_RESPONSE);
+    sdhci_cmd_regs(qts, base, 0, 0, rca << 16, 0,
+                   SDHC_SEND_RELATIVE_ADDR | SDHC_CMD_RESPONSE);
+    sdhci_cmd_regs(qts, base, 0, 0, rca << 16, 0,
+                   SDHC_SELECT_DESELECT_CARD | SDHC_CMD_RESPONSE);
+}
+
+static void dwcmshc_pio_read_block(QTestState *qts, uint64_t base,
+                                    uint32_t argument, uint8_t *data)
+{
+    sdhci_cmd_regs(qts, base, DWCMSHC_BLOCK_SIZE, 1, argument,
+                   SDHC_TRNS_READ | SDHC_TRNS_BLK_CNT_EN,
+                   (17 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+    for (size_t i = 0; i < DWCMSHC_BLOCK_SIZE; i += sizeof(uint32_t)) {
+        stl_le_p(&data[i], qtest_readl(qts, base + SDHC_BDATA));
+    }
+}
+
+static void dwcmshc_pio_write_block(QTestState *qts, uint64_t base,
+                                     uint32_t argument, const uint8_t *data)
+{
+    sdhci_cmd_regs(qts, base, DWCMSHC_BLOCK_SIZE, 1, argument,
+                   SDHC_TRNS_BLK_CNT_EN,
+                   (24 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+    for (size_t i = 0; i < DWCMSHC_BLOCK_SIZE; i += sizeof(uint32_t)) {
+        qtest_writel(qts, base + SDHC_BDATA, ldl_le_p(&data[i]));
+    }
+}
+
+static void test_dwcmshc_emmc_pio(void)
+{
+    uint8_t initial[DWCMSHC_BLOCK_SIZE];
+    uint8_t replacement[DWCMSHC_BLOCK_SIZE];
+    uint8_t actual[DWCMSHC_BLOCK_SIZE];
+    g_autofree char *path = NULL;
+    QTestState *qts;
+    int fd;
+
+    for (size_t i = 0; i < sizeof(initial); i++) {
+        initial[i] = i ^ 0xa5;
+        replacement[i] = 0xff - i;
+    }
+    path = dwcmshc_create_image(initial, sizeof(initial));
+    qts = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off",
+        path);
+
+    dwcmshc_init_emmc(qts, TH1520_EMMC_BASE);
+    dwcmshc_pio_read_block(qts, TH1520_EMMC_BASE, 0, actual);
+    g_assert_cmpmem(actual, sizeof(actual), initial, sizeof(initial));
+    dwcmshc_pio_write_block(qts, TH1520_EMMC_BASE, 0, replacement);
+    qtest_quit(qts);
+
+    fd = open(path, O_RDONLY);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(read(fd, actual, sizeof(actual)), ==, sizeof(actual));
+    close(fd);
+    g_assert_cmpmem(actual, sizeof(actual), replacement, sizeof(replacement));
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void dwcmshc_write_adma_address(QTestState *qts, uint64_t base,
+                                        uint64_t address)
+{
+    qtest_writel(qts, base + SDHC_ADMASYSADDR, address);
+    qtest_writel(qts, base + SDHC_ADMASYSADDR + 4, address >> 32);
+}
+
+static uint64_t dwcmshc_read_adma_address(QTestState *qts, uint64_t base)
+{
+    uint64_t low = qtest_readl(qts, base + SDHC_ADMASYSADDR);
+    uint64_t high = qtest_readl(qts, base + SDHC_ADMASYSADDR + 4);
+
+    return low | (high << 32);
+}
+
+static void test_dwcmshc_v4_adma(void)
+{
+    uint8_t expected[2 * DWCMSHC_BLOCK_SIZE];
+    uint8_t actual[sizeof(expected)];
+    uint8_t descriptor[16] = {};
+    g_autofree char *path = NULL;
+    QTestState *qts;
+
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        expected[i] = (i * 29) ^ (i >> 3) ^ 0x6d;
+    }
+    path = dwcmshc_create_image(expected, sizeof(expected));
+    qts = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=1,file=%s,format=raw,auto-read-only=off",
+        path);
+    dwcmshc_init_sd(qts, TH1520_SDIO0_BASE);
+
+    descriptor[0] = SDHC_ADMA_ATTR_VALID | SDHC_ADMA_ATTR_END |
+                    SDHC_ADMA_ATTR_ACT_TRAN;
+    stw_le_p(&descriptor[2], sizeof(expected));
+    stq_le_p(&descriptor[4], DWCMSHC_ADMA_DATA_ADDR);
+    memset(actual, 0xa5, sizeof(actual));
+    qtest_memwrite(qts, DWCMSHC_ADMA_DESC_ADDR,
+                   descriptor, sizeof(descriptor));
+    qtest_memwrite(qts, DWCMSHC_ADMA_DATA_ADDR, actual, sizeof(actual));
+
+    qtest_writeb(qts, TH1520_SDIO0_BASE + SDHC_HOSTCTL,
+                  SDHC_CTRL_ADMA2_32);
+    qtest_writew(qts, TH1520_SDIO0_BASE + SDHC_HOSTCTL2,
+                  R_SDHC_HOSTCTL2_VERSION4_MASK |
+                  R_SDHC_HOSTCTL2_ADDRESSING_MASK |
+                  R_SDHC_HOSTCTL2_CMD23_ENA_MASK);
+    qtest_writew(qts, TH1520_SDIO0_BASE + SDHC_NORINTSTSEN,
+                  SDHC_NISEN_CMDCMP | SDHC_NISEN_TRSCMP);
+    dwcmshc_write_adma_address(qts, TH1520_SDIO0_BASE,
+                                DWCMSHC_ADMA_DESC_ADDR);
+
+    sdhci_cmd_regs(qts, TH1520_SDIO0_BASE, DWCMSHC_BLOCK_SIZE, 2, 0,
+                   SDHC_TRNS_DMA | SDHC_TRNS_BLK_CNT_EN |
+                   SDHC_TRNS_ACMD_AUTO | SDHC_TRNS_READ | SDHC_TRNS_MULTI,
+                   (18 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+
+    qtest_memread(qts, DWCMSHC_ADMA_DATA_ADDR, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), expected, sizeof(expected));
+    g_assert_cmphex(dwcmshc_read_adma_address(qts, TH1520_SDIO0_BASE), ==,
+                    DWCMSHC_ADMA_DESC_ADDR + sizeof(descriptor));
+    g_assert_cmphex(qtest_readw(qts, TH1520_SDIO0_BASE + SDHC_BLKCNT), ==,
+                    0);
+    g_assert_true(qtest_readw(qts,
+                  TH1520_SDIO0_BASE + SDHC_NORINTSTS) & SDHC_NIS_CMDCMP);
+    g_assert_true(qtest_readw(qts,
+                  TH1520_SDIO0_BASE + SDHC_NORINTSTS) & SDHC_NIS_TRSCMP);
+    g_assert_cmphex(qtest_readw(qts,
+                    TH1520_SDIO0_BASE + SDHC_ERRINTSTS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                    TH1520_SDIO0_BASE + SDHC_RSPREG3), !=, 0);
+
+    /* Invalid v4 descriptors must stop in fetch state and signal source 64. */
+    memset(descriptor, 0, sizeof(descriptor));
+    qtest_memwrite(qts, DWCMSHC_ADMA_DESC_ADDR,
+                   descriptor, sizeof(descriptor));
+    dwcmshc_write_adma_address(qts, TH1520_SDIO0_BASE,
+                                DWCMSHC_ADMA_DESC_ADDR);
+    qtest_writew(qts, TH1520_SDIO0_BASE + SDHC_NORINTSTS,
+                  SDHC_NIS_CMDCMP | SDHC_NIS_TRSCMP);
+    qtest_writew(qts, TH1520_SDIO0_BASE + SDHC_ERRINTSTSEN,
+                  SDHC_EISEN_ADMAERR);
+    qtest_writew(qts, TH1520_SDIO0_BASE + SDHC_ERRINTSIGEN,
+                  SDHC_EISEN_ADMAERR);
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_SDIO0_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_SDIO0_IRQ, true);
+
+    sdhci_cmd_regs(qts, TH1520_SDIO0_BASE, DWCMSHC_BLOCK_SIZE, 1, 0,
+                   SDHC_TRNS_DMA | SDHC_TRNS_BLK_CNT_EN | SDHC_TRNS_READ,
+                   (17 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+    g_assert_true(qtest_readw(qts,
+                  TH1520_SDIO0_BASE + SDHC_NORINTSTS) & SDHC_NIS_ERR);
+    g_assert_true(qtest_readw(qts,
+                  TH1520_SDIO0_BASE + SDHC_ERRINTSTS) & SDHC_EIS_ADMAERR);
+    g_assert_cmphex(qtest_readb(qts,
+                    TH1520_SDIO0_BASE + SDHC_ADMAERR) &
+                    SDHC_ADMAERR_STATE_MASK, ==,
+                    SDHC_ADMAERR_STATE_ST_FDS);
+    g_assert_true(c900_plic_pending(qts, TH1520_SDIO0_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_SDIO0_IRQ);
+    qtest_writew(qts, TH1520_SDIO0_BASE + SDHC_ERRINTSTS,
+                  SDHC_EIS_ADMAERR);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_SDIO0_IRQ);
+    assert_no_irq(qts);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void wait_for_migration_complete(QTestState *qts)
 {
     int64_t deadline = g_get_monotonic_time() + 30 * G_USEC_PER_SEC;
@@ -764,6 +1337,97 @@ static void test_c900_clint_migration(void)
     qtest_clock_step(dst, 1);
     g_assert_cmphex(get_csr(dst, 0, CSR_TIME), ==, 6);
     assert_only_irq(dst, 3);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_dwcmshc_migration(void)
+{
+    const uint64_t base = TH1520_EMMC_BASE;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-dwcmshc-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    qtest_writeb(src, base + DWCMSHC_MSHC_CTRL, 0x10);
+    qtest_writeb(src, base + DWCMSHC_MBIU_CTRL, 0x05);
+    qtest_writew(src, base + DWCMSHC_EMMC_CTRL, 0x0305);
+    qtest_writew(src, base + DWCMSHC_BOOT_CTRL, 0x3101);
+    qtest_writel(src, base + DWCMSHC_AT_CTRL, 0x40100510);
+    qtest_writel(src, base + DWCMSHC_AT_STAT, 0x5a);
+    qtest_writel(src, base + DWCMSHC_EMBEDDED_CTRL, 0x76543210);
+    qtest_writeb(src, base + DWCMSHC_PHY_DLL_CNFG1, 0x2a);
+    qtest_writeb(src, base + DWCMSHC_PHY_CNFG, DWCMSHC_PHY_RSTN);
+    qtest_writeb(src, base + DWCMSHC_PHY_DLL_CTRL, DWCMSHC_DLL_ENABLE);
+
+    qtest_writeb(src, base + SDHC_HOSTCTL, SDHC_CTRL_ADMA2_32);
+    qtest_writew(src, base + SDHC_HOSTCTL2,
+                  R_SDHC_HOSTCTL2_VERSION4_MASK |
+                  R_SDHC_HOSTCTL2_ADDRESSING_MASK |
+                  R_SDHC_HOSTCTL2_CMD23_ENA_MASK);
+    qtest_writel(src, base + SDHC_ARGUMENT, 0x89abcdef);
+    dwcmshc_write_adma_address(src, base, DWCMSHC_ADMA_DESC_ADDR);
+
+    /* A distinct second instance proves array elements do not alias. */
+    qtest_writeb(src, TH1520_SDIO1_BASE + DWCMSHC_MSHC_CTRL, 0x11);
+    qtest_writel(src, TH1520_SDIO1_BASE + DWCMSHC_EMBEDDED_CTRL,
+                  0x0badf00d);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readb(dst, base + DWCMSHC_MSHC_CTRL), ==, 0x10);
+    g_assert_cmphex(qtest_readb(dst, base + DWCMSHC_MBIU_CTRL), ==, 0x05);
+    g_assert_cmphex(qtest_readw(dst, base + DWCMSHC_EMMC_CTRL), ==, 0x0305);
+    g_assert_cmphex(qtest_readw(dst, base + DWCMSHC_BOOT_CTRL), ==, 0x3100);
+    g_assert_cmphex(qtest_readl(dst, base + DWCMSHC_AT_CTRL), ==,
+                    0x40100510);
+    g_assert_cmphex(qtest_readl(dst, base + DWCMSHC_AT_STAT), ==, 0x5a);
+    g_assert_cmphex(qtest_readl(dst, base + DWCMSHC_EMBEDDED_CTRL), ==,
+                    0x76540000);
+    g_assert_cmphex(qtest_readb(dst, base + DWCMSHC_PHY_CNFG), ==,
+                    DWCMSHC_PHY_RSTN | DWCMSHC_PHY_PWRGOOD);
+    g_assert_cmphex(qtest_readb(dst, base + DWCMSHC_PHY_DLL_STATUS), ==,
+                    DWCMSHC_DLL_LOCK);
+    g_assert_cmphex(qtest_readb(dst, base + DWCMSHC_PHY_DLLDBG_MLKDC), ==,
+                    0x2a);
+    g_assert_cmphex(qtest_readb(dst, base + SDHC_HOSTCTL), ==,
+                    SDHC_CTRL_ADMA2_32);
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_HOSTCTL2), ==,
+                    R_SDHC_HOSTCTL2_VERSION4_MASK |
+                    R_SDHC_HOSTCTL2_ADDRESSING_MASK |
+                    R_SDHC_HOSTCTL2_CMD23_ENA_MASK);
+    g_assert_cmphex(qtest_readl(dst, base + SDHC_ARGUMENT), ==,
+                    0x89abcdef);
+    g_assert_cmphex(dwcmshc_read_adma_address(dst, base), ==,
+                    DWCMSHC_ADMA_DESC_ADDR);
+    g_assert_cmphex(qtest_readb(dst,
+                    TH1520_SDIO1_BASE + DWCMSHC_MSHC_CTRL), ==, 0x11);
+    g_assert_cmphex(qtest_readl(dst,
+                    TH1520_SDIO1_BASE + DWCMSHC_EMBEDDED_CTRL), ==,
+                    0x0b250000);
+    assert_dwcmshc_reset_state(dst, TH1520_SDIO0_BASE);
+
+    qtest_system_reset(dst);
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        assert_dwcmshc_reset_state(dst, dwcmshc_controllers[i].base);
+    }
 
     qtest_quit(dst);
     qtest_quit(src);
@@ -1006,6 +1670,24 @@ int main(int argc, char **argv)
                        test_direct_boot_contract);
         qtest_add_func("/beaglev-ahead/migration/whole-machine",
                        test_whole_machine_migration);
+        qtest_add_func("/beaglev-ahead/dwcmshc/registers",
+                       test_dwcmshc_registers);
+        qtest_add_func("/beaglev-ahead/dwcmshc/configurable-ids",
+                       test_dwcmshc_configurable_ids);
+        for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+            g_autofree char *name =
+                g_strdup_printf("/beaglev-ahead/dwcmshc/%s-interrupt",
+                                dwcmshc_controllers[i].name);
+
+            qtest_add_data_func(name, &dwcmshc_controllers[i],
+                                test_dwcmshc_interrupt);
+        }
+        qtest_add_func("/beaglev-ahead/dwcmshc/emmc-pio",
+                       test_dwcmshc_emmc_pio);
+        qtest_add_func("/beaglev-ahead/dwcmshc/v4-64bit-adma",
+                       test_dwcmshc_v4_adma);
+        qtest_add_func("/beaglev-ahead/dwcmshc/migration",
+                       test_dwcmshc_migration);
         qtest_add_func("/beaglev-ahead/c900-plic/reset",
                        test_c900_plic_reset);
         qtest_add_func("/beaglev-ahead/c900-plic/registers",

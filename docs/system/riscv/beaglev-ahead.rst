@@ -30,11 +30,18 @@ The machine currently provides:
   SSIP, and STIMECMP banks and a 3 MHz architectural timer; and
 * a DesignWare APB UART0 at ``0xffe7014000``, including the 16550 register
   bank, DesignWare status/reset/probe registers, busy detection, and PLIC
-  interrupt 36.
+  interrupt 36; and
+* three DesignWare Mobile Storage Host Controllers at ``0xffe7080000``
+  (eMMC), ``0xffe7090000`` (microSD/SDIO0), and ``0xffe70a0000``
+  (on-board Wi-Fi/SDIO1), connected to PLIC sources 62, 64, and 71.  The
+  SDHCI v4.20 register interface, TH1520 vendor/PHY registers, programmed I/O,
+  SDMA, ADMA2 including v4 64-bit descriptors, Auto CMD23, reset, interrupts,
+  and migration are modeled.
 
-The generated device tree uses the same board, CPU, PLIC, CLINT, UART, memory,
-and cache topology bindings as upstream Linux's BeagleV Ahead device tree.  It
-advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every C910 hart.
+The generated device tree uses the same board, CPU, PLIC, CLINT, UART, storage,
+memory, and cache topology bindings as upstream Linux's BeagleV Ahead device
+tree.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every
+C910 hart.
 
 Boot options
 ------------
@@ -45,6 +52,8 @@ Direct boot uses QEMU's bundled generic OpenSBI by default.  For example:
 
    qemu-system-riscv64 -M beaglev-ahead \
        -kernel Image \
+       -drive if=sd,index=0,file=emmc.img,format=raw \
+       -drive if=sd,index=1,file=microsd.img,format=raw \
        -initrd rootfs.cpio.gz \
        -append "console=ttyS0,115200 earlycon" \
        -nographic
@@ -61,11 +70,14 @@ next boot stage.  This makes direct boots deterministic while leaving the
 other harts available for SBI HSM startup; a four-hart M-mode test checks the
 ordered UART transcript from harts 0 through 3.
 
-This reset trampoline and OpenSBI convention are not an emulation of the
-TH1520 mask ROM or reset controller.  The physical initial hart states, Core0
-TEE mode and secondary release sequence remain hardware-validation items.
-Boot straps, the USB/UART downloader, and booting from eMMC, SD, or QSPI are
-later milestones.
+Storage unit 0 is attached as an eMMC device and unit 1 as a removable SD card.
+Supplying either image makes it accessible to firmware and the operating
+system, but does not select it as the reset boot source.  The reset trampoline
+and OpenSBI convention are not an emulation of the TH1520 mask ROM or reset
+controller.  The physical initial hart states, Core0 TEE mode and secondary
+release sequence remain hardware-validation items.  Boot straps, the
+USB/UART downloader, and mask-ROM booting from eMMC, SD, or QSPI are later
+milestones.
 
 CPU limitation
 --------------
@@ -133,6 +145,23 @@ identification value.  Exact FIFO depth, optional-feature presence,
 version/parameter values, subword and wider system-bus behavior, and
 reset-domain details remain physical-hardware validation items.
 
+The three storage controllers use a reusable DesignWare MSHC wrapper around
+QEMU's SDHCI engine.  The model exposes the TH1520's 64 KiB apertures, vendor
+area pointers, host-version and capability registers, software-visible PHY
+configuration, deterministic PHY power-good/DLL-lock behavior, tuning control,
+and per-instance interrupt routing.  Linux commit
+``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` probes all three instances and
+uses 64-bit ADMA; with a 64 MiB image on unit 0 it enumerates a high-speed eMMC
+block device and reaches the requested root-device wait.
+
+This is not yet complete storage fidelity.  QEMU's eMMC card currently models
+an eMMC 4.3-era command set rather than the board's 5.1-class, HS400-capable
+part.  Command Queue Engine and ADMA3 execution, the mask-ROM boot datapath,
+analog tuning failures, card-detect/write-protect GPIO wiring, eMMC boot/RPMB
+details, and the CYW43012 SDIO function are not implemented.  Synthesis version
+IDs default to zero and can be overridden for testing; capability voltage bits
+and several reset values remain hardware-validation items.
+
 An upstream Linux image built from commit
 ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` has been exercised with both
 the full and dependency-minimal QEMU builds.  OpenSBI passes the C910 identity
@@ -150,7 +179,8 @@ the silicon reset sequence.
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC and UART state in one stream.  Together with the focused device
-tests, it runs in the full, dependency-minimal and ASan/UBSan builds.  The
+tests, the complete 35-test board gate runs in the full, dependency-minimal and
+ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
@@ -158,10 +188,11 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-Storage, Ethernet, DMA, GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe,
+Ethernet, general DMA, GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe,
 display, audio, camera, video codecs, GPU, NPU, the C906 and E902 auxiliary
 cores, DSPs, security blocks, and board Wi-Fi/Bluetooth are not modeled yet.
-The development plan and the hardware differential-validation ledger are in
+The remaining storage gaps are listed above.  The development plan and the
+hardware differential-validation ledger are in
 ``docs/devel/beaglev-ahead-emulation-plan.md`` and
 ``docs/devel/beaglev-ahead-hardware-validation.md``.
 
