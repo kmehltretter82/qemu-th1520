@@ -16,6 +16,7 @@ config BEAGLEV_AHEAD
     select DEVICE_TREE
     select DW_APB_UART
     select DWCMSHC
+    select TH1520_GMAC
     select THEAD_C900_CLINT
     select THEAD_C900_PLIC
 

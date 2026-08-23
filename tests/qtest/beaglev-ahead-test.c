@@ -7,7 +7,9 @@
 #include "qemu/osdep.h"
 #include "qemu/bitops.h"
 #include "qemu/bswap.h"
+#include "qemu/iov.h"
 #include "qemu/units.h"
+#include "hw/net/mii.h"
 #include "hw/sd/sdhci.h"
 #include "hw/sd/sdhci-internal.h"
 #include "libqtest.h"
@@ -22,9 +24,13 @@
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
+#define TH1520_GMAC1_BASE          0xffe7060000ULL
+#define TH1520_GMAC0_BASE          0xffe7070000ULL
 #define TH1520_EMMC_BASE           0xffe7080000ULL
 #define TH1520_SDIO0_BASE          0xffe7090000ULL
 #define TH1520_SDIO1_BASE          0xffe70a0000ULL
+#define TH1520_GMAC0_APB_BASE      0xffec003000ULL
+#define TH1520_GMAC1_APB_BASE      0xffec004000ULL
 #define C900_MSIP(hart)            (TH1520_CLINT_BASE + 0x0000 + 4 * (hart))
 #define C900_MTIMECMP(hart)        (TH1520_CLINT_BASE + 0x4000 + 8 * (hart))
 #define C900_SSIP(hart)            (TH1520_CLINT_BASE + 0xc000 + 4 * (hart))
@@ -71,7 +77,46 @@
 #define TH1520_UART0_IRQ           36
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
+#define TH1520_GMAC0_IRQ           66
+#define TH1520_GMAC1_IRQ           67
 #define TH1520_SDIO1_IRQ           71
+
+#define DWMAC_MAC_CONFIG           0x0000
+#define DWMAC_FRAME_FILTER         0x0004
+#define DWMAC_MII_ADDR             0x0010
+#define DWMAC_MII_DATA             0x0014
+#define DWMAC_VERSION              0x0020
+#define DWMAC_DMA_BUS_MODE         0x1000
+#define DWMAC_DMA_XMT_POLL_DEMAND  0x1004
+#define DWMAC_DMA_RX_BASE_ADDR     0x100c
+#define DWMAC_DMA_TX_BASE_ADDR     0x1010
+#define DWMAC_DMA_STATUS           0x1014
+#define DWMAC_DMA_CONTROL          0x1018
+#define DWMAC_DMA_INTR_ENA         0x101c
+#define DWMAC_DMA_HOST_TX_DESC     0x1048
+#define DWMAC_DMA_HOST_RX_DESC     0x104c
+#define DWMAC_DMA_HW_FEATURE       0x1058
+
+#define TH1520_GMAC_VERSION_RESET  0x00001037
+#define TH1520_GMAC_FEATURE_RESET  0x110d0107
+#define TH1520_GMAC_PHY_ADDR       1
+#define TH1520_GMAC_PHY_ID1        0x001c
+#define TH1520_GMAC_PHY_ID2        0xc878
+
+#define GMAC_APB_CLK_EN            0x00
+#define GMAC_APB_RXCLK_DELAY       0x04
+#define GMAC_APB_TXCLK_DELAY       0x08
+#define GMAC_APB_PLLCLK_DIV        0x0c
+#define GMAC_APB_EPHY_DIV          0x10
+#define GMAC_APB_PTPCLK_DIV        0x14
+#define GMAC_APB_GTXCLK_SEL        0x18
+#define GMAC_APB_INTF_CTRL         0x1c
+#define GMAC_APB_TXCLK_OEN         0x20
+
+#define GMAC_TEST_DESC_ADDR        0x00100000
+#define GMAC_TEST_DATA_ADDR        0x00110000
+#define GMAC_ENHANCED_DESC_STRIDE  32
+#define GMAC_TEST_TIMEOUT_S        5
 
 #define DWCMSHC_VENDOR_POINTER     0x0e8
 #define DWCMSHC_PHY_CNFG           0x300
@@ -166,10 +211,25 @@ typedef struct DWCMSHCController {
     uint32_t bus_width;
 } DWCMSHCController;
 
+typedef struct TH1520GMACController {
+    const char *name;
+    uint64_t base;
+    uint64_t apb_base;
+    uint32_t irq;
+    bool board_enabled;
+} TH1520GMACController;
+
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
     { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
     { "sdio1", TH1520_SDIO1_BASE, TH1520_SDIO1_IRQ, 4 },
+};
+
+static const TH1520GMACController th1520_gmac_controllers[] = {
+    { "gmac0", TH1520_GMAC0_BASE, TH1520_GMAC0_APB_BASE,
+      TH1520_GMAC0_IRQ, true },
+    { "gmac1", TH1520_GMAC1_BASE, TH1520_GMAC1_APB_BASE,
+      TH1520_GMAC1_IRQ, false },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -288,6 +348,127 @@ static void assert_fdt_bool(const void *fdt, int node, const char *name,
     }
 }
 
+static void assert_fdt_stringlist(const void *fdt, int node, const char *name,
+                                  const char *const *expected, size_t count)
+{
+    int len;
+    const char *prop = fdt_getprop(fdt, node, name, &len);
+
+    g_assert_nonnull(prop);
+    g_assert_cmpint(fdt_stringlist_count(fdt, node, name), ==, count);
+    for (size_t i = 0; i < count; i++) {
+        const char *value = fdt_stringlist_get(fdt, node, name, i, &len);
+
+        g_assert_nonnull(value);
+        g_assert_cmpstr(value, ==, expected[i]);
+    }
+}
+
+static void assert_gmac_fdt(const void *fdt,
+                            const TH1520GMACController *controller,
+                            uint32_t axi_clock_phandle,
+                            uint32_t pclk_phandle,
+                            uint32_t apb_clock_phandle,
+                            uint32_t axi_phandle)
+{
+    static const char *const compat[] = {
+        "thead,th1520-gmac", "snps,dwmac-3.70a",
+    };
+    static const char *const reg_names[] = { "dwmac", "apb" };
+    static const char *const clock_names[] = {
+        "stmmaceth", "pclk", "apb",
+    };
+    g_autofree char *path =
+        g_strdup_printf("/soc/ethernet@%" PRIx64, controller->base);
+    g_autofree char *mdio_path = g_strdup_printf("%s/mdio", path);
+    const fdt32_t *cells;
+    const void *mac;
+    const char *text;
+    int mdio;
+    int node;
+    int len;
+
+    node = fdt_path_offset(fdt, path);
+    g_assert_cmpint(node, >=, 0);
+    assert_fdt_stringlist(fdt, node, "compatible", compat,
+                          ARRAY_SIZE(compat));
+    assert_fdt_stringlist(fdt, node, "reg-names", reg_names,
+                          ARRAY_SIZE(reg_names));
+    assert_fdt_stringlist(fdt, node, "clock-names", clock_names,
+                          ARRAY_SIZE(clock_names));
+
+    cells = fdt_getprop(fdt, node, "reg", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 8 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->base >> 32);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                    (uint32_t)controller->base);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, 0);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, 0x2000);
+    g_assert_cmphex(fdt32_to_cpu(cells[4]), ==, controller->apb_base >> 32);
+    g_assert_cmphex(fdt32_to_cpu(cells[5]), ==,
+                    (uint32_t)controller->apb_base);
+    g_assert_cmphex(fdt32_to_cpu(cells[6]), ==, 0);
+    g_assert_cmphex(fdt32_to_cpu(cells[7]), ==, 0x1000);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 3 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, axi_clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, pclk_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, apb_clock_phandle);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,pbl"), ==, 32);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,multicast-filter-bins"),
+                    ==, 64);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,perfect-filter-entries"),
+                    ==, 32);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,axi-config"), ==,
+                    axi_phandle);
+    assert_fdt_bool(fdt, node, "snps,fixed-burst", true);
+
+    mac = fdt_getprop(fdt, node, "local-mac-address", &len);
+    g_assert_nonnull(mac);
+    g_assert_cmpint(len, ==, 6);
+
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, controller->board_enabled ? "okay" : "disabled");
+
+    mdio = fdt_path_offset(fdt, mdio_path);
+    g_assert_cmpint(mdio, >=, 0);
+    text = fdt_getprop(fdt, mdio, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dwmac-mdio");
+    g_assert_cmphex(fdt_prop_u32(fdt, mdio, "#address-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, mdio, "#size-cells"), ==, 0);
+
+    if (controller->board_enabled) {
+        g_autofree char *phy_path =
+            g_strdup_printf("%s/ethernet-phy@1", mdio_path);
+        const char *alias = fdt_get_alias(fdt, "ethernet0");
+        int phy = fdt_path_offset(fdt, phy_path);
+
+        g_assert_cmpint(phy, >=, 0);
+        g_assert_cmphex(fdt_prop_u32(fdt, phy, "reg"), ==,
+                        TH1520_GMAC_PHY_ADDR);
+        g_assert_cmphex(fdt_prop_u32(fdt, node, "phy-handle"), ==,
+                        fdt_get_phandle(fdt, phy));
+        text = fdt_getprop(fdt, node, "phy-mode", &len);
+        g_assert_nonnull(text);
+        g_assert_cmpstr(text, ==, "rgmii-id");
+        g_assert_nonnull(alias);
+        g_assert_cmpstr(alias, ==, path);
+    } else {
+        g_assert_null(fdt_getprop(fdt, node, "phy-handle", &len));
+    }
+}
+
 static void assert_dwcmshc_fdt(const void *fdt,
                                const DWCMSHCController *controller,
                                uint32_t clock_phandle)
@@ -356,6 +537,10 @@ static void test_direct_boot_contract(void)
     uint64_t fdt_addr;
     uint32_t cpu0_phandle;
     uint32_t mshc_clock_phandle;
+    uint32_t gmac_axi_clock_phandle;
+    uint32_t gmac_pclk_phandle;
+    uint32_t gmac_apb_clock_phandle;
+    uint32_t stmmac_axi_phandle;
     int clock_offset;
     int config_offset;
     int cpu0_offset;
@@ -412,8 +597,370 @@ static void test_direct_boot_contract(void)
                            mshc_clock_phandle);
     }
 
+    clock_offset = fdt_path_offset(fdt, "/gmac-axi-clock");
+    g_assert_cmpint(clock_offset, >=, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    500000000);
+    gmac_axi_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(gmac_axi_clock_phandle, !=, 0);
+
+    clock_offset = fdt_path_offset(fdt, "/gmac-pclk");
+    g_assert_cmpint(clock_offset, >=, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    1000000000);
+    gmac_pclk_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(gmac_pclk_phandle, !=, 0);
+
+    clock_offset = fdt_path_offset(fdt, "/gmac-apb-clock");
+    g_assert_cmpint(clock_offset, >=, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    500000000);
+    gmac_apb_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(gmac_apb_clock_phandle, !=, 0);
+
+    config_offset = fdt_path_offset(fdt, "/stmmac-axi-config");
+    g_assert_cmpint(config_offset, >=, 0);
+    stmmac_axi_phandle = fdt_get_phandle(fdt, config_offset);
+    g_assert_cmphex(stmmac_axi_phandle, !=, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, config_offset, "snps,wr_osr_lmt"), ==,
+                    15);
+    g_assert_cmphex(fdt_prop_u32(fdt, config_offset, "snps,rd_osr_lmt"), ==,
+                    15);
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
+        assert_gmac_fdt(fdt, &th1520_gmac_controllers[i],
+                        gmac_axi_clock_phandle, gmac_pclk_phandle,
+                        gmac_apb_clock_phandle,
+                        stmmac_axi_phandle);
+    }
+
     qtest_quit(qts);
 }
+
+typedef struct GMACDesc {
+    uint32_t des0;
+    uint32_t des1;
+    uint32_t des2;
+    uint32_t des3;
+} GMACDesc;
+
+static void gmac_write_desc(QTestState *qts, uint32_t addr,
+                            const GMACDesc *desc)
+{
+    GMACDesc le_desc = {
+        .des0 = cpu_to_le32(desc->des0),
+        .des1 = cpu_to_le32(desc->des1),
+        .des2 = cpu_to_le32(desc->des2),
+        .des3 = cpu_to_le32(desc->des3),
+    };
+
+    qtest_memwrite(qts, addr, &le_desc, sizeof(le_desc));
+}
+
+static void gmac_read_desc(QTestState *qts, uint32_t addr, GMACDesc *desc)
+{
+    qtest_memread(qts, addr, desc, sizeof(*desc));
+    desc->des0 = le32_to_cpu(desc->des0);
+    desc->des1 = le32_to_cpu(desc->des1);
+    desc->des2 = le32_to_cpu(desc->des2);
+    desc->des3 = le32_to_cpu(desc->des3);
+}
+
+static uint16_t gmac_mdio_read(QTestState *qts, uint64_t base,
+                               uint8_t phy, uint8_t reg)
+{
+    qtest_writel(qts, base + DWMAC_MII_ADDR,
+                  BIT(0) | (phy << 11) | (reg << 6));
+    g_assert_cmphex(qtest_readl(qts, base + DWMAC_MII_ADDR) & BIT(0), ==, 0);
+    return qtest_readl(qts, base + DWMAC_MII_DATA);
+}
+
+static void gmac_mdio_write(QTestState *qts, uint64_t base,
+                            uint8_t phy, uint8_t reg, uint16_t value)
+{
+    qtest_writel(qts, base + DWMAC_MII_DATA, value);
+    qtest_writel(qts, base + DWMAC_MII_ADDR,
+                  BIT(0) | BIT(1) | (phy << 11) | (reg << 6));
+    g_assert_cmphex(qtest_readl(qts, base + DWMAC_MII_ADDR) & BIT(0), ==, 0);
+}
+
+static void assert_gmac_reset_state(QTestState *qts,
+                                    const TH1520GMACController *controller)
+{
+    static const uint32_t apb_reset[] = {
+        0x00000008, 0x00008000, 0x00008000,
+        0x00000004, 0x00000014, 0x00000002,
+        0x00000001, 0x00000000, 0x00000001,
+    };
+
+    g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_VERSION), ==,
+                    TH1520_GMAC_VERSION_RESET);
+    g_assert_cmphex(qtest_readl(qts,
+                                controller->base + DWMAC_DMA_HW_FEATURE), ==,
+                    TH1520_GMAC_FEATURE_RESET);
+    g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_DMA_BUS_MODE),
+                    ==, 0x00020100);
+    g_assert_cmphex(gmac_mdio_read(qts, controller->base,
+                                  TH1520_GMAC_PHY_ADDR, MII_PHYID1), ==,
+                    TH1520_GMAC_PHY_ID1);
+    g_assert_cmphex(gmac_mdio_read(qts, controller->base,
+                                  TH1520_GMAC_PHY_ADDR, MII_PHYID2), ==,
+                    TH1520_GMAC_PHY_ID2);
+    g_assert_cmphex(gmac_mdio_read(qts, controller->base, 0, MII_PHYID1), ==,
+                    UINT16_MAX);
+
+    for (size_t i = 0; i < ARRAY_SIZE(apb_reset); i++) {
+        g_assert_cmphex(qtest_readl(qts, controller->apb_base + 4 * i), ==,
+                        apb_reset[i]);
+    }
+}
+
+static void test_gmac_registers(void)
+{
+    static const uint32_t apb_masks[] = {
+        0x000000ff, 0x0000c01f, 0x0000c01f,
+        0x800000ff, 0x800000ff, 0x8000000f,
+        0x00000001, 0x00000001, 0x00000001,
+    };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t controller = 0;
+         controller < ARRAY_SIZE(th1520_gmac_controllers); controller++) {
+        const TH1520GMACController *gmac =
+            &th1520_gmac_controllers[controller];
+
+        assert_gmac_reset_state(qts, gmac);
+        for (size_t reg = 0; reg < ARRAY_SIZE(apb_masks); reg++) {
+            qtest_writel(qts, gmac->apb_base + 4 * reg, UINT32_MAX);
+            g_assert_cmphex(qtest_readl(qts, gmac->apb_base + 4 * reg), ==,
+                            apb_masks[reg]);
+        }
+        gmac_mdio_write(qts, gmac->base, TH1520_GMAC_PHY_ADDR, MII_BMCR,
+                        MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+        g_assert_cmphex(gmac_mdio_read(qts, gmac->base,
+                                      TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                        MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
+        assert_gmac_reset_state(qts, &th1520_gmac_controllers[i]);
+    }
+    qtest_quit(qts);
+}
+
+static void test_gmac_interrupt(gconstpointer test_data)
+{
+    const TH1520GMACController *controller = test_data;
+    static const uint8_t packet[64] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
+    GMACDesc desc = {
+        .des0 = BIT(31) | BIT(30) | BIT(29) | BIT(28),
+        .des1 = sizeof(packet),
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_memwrite(qts, GMAC_TEST_DATA_ADDR, packet, sizeof(packet));
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+
+    qtest_writel(qts, C900_PLIC_PRIORITY(controller->irq), 5);
+    c900_plic_set_enable(qts, 1, controller->irq, true);
+    qtest_writel(qts, controller->base + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, controller->base + DWMAC_DMA_TX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, controller->base + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(0));
+    qtest_writel(qts, controller->base + DWMAC_MAC_CONFIG, BIT(3));
+    qtest_writel(qts, controller->base + DWMAC_DMA_CONTROL, BIT(13));
+
+    g_assert_true(c900_plic_pending(qts, controller->irq));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    controller->irq);
+    assert_no_irq(qts);
+    qtest_writel(qts, controller->base + DWMAC_DMA_STATUS,
+                  BIT(16) | BIT(0));
+    qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
+    g_assert_false(c900_plic_pending(qts, controller->irq));
+    assert_no_irq(qts);
+
+    qtest_quit(qts);
+}
+
+#ifndef _WIN32
+
+static bool gmac_wait_socket_readable(int fd)
+{
+    fd_set read_fds;
+    struct timeval tv = { .tv_sec = GMAC_TEST_TIMEOUT_S };
+
+    FD_ZERO(&read_fds);
+    FD_SET(fd, &read_fds);
+    return select(fd + 1, &read_fds, NULL, NULL, &tv) == 1;
+}
+
+static bool gmac_wait_status(QTestState *qts, uint32_t mask)
+{
+    gint64 deadline = g_get_monotonic_time() +
+                      GMAC_TEST_TIMEOUT_S * G_TIME_SPAN_SECOND;
+
+    do {
+        if (qtest_readl(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) & mask) {
+            return true;
+        }
+        qtest_clock_step(qts, 1000);
+    } while (g_get_monotonic_time() < deadline);
+
+    return false;
+}
+
+static uint32_t gmac_test_crc32(const uint8_t *buf, size_t len)
+{
+    uint32_t crc = UINT32_MAX;
+
+    for (size_t i = 0; i < len; i++) {
+        crc ^= buf[i];
+        for (unsigned bit = 0; bit < 8; bit++) {
+            crc = (crc >> 1) ^ (0xedb88320 & -(crc & 1));
+        }
+    }
+    return ~crc;
+}
+
+static QTestState *gmac_packet_test_init(int sockets[2])
+{
+    QTestState *qts;
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, sockets), ==, 0);
+    qts = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-nic socket,fd=%d,model=gmac0", sockets[1]);
+    close(sockets[1]);
+    return qts;
+}
+
+static void test_gmac_enhanced_descriptors(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    static const uint32_t extension[4] = {
+        0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00,
+    };
+    GMACDesc desc;
+    QTestState *qts;
+    int sockets[2];
+    uint32_t wire_len;
+    uint8_t received[sizeof(packet)];
+    uint32_t actual_extension[ARRAY_SIZE(extension)];
+
+    qts = gmac_packet_test_init(sockets);
+    qtest_memwrite(qts, GMAC_TEST_DATA_ADDR, packet, sizeof(packet));
+    desc = (GMACDesc) {
+        .des0 = BIT(31) | BIT(30) | BIT(29) | BIT(28),
+        .des1 = sizeof(packet),
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_memwrite(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), extension,
+                   sizeof(extension));
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_TX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(0));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(3));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(13));
+
+    g_assert_true(gmac_wait_socket_readable(sockets[0]));
+    g_assert_cmpint(recv(sockets[0], &wire_len, sizeof(wire_len), MSG_WAITALL),
+                    ==, sizeof(wire_len));
+    g_assert_cmpuint(ntohl(wire_len), ==, sizeof(packet));
+    g_assert_cmpint(recv(sockets[0], received, sizeof(received), MSG_WAITALL),
+                    ==, sizeof(received));
+    g_assert_cmpmem(received, sizeof(received), packet, sizeof(packet));
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_true(gmac_wait_status(qts, BIT(0)));
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_TX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE);
+    qtest_memread(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), actual_extension,
+                  sizeof(actual_extension));
+    g_assert_cmpmem(actual_extension, sizeof(actual_extension), extension,
+                    sizeof(extension));
+    qtest_quit(qts);
+    close(sockets[0]);
+
+    qts = gmac_packet_test_init(sockets);
+    desc = (GMACDesc) {
+        .des0 = BIT(31),
+        .des1 = 2048,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_memwrite(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), extension,
+                   sizeof(extension));
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(6));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(2));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+
+    wire_len = htonl(sizeof(packet));
+    const struct iovec iov[] = {
+        { .iov_base = &wire_len, .iov_len = sizeof(wire_len) },
+        { .iov_base = (void *)packet, .iov_len = sizeof(packet) },
+    };
+    g_assert_cmpint(iov_send(sockets[0], iov, ARRAY_SIZE(iov), 0,
+                             sizeof(wire_len) + sizeof(packet)),
+                    ==, sizeof(wire_len) + sizeof(packet));
+    g_assert_true(gmac_wait_status(qts, BIT(6)));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_cmphex(desc.des0 & (BIT(9) | BIT(8)), ==, BIT(9) | BIT(8));
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==,
+                     sizeof(packet) + sizeof(uint32_t));
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_RX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE);
+    qtest_memread(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), actual_extension,
+                  sizeof(actual_extension));
+    g_assert_cmpmem(actual_extension, sizeof(actual_extension), extension,
+                    sizeof(extension));
+
+    uint8_t frame[sizeof(packet) + sizeof(uint32_t)];
+    uint32_t expected_fcs = cpu_to_le32(gmac_test_crc32(packet,
+                                                        sizeof(packet)));
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, frame, sizeof(frame));
+    g_assert_cmpmem(frame, sizeof(packet), packet, sizeof(packet));
+    g_assert_cmpmem(frame + sizeof(packet), sizeof(expected_fcs),
+                    &expected_fcs, sizeof(expected_fcs));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+#endif /* _WIN32 */
 
 static void assert_dwcmshc_reset_state(QTestState *qts, uint64_t base)
 {
@@ -1529,6 +2076,17 @@ static void test_dw_uart_migration(void)
     qtest_writel(src, DW_UART_DLF, 0xb);
     qtest_writel(src, DW_UART_LCR, 3);
     qtest_writel(src, DW_UART_SCR, 0x5a);
+
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_FRAME_FILTER, 0x80000401);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE, 0x00020180);
+    qtest_writel(src, TH1520_GMAC0_APB_BASE + GMAC_APB_RXCLK_DELAY,
+                  0x00004015);
+    gmac_mdio_write(src, TH1520_GMAC0_BASE, TH1520_GMAC_PHY_ADDR,
+                    MII_BMCR,
+                    MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+    qtest_writel(src, TH1520_GMAC1_BASE + DWMAC_FRAME_FILTER, 0x80000010);
+    qtest_writel(src, TH1520_GMAC1_APB_BASE + GMAC_APB_PLLCLK_DIV,
+                  0x80000008);
     qtest_writel(src, DW_UART_RBR_THR_DLL, 'm');
     qtest_writel(src, DW_UART_LCR, UART_LCR_DLAB | 3);
     g_assert_cmphex(qtest_readl(src, DW_UART_IIR_FCR) & 0xf, ==,
@@ -1555,6 +2113,25 @@ static void test_dw_uart_migration(void)
     qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
     g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
     g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_FRAME_FILTER), ==,
+                    0x80000401);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE), ==,
+                    0x00020180);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_APB_BASE +
+                                GMAC_APB_RXCLK_DELAY), ==, 0x00004015);
+    g_assert_cmphex(gmac_mdio_read(dst, TH1520_GMAC0_BASE,
+                                  TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                    MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC1_BASE + DWMAC_FRAME_FILTER), ==,
+                    0x80000010);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC1_APB_BASE +
+                                GMAC_APB_PLLCLK_DIV), ==, 0x80000008);
 
     qtest_quit(dst);
     qtest_quit(src);
@@ -1670,6 +2247,20 @@ int main(int argc, char **argv)
                        test_direct_boot_contract);
         qtest_add_func("/beaglev-ahead/migration/whole-machine",
                        test_whole_machine_migration);
+        qtest_add_func("/beaglev-ahead/gmac/registers",
+                       test_gmac_registers);
+        for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
+            g_autofree char *name =
+                g_strdup_printf("/beaglev-ahead/gmac/%s-interrupt",
+                                th1520_gmac_controllers[i].name);
+
+            qtest_add_data_func(name, &th1520_gmac_controllers[i],
+                                test_gmac_interrupt);
+        }
+#ifndef _WIN32
+        qtest_add_func("/beaglev-ahead/gmac/enhanced-descriptors",
+                       test_gmac_enhanced_descriptors);
+#endif
         qtest_add_func("/beaglev-ahead/dwcmshc/registers",
                        test_dwcmshc_registers);
         qtest_add_func("/beaglev-ahead/dwcmshc/configurable-ids",

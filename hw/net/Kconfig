@@ -116,6 +116,10 @@ config SUNGEM
 config DW_GMAC
     bool
 
+config TH1520_GMAC
+    bool
+    select DW_GMAC
+
 config COLDFIRE
     bool
 

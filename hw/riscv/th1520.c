@@ -15,6 +15,8 @@
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "net/eth.h"
+#include "net/net.h"
 #include "system/device_tree.h"
 #include "system/blockdev.h"
 #include "system/system.h"
@@ -27,6 +29,8 @@
 #include "hw/core/sysbus.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
+#include "hw/net/dw_gmac.h"
+#include "hw/net/th1520_gmac.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
 #include "hw/riscv/machines-qom.h"
@@ -41,6 +45,10 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
+    [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
+    [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
+    [TH1520_DEV_GMAC0_APB] = { 0xffec003000, 0x00001000 },
+    [TH1520_DEV_GMAC1_APB] = { 0xffec004000, 0x00001000 },
     [TH1520_DEV_EMMC]  = { 0xffe7080000, 0x00010000 },
     [TH1520_DEV_SDIO0] = { 0xffe7090000, 0x00010000 },
     [TH1520_DEV_SDIO1] = { 0xffe70a0000, 0x00010000 },
@@ -57,6 +65,21 @@ static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
     TH1520_EMMC_IRQ,
     TH1520_SDIO0_IRQ,
     TH1520_SDIO1_IRQ,
+};
+
+static const int th1520_gmac_memmap[TH1520_GMAC_COUNT] = {
+    TH1520_DEV_GMAC0,
+    TH1520_DEV_GMAC1,
+};
+
+static const int th1520_gmac_apb_memmap[TH1520_GMAC_COUNT] = {
+    TH1520_DEV_GMAC0_APB,
+    TH1520_DEV_GMAC1_APB,
+};
+
+static const uint32_t th1520_gmac_irqs[TH1520_GMAC_COUNT] = {
+    TH1520_GMAC0_IRQ,
+    TH1520_GMAC1_IRQ,
 };
 
 static GlobalProperty beaglev_ahead_cpu_defaults[] = {
@@ -121,6 +144,12 @@ static void th1520_soc_init(Object *obj)
     static const char *const mshc_names[TH1520_MSHC_COUNT] = {
         "emmc", "sdio0", "sdio1",
     };
+    static const char *const gmac_names[TH1520_GMAC_COUNT] = {
+        "gmac0", "gmac1",
+    };
+    static const char *const gmac_apb_names[TH1520_GMAC_COUNT] = {
+        "gmac0-apb", "gmac1-apb",
+    };
     TH1520SoCState *s = RISCV_TH1520_SOC(obj);
 
     object_initialize_child(obj, "c910-cpus", &s->c910_cpus,
@@ -130,6 +159,22 @@ static void th1520_soc_init(Object *obj)
     object_initialize_child(obj, "plic", &s->plic,
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "uart0", &s->uart0, TYPE_DW_APB_UART);
+    for (int i = 0; i < TH1520_GMAC_COUNT; i++) {
+        object_initialize_child(obj, gmac_names[i], &s->gmac[i],
+                                TYPE_DW_GMAC);
+        object_initialize_child(obj, gmac_apb_names[i], &s->gmac_apb[i],
+                                TYPE_TH1520_GMAC_APB);
+        qdev_prop_set_uint32(DEVICE(&s->gmac[i]), "version",
+                             TH1520_GMAC_VERSION);
+        qdev_prop_set_uint32(DEVICE(&s->gmac[i]), "hw-feature",
+                             TH1520_GMAC_HW_FEATURE);
+        qdev_prop_set_uint8(DEVICE(&s->gmac[i]), "phy-addr",
+                            TH1520_GMAC_PHY_ADDR);
+        qdev_prop_set_uint16(DEVICE(&s->gmac[i]), "phy-id1",
+                             TH1520_RTL8211F_PHY_ID1);
+        qdev_prop_set_uint16(DEVICE(&s->gmac[i]), "phy-id2",
+                             TH1520_RTL8211F_PHY_ID2);
+    }
     for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
         object_initialize_child(obj, mshc_names[i], &s->mshc[i],
                                 TYPE_DWC_MSHC);
@@ -224,6 +269,29 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                        qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                               TH1520_UART0_IRQ));
 
+    for (int i = 0; i < TH1520_GMAC_COUNT; i++) {
+        SysBusDevice *gmac = SYS_BUS_DEVICE(&s->gmac[i]);
+        SysBusDevice *apb = SYS_BUS_DEVICE(&s->gmac_apb[i]);
+        char alias[6];
+
+        snprintf(alias, sizeof(alias), "gmac%d", i);
+        qemu_configure_nic_device(DEVICE(gmac), true, alias);
+        if (!sysbus_realize(gmac, errp)) {
+            return;
+        }
+        sysbus_mmio_map(gmac, 0,
+                        th1520_memmap[th1520_gmac_memmap[i]].base);
+        sysbus_connect_irq(gmac, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  th1520_gmac_irqs[i]));
+
+        if (!sysbus_realize(apb, errp)) {
+            return;
+        }
+        sysbus_mmio_map(apb, 0,
+                        th1520_memmap[th1520_gmac_apb_memmap[i]].base);
+    }
+
     for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
         SysBusDevice *mshc = SYS_BUS_DEVICE(&s->mshc[i]);
 
@@ -262,6 +330,15 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const uart_clock_names[] = {
         "baudclk", "apb_pclk"
     };
+    static const char *const gmac_compat[] = {
+        "thead,th1520-gmac", "snps,dwmac-3.70a"
+    };
+    static const char *const gmac_reg_names[] = {
+        "dwmac", "apb"
+    };
+    static const char *const gmac_clock_names[] = {
+        "stmmaceth", "pclk", "apb"
+    };
     MachineState *ms = MACHINE(s);
     uint32_t intc_phandles[TH1520_C910_HARTS];
     uint32_t plic_cells[TH1520_C910_HARTS * 4];
@@ -270,6 +347,11 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t plic_phandle;
     uint32_t uart_clock_phandle;
     uint32_t mshc_clock_phandle;
+    uint32_t gmac_axi_clock_phandle;
+    uint32_t gmac_pclk_phandle;
+    uint32_t gmac_apb_clock_phandle;
+    uint32_t stmmac_axi_phandle;
+    uint32_t phy_phandle;
     g_autofree char *plic_name = NULL;
     g_autofree char *clint_name = NULL;
     g_autofree char *uart_name = NULL;
@@ -443,6 +525,123 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop(ms->fdt, name, "non-removable", NULL, 0);
             qemu_fdt_setprop(ms->fdt, name, "keep-power-in-suspend",
                              NULL, 0);
+        }
+    }
+
+    /*
+     * The TH1520 clock tree feeds GMAC's AXI interface at 500 MHz, its
+     * peripheral clock directly from the 1 GHz GMAC PLL, and its APB glue at
+     * 500 MHz.  Physical divider/phase behavior still needs board
+     * measurements; these fixed clocks expose the software-visible rates
+     * while the APB model retains all programmed digital state (GMAC-001).
+     */
+    gmac_axi_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/gmac-axi-clock");
+    qemu_fdt_setprop_string(ms->fdt, "/gmac-axi-clock", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-axi-clock", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-axi-clock", "clock-frequency",
+                          TH1520_GMAC_AXI_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/gmac-axi-clock",
+                            "clock-output-names", "gmac-axi");
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-axi-clock", "phandle",
+                          gmac_axi_clock_phandle);
+
+    gmac_pclk_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/gmac-pclk");
+    qemu_fdt_setprop_string(ms->fdt, "/gmac-pclk", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-pclk", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-pclk", "clock-frequency",
+                          TH1520_GMAC_PCLK_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/gmac-pclk", "clock-output-names",
+                            "gmac-pll");
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-pclk", "phandle",
+                          gmac_pclk_phandle);
+
+    gmac_apb_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/gmac-apb-clock");
+    qemu_fdt_setprop_string(ms->fdt, "/gmac-apb-clock", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-apb-clock", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-apb-clock", "clock-frequency",
+                          TH1520_GMAC_APB_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/gmac-apb-clock",
+                            "clock-output-names", "gmac-apb");
+    qemu_fdt_setprop_cell(ms->fdt, "/gmac-apb-clock", "phandle",
+                          gmac_apb_clock_phandle);
+
+    stmmac_axi_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/stmmac-axi-config");
+    qemu_fdt_setprop_cell(ms->fdt, "/stmmac-axi-config", "phandle",
+                          stmmac_axi_phandle);
+    qemu_fdt_setprop_cell(ms->fdt, "/stmmac-axi-config", "snps,wr_osr_lmt",
+                          15);
+    qemu_fdt_setprop_cell(ms->fdt, "/stmmac-axi-config", "snps,rd_osr_lmt",
+                          15);
+    qemu_fdt_setprop_cells(ms->fdt, "/stmmac-axi-config", "snps,blen",
+                           0, 0, 64, 32, 0, 0, 0);
+
+    phy_phandle = phandle++;
+    for (int i = 0; i < TH1520_GMAC_COUNT; i++) {
+        const MemMapEntry *core = &th1520_memmap[th1520_gmac_memmap[i]];
+        const MemMapEntry *apb = &th1520_memmap[th1520_gmac_apb_memmap[i]];
+        g_autofree char *name =
+            g_strdup_printf("/soc/ethernet@%" HWADDR_PRIx, core->base);
+        g_autofree char *mdio = g_strdup_printf("%s/mdio", name);
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string_array(ms->fdt, name, "compatible",
+                                      (char **)&gmac_compat,
+                                      ARRAY_SIZE(gmac_compat));
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg",
+                                     2, core->base, 2, core->size,
+                                     2, apb->base, 2, apb->size);
+        qemu_fdt_setprop_string_array(ms->fdt, name, "reg-names",
+                                      (char **)&gmac_reg_names,
+                                      ARRAY_SIZE(gmac_reg_names));
+        qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
+                               th1520_gmac_irqs[i], 4);
+        qemu_fdt_setprop_string(ms->fdt, name, "interrupt-names", "macirq");
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                               gmac_axi_clock_phandle, gmac_pclk_phandle,
+                               gmac_apb_clock_phandle);
+        qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                      (char **)&gmac_clock_names,
+                                      ARRAY_SIZE(gmac_clock_names));
+        qemu_fdt_setprop_cell(ms->fdt, name, "snps,pbl", 32);
+        qemu_fdt_setprop(ms->fdt, name, "snps,fixed-burst", NULL, 0);
+        qemu_fdt_setprop_cell(ms->fdt, name,
+                              "snps,multicast-filter-bins", 64);
+        qemu_fdt_setprop_cell(ms->fdt, name,
+                              "snps,perfect-filter-entries", 32);
+        qemu_fdt_setprop_cell(ms->fdt, name, "snps,axi-config",
+                              stmmac_axi_phandle);
+        qemu_fdt_setprop(ms->fdt, name, "local-mac-address",
+                         s->soc.gmac[i].conf.macaddr.a, ETH_ALEN);
+
+        qemu_fdt_add_subnode(ms->fdt, mdio);
+        qemu_fdt_setprop_string(ms->fdt, mdio, "compatible",
+                                "snps,dwmac-mdio");
+        qemu_fdt_setprop_cell(ms->fdt, mdio, "#address-cells", 1);
+        qemu_fdt_setprop_cell(ms->fdt, mdio, "#size-cells", 0);
+
+        if (i == 0) {
+            g_autofree char *phy =
+                g_strdup_printf("%s/ethernet-phy@%u", mdio,
+                                TH1520_GMAC_PHY_ADDR);
+
+            qemu_fdt_add_subnode(ms->fdt, phy);
+            qemu_fdt_setprop_cell(ms->fdt, phy, "reg",
+                                  TH1520_GMAC_PHY_ADDR);
+            qemu_fdt_setprop_cell(ms->fdt, phy, "phandle", phy_phandle);
+            qemu_fdt_setprop_cell(ms->fdt, name, "phy-handle", phy_phandle);
+            qemu_fdt_setprop_string(ms->fdt, name, "phy-mode", "rgmii-id");
+            qemu_fdt_setprop_string(ms->fdt, name, "status", "okay");
+            qemu_fdt_setprop_string(ms->fdt, "/aliases", "ethernet0", name);
+        } else {
+            /* GMAC1 has no Ethernet PHY routed on the BeagleV Ahead. */
+            qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
         }
     }
 }

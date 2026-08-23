@@ -137,7 +137,7 @@ validation.
 | I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
 | USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
-| Ethernet | No Synopsys DWMAC/stmmac model found | New GMAC 3.70a, MDIO and RTL8211F-facing behavior |
+| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
 | SPI/QSPI | Generic SSI/flash infrastructure exists | New DW APB SSI and TH1520 QSPI/XIP integration |
 | GPIO/pinctrl/PWM | No matching DW APB GPIO or TH1520 pinctrl/PWM | New reusable IP and TH1520 glue |
 | APB timers/RTC/watchdog | Timer framework exists; no matching TH1520 set | New register models and clock/reset behavior |
@@ -147,7 +147,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, UART, DRAM and SRAM state has VMState plus a whole-machine regression test | Extend the same state inventory and boundary testing to every new controller and backend |
+| Migration | Current C910, CLINT, PLIC, UART, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend |
 
 ## Workspace implementation status
 
@@ -190,13 +190,21 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   sources.  Generic SDHCI now accepts v4 controllers, preserves Host Control 2,
   implements Auto CMD23 and 128-bit 64-address ADMA2 descriptors, and restores
   its interrupt output after migration; and
+* a reusable DesignWare GMAC 3.x model, factored from the NPCM implementation,
+  with normal and enhanced descriptors, 16/32-byte descriptor stride, TX/RX
+  DMA, FCS handling, bus errors, interrupt recomputation, configurable version/
+  feature/PHY identity and VMState.  Both TH1520 GMACs are mapped at their
+  physical core/APB addresses and PLIC sources, with the nine-register APB
+  reset/mask contract, separate 500 MHz AXI, 1 GHz peripheral and 500 MHz APB
+  clocks, board GMAC0/RTL8211F-facing DT wiring, and disabled board GMAC1; and
 * a deterministic direct-boot contract that selects hart 0 for both the
   FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
   four-hart M-mode payload whose ordered UART transcript proves that harts
   0 through 3 all entered the common reset path; and
 * a whole-machine migration test that moves DRAM, SRAM, per-hart base and
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
-  CLINT, PLIC and UART state together; and
+  CLINT, PLIC, UART, all three storage controllers, both GMAC cores, PHY banks
+  and both GMAC APB-glue instances together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -229,14 +237,16 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 35 board qtests in the normal,
-dependency-minimal and ASan/UBSan builds, including eight storage tests for the
-generated DT, exact controller/
-PHY reset and masks, all three PLIC routes, configurable unknown synthesis IDs,
-eMMC PIO read/write, SD Auto CMD23 with a 64-bit ADMA descriptor and buffer
-above 4 GiB, and device migration.  The complete gate includes whole-machine
-migration;
-C910 CSR identity tests; XTheadVector, PMU, CLINT, PLIC, UART and four-hart
+The focused gate currently comprises 39 board qtests in the normal,
+dependency-minimal and ASan/UBSan builds.  These include eight storage tests
+for the generated DT, exact controller/PHY reset and masks, all three PLIC
+routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
+with a 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
+Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
+both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
+preservation, and a socket-backed packet path.  The complete gate includes
+whole-machine migration; C910 CSR identity tests; XTheadVector, PMU, CLINT,
+PLIC, UART and four-hart
 guest payloads; and an S-mode SBI identity probe.  The instrumented Linux run
 selects hart 0, brings up all four CPUs and probes the C900 PLIC before its
 bounded timeout.  Native DesignWare UART handoff and the expected missing-root
@@ -251,6 +261,16 @@ enumerates the image as a high-speed ``QEMU!!`` eMMC block device.  This proves
 the mainline driver/controller contract through block discovery, not eMMC 5.1,
 HS400, filesystem integrity, CQE, SDIO Wi-Fi, physical-card GPIOs, or mask-ROM
 boot behavior.
+
+The same pinned Linux source was also rebuilt in a separate output directory
+with ``CONFIG_STMMAC_ETH``, ``CONFIG_STMMAC_PLATFORM`` and
+``CONFIG_DWMAC_THEAD`` built in.  It binds GMAC0 at ``0xffe7070000`` without a
+probe error or clock-divider warning, reads user/version ID ``0x10/0x37``, and
+selects DWMAC1000, RGMII, Type-2 RX checksum, TX checksum insertion,
+enhanced/extended descriptors and ring mode.  This establishes the mainline
+driver/register contract only.  It does not establish a working physical link,
+full packet-offload correctness, the provisional hardware-feature aggregate,
+RTL8211F vendor behavior, or any of the traffic/stress requirements in P5.
 
 ## Intended source architecture
 
@@ -420,10 +440,14 @@ Gate P5:
 
 Status: in progress.  The legacy storage submilestone is implemented and has
 register, IRQ, PIO, v4 64-bit ADMA2, reset, DT, migration, and mainline-Linux
-probe coverage.  CQE/ADMA3, eMMC 5.1/HS400 and boot/RPMB behavior, SDIO Wi-Fi,
-card-detect/write-protect wiring, error injection, the general/secure DMACs,
-both Ethernet controllers, block stress, stock-image boot, and every remaining
-P5 acceptance item are still open.  P5 is therefore not closed.
+probe coverage.  The initial Ethernet submilestone integrates both GMAC cores,
+their APB glue, IRQs, generated DT, GMAC0's backend and generic Clause 22 PHY;
+it has reset/mask/MDIO/IRQ/enhanced-descriptor/socket/migration qtests and a
+successful mainline ``dwmac-thead`` probe.  CQE/ADMA3, eMMC 5.1/HS400 and
+boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring, error
+injection, the general/secure DMACs, complete filtering/PTP/MMC/WOL/EEE and PHY
+behavior, block/network stress, stock-image boot, and every remaining P5
+acceptance item are still open.  P5 is therefore not closed.
 
 ### Phase 6 — clocks, reset, power and control I/O
 

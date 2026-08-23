@@ -1794,10 +1794,12 @@ F: docs/system/riscv/beaglev-ahead.rst
 F: hw/char/dw_apb_uart.c
 F: hw/intc/thead_c900_clint.c
 F: hw/intc/thead_c900_plic.c
+F: hw/net/th1520_gmac.c
 F: hw/riscv/th1520.c
 F: include/hw/char/dw_apb_uart.h
 F: include/hw/intc/thead_c900_clint.h
 F: include/hw/intc/thead_c900_plic.h
+F: include/hw/net/th1520_gmac.h
 F: include/hw/riscv/th1520.h
 F: target/riscv/*theadvector*
 F: target/riscv/tcg/*theadvector*
