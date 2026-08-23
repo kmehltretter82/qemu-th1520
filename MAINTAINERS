@@ -1801,6 +1801,7 @@ F: target/riscv/*theadvector*
 F: target/riscv/tcg/*theadvector*
 F: target/riscv/tcg/th_csr.c
 F: tests/qtest/beaglev-ahead-test.c
+F: tests/tcg/riscv64/test-beaglev-ahead-*
 F: tests/tcg/riscv64/test-dw-apb-uart.S
 F: tests/tcg/riscv64/test-thead-*
 

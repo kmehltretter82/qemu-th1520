@@ -9,8 +9,10 @@
 #include "libqtest.h"
 #include "qobject/qdict.h"
 
+#include <libfdt.h>
 #include <poll.h>
 
+#define TH1520_BROM_BASE           0xffffd00000ULL
 #define TH1520_CLINT_BASE          0xffdc000000ULL
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
@@ -54,6 +56,11 @@
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 
 #define TH1520_UART0_IRQ           36
+
+#define BROM_RESET_FDT_ADDR        (TH1520_BROM_BASE + 32)
+#define BROM_FW_DYNAMIC_INFO       (TH1520_BROM_BASE + 40)
+#define FW_DYNAMIC_MAGIC           0x4942534f
+#define FW_DYNAMIC_VERSION         2
 
 #define UART_IER_RDI               BIT(0)
 #define UART_IER_THRI              BIT(1)
@@ -175,6 +182,57 @@ static void enable_uart0_supervisor_irq(QTestState *qts)
 {
     qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_UART0_IRQ), 5);
     c900_plic_set_enable(qts, 1, TH1520_UART0_IRQ, true);
+}
+
+static void test_direct_boot_contract(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    struct fdt_header header;
+    const fdt32_t *cold_boot_harts;
+    const char *compatible;
+    g_autofree uint8_t *fdt = NULL;
+    uint64_t fdt_addr;
+    uint32_t cpu0_phandle;
+    int config_offset;
+    int cpu0_offset;
+    int fdt_size;
+    int len;
+
+    /* Check both FW_DYNAMIC stages which select hart 0 for direct boot. */
+    g_assert_cmphex(qtest_readq(qts, BROM_FW_DYNAMIC_INFO), ==,
+                    FW_DYNAMIC_MAGIC);
+    g_assert_cmphex(qtest_readq(qts, BROM_FW_DYNAMIC_INFO + 8), ==,
+                    FW_DYNAMIC_VERSION);
+    g_assert_cmphex(qtest_readq(qts, BROM_FW_DYNAMIC_INFO + 40), ==, 0);
+
+    fdt_addr = qtest_readq(qts, BROM_RESET_FDT_ADDR);
+    qtest_memread(qts, fdt_addr, &header, sizeof(header));
+    g_assert_cmpint(fdt_check_header(&header), ==, 0);
+    fdt_size = fdt_totalsize(&header);
+    g_assert_cmpint(fdt_size, >=, sizeof(header));
+
+    fdt = g_malloc(fdt_size);
+    qtest_memread(qts, fdt_addr, fdt, fdt_size);
+    g_assert_cmpint(fdt_check_header(fdt), ==, 0);
+
+    config_offset = fdt_path_offset(fdt, "/chosen/opensbi-config");
+    g_assert_cmpint(config_offset, >=, 0);
+    compatible = fdt_getprop(fdt, config_offset, "compatible", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "opensbi,config");
+
+    cpu0_offset = fdt_path_offset(fdt, "/cpus/cpu@0");
+    g_assert_cmpint(cpu0_offset, >=, 0);
+    cpu0_phandle = fdt_get_phandle(fdt, cpu0_offset);
+    g_assert_cmphex(cpu0_phandle, !=, 0);
+
+    cold_boot_harts = fdt_getprop(fdt, config_offset, "cold-boot-harts",
+                                  &len);
+    g_assert_nonnull(cold_boot_harts);
+    g_assert_cmpint(len, ==, sizeof(*cold_boot_harts));
+    g_assert_cmphex(fdt32_to_cpu(*cold_boot_harts), ==, cpu0_phandle);
+
+    qtest_quit(qts);
 }
 
 static uint8_t read_serial_byte(int fd)
@@ -832,6 +890,8 @@ int main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     if (qtest_has_machine("beaglev-ahead")) {
+        qtest_add_func("/beaglev-ahead/boot/direct-contract",
+                       test_direct_boot_contract);
         qtest_add_func("/beaglev-ahead/c900-plic/reset",
                        test_c900_plic_reset);
         qtest_add_func("/beaglev-ahead/c900-plic/registers",

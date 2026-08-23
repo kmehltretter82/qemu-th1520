@@ -183,16 +183,20 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   qtests, and a guest-executed access/interrupt test.  Unproved shadow, DMA,
   and RS-485 blocks are deliberately omitted rather than exposed as partial
   features; and
+* a deterministic direct-boot contract that selects hart 0 for both the
+  FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
+  four-hart M-mode payload whose ordered UART transcript proves that harts
+  0 through 3 all entered the common reset path; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
 The C900 PLIC, CLINT and boot-critical UART portions of the Phase 1 interrupt
 gate are implemented.  OpenSBI and Linux earlycon now pass with both the full
-and dependency-minimal builds.  Phase 1 is not closed: an all-hart UART
-payload, sanitizer, and whole-machine migration gates remain, and exact UART
-synthesis values still require hardware.  Phases 2 and 3 likewise retain
-their exhaustive and physical-differential gates.  All provisional behavior
-is linked to an open item in the companion ledger.
+and dependency-minimal builds, and the all-hart UART payload passes.  Phase 1
+is not closed: sanitizer and whole-machine migration gates remain, and exact
+UART synthesis values still require hardware.  Phases 2 and 3 likewise
+retain their exhaustive and physical-differential gates.  All provisional
+behavior is linked to an open item in the companion ledger.
 
 ### Current boot-validation snapshot
 
@@ -205,11 +209,18 @@ Ahead model, brings up all four harts, uses the 3 MHz timer, and binds UART0 as
 reaches the expected panic because no root device is attached.  The log has no
 noncoherent-DMA warning and no leaked UART FIFO-probe byte sequence.
 
-The focused gate currently comprises 25 board qtests in each build, C910 CSR
-identity tests, XTheadVector and UART/PLIC guest payloads, and an S-mode SBI
-identity probe.  This snapshot proves the boot-critical interfaces exercised
-by those tests; it does not resolve any hardware-only ledger item or imply
-stock-image compatibility.
+The direct-boot FDT restricts OpenSBI's cold-boot allow-list to hart 0 because
+all four emulated harts currently enter the common reset trampoline.  Six
+repeated Linux boots in each build selected OpenSBI boot hart 0 and brought up
+all four CPUs.  A separate M-mode payload serializes the four harts and checks
+the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
+contract, not evidence for the physical reset controller or BootROM sequence.
+
+The focused gate currently comprises 26 board qtests in each build, C910 CSR
+identity tests, XTheadVector, UART/PLIC and four-hart guest payloads, and an
+S-mode SBI identity probe.  This snapshot proves the boot-critical interfaces
+exercised by those tests; it does not resolve any hardware-only ledger item or
+imply stock-image compatibility.
 
 ## Intended source architecture
 

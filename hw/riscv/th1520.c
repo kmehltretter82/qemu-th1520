@@ -250,6 +250,20 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     create_fdt_socket_cpus(ms->fdt, s->soc.c910_cpus.harts, 0,
                            TH1520_C910_HARTS, 0, &phandle,
                            intc_phandles, false, false);
+
+    /*
+     * All harts currently enter the direct-boot trampoline together.  Limit
+     * OpenSBI's later cold-boot lottery to hart 0 so that its HSM path, and
+     * consequently Linux's boot hart, are deterministic.  This node is
+     * consumed and removed by OpenSBI.  It does not model the still-unknown
+     * physical secondary-hart reset/release sequence (BOOT-001).
+     */
+    qemu_fdt_add_subnode(ms->fdt, "/chosen/opensbi-config");
+    qemu_fdt_setprop_string(ms->fdt, "/chosen/opensbi-config", "compatible",
+                            "opensbi,config");
+    qemu_fdt_setprop_phandle(ms->fdt, "/chosen/opensbi-config",
+                             "cold-boot-harts", "/cpus/cpu@0");
+
     create_fdt_socket_memory(ms->fdt,
                              th1520_memmap[TH1520_DEV_DRAM].base,
                              ms->ram_size, 0, false);

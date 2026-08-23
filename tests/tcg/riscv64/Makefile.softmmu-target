@@ -69,5 +69,13 @@ run-test-dw-apb-uart: test-dw-apb-uart
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 
+EXTRA_RUNS += run-test-beaglev-ahead-smp
+test-beaglev-ahead-smp: test-beaglev-ahead-smp.o
+run-test-beaglev-ahead-smp: test-beaglev-ahead-smp
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -monitor none -serial file:$<.out -semihosting -bios $<)
+	$(call quiet-command, printf '0123\n' | diff - $<.out, \
+	  DIFF,$<.out with expected four-hart transcript)
+
 # We don't currently support the multiarch system tests
 undefine MULTIARCH_TESTS

@@ -54,9 +54,18 @@ after it, generates the device tree, and installs a small reset trampoline in
 the mask-ROM aperture.  ``-bios none`` is also accepted for low-level tests
 that load all code explicitly.
 
-This reset trampoline is not an emulation of the TH1520 mask ROM.  Boot straps,
-the USB/UART downloader, and booting from eMMC, SD, or QSPI are later
-milestones.
+All four C910 harts currently enter that trampoline.  The FW_DYNAMIC handoff
+selects hart 0 for relocation, and an OpenSBI configuration node restricts its
+subsequent cold-boot lottery to hart 0.  OpenSBI consumes that node before the
+next boot stage.  This makes direct boots deterministic while leaving the
+other harts available for SBI HSM startup; a four-hart M-mode test checks the
+ordered UART transcript from harts 0 through 3.
+
+This reset trampoline and OpenSBI convention are not an emulation of the
+TH1520 mask ROM or reset controller.  The physical initial hart states, Core0
+TEE mode and secondary release sequence remain hardware-validation items.
+Boot straps, the USB/UART downloader, and booting from eMMC, SD, or QSPI are
+later milestones.
 
 CPU limitation
 --------------
@@ -132,6 +141,11 @@ brings up four harts, uses earlycon, and binds the DesignWare UART as
 ``ttyS0``.  With no block device attached, the expected endpoint is a
 missing-root-filesystem panic; this is a bring-up test, not a claim that a
 production image is supported.
+
+Six repeated boots with each of the full and dependency-minimal QEMU builds
+selected OpenSBI boot hart 0 and brought up all four CPUs.  This validates the
+emulator's deterministic direct-boot convention only; it does not establish
+the silicon reset sequence.
 
 Storage, Ethernet, DMA, GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe,
 display, audio, camera, video codecs, GPU, NPU, the C906 and E902 auxiliary
