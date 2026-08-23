@@ -9,8 +9,11 @@
 #include "libqtest.h"
 #include "qobject/qdict.h"
 
+#include <poll.h>
+
 #define TH1520_CLINT_BASE          0xffdc000000ULL
 #define TH1520_PLIC_BASE           0xffd8000000ULL
+#define TH1520_UART0_BASE          0xffe7014000ULL
 #define C900_MSIP(hart)            (TH1520_CLINT_BASE + 0x0000 + 4 * (hart))
 #define C900_MTIMECMP(hart)        (TH1520_CLINT_BASE + 0x4000 + 8 * (hart))
 #define C900_SSIP(hart)            (TH1520_CLINT_BASE + 0xc000 + 4 * (hart))
@@ -25,6 +28,22 @@
     (TH1520_PLIC_BASE + 0x200000 + 0x1000 * (context))
 #define C900_PLIC_CLAIM(context)   (C900_PLIC_THRESHOLD(context) + 4)
 
+#define DW_UART_RBR_THR_DLL        (TH1520_UART0_BASE + 0x00)
+#define DW_UART_IER_DLH            (TH1520_UART0_BASE + 0x04)
+#define DW_UART_IIR_FCR            (TH1520_UART0_BASE + 0x08)
+#define DW_UART_LCR                (TH1520_UART0_BASE + 0x0c)
+#define DW_UART_LSR                (TH1520_UART0_BASE + 0x14)
+#define DW_UART_SCR                (TH1520_UART0_BASE + 0x1c)
+#define DW_UART_USR                (TH1520_UART0_BASE + 0x7c)
+#define DW_UART_TFL                (TH1520_UART0_BASE + 0x80)
+#define DW_UART_RFL                (TH1520_UART0_BASE + 0x84)
+#define DW_UART_SRR                (TH1520_UART0_BASE + 0x88)
+#define DW_UART_DLF                (TH1520_UART0_BASE + 0xc0)
+#define DW_UART_RE_EN              (TH1520_UART0_BASE + 0xb4)
+#define DW_UART_CPR                (TH1520_UART0_BASE + 0xf4)
+#define DW_UART_UCV                (TH1520_UART0_BASE + 0xf8)
+#define DW_UART_CTR                (TH1520_UART0_BASE + 0xfc)
+
 #define CSR_TIME                   0xc01
 
 #define C910_HARTS                 4
@@ -32,6 +51,28 @@
 #define C900_PLIC_WORDS            8
 #define C900_CLINT_QOM_PATH        "/machine/soc/clint"
 #define C900_PLIC_QOM_PATH         "/machine/soc/plic"
+#define DW_UART_QOM_PATH           "/machine/soc/uart0"
+
+#define TH1520_UART0_IRQ           36
+
+#define UART_IER_RDI               BIT(0)
+#define UART_IER_THRI              BIT(1)
+#define UART_IIR_NO_INT            BIT(0)
+#define UART_IIR_THRI              0x02
+#define UART_IIR_RDI               0x04
+#define UART_IIR_BUSY              0x07
+#define UART_FCR_ENABLE            BIT(0)
+#define UART_LCR_DLAB              BIT(7)
+#define UART_LSR_DR                BIT(0)
+#define UART_LSR_THRE              BIT(5)
+#define UART_LSR_TEMT              BIT(6)
+#define UART_USR_BUSY              BIT(0)
+#define UART_USR_TFNF              BIT(1)
+#define UART_USR_TFE               BIT(2)
+#define UART_USR_RFNE              BIT(3)
+#define UART_USR_RFF               BIT(4)
+#define UART_SRR_UR                BIT(0)
+#define UART_SRR_RFR               BIT(1)
 
 typedef struct C900CLINTBank {
     const char *name;
@@ -128,6 +169,39 @@ static bool c900_plic_pending(QTestState *qts, uint32_t irq)
 {
     return extract32(qtest_readl(qts, C900_PLIC_PENDING(irq >> 5)),
                      irq & 31, 1);
+}
+
+static void enable_uart0_supervisor_irq(QTestState *qts)
+{
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_UART0_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_UART0_IRQ, true);
+}
+
+static uint8_t read_serial_byte(int fd)
+{
+    struct pollfd pfd = {
+        .fd = fd,
+        .events = POLLIN,
+    };
+    uint8_t value;
+
+    g_assert_cmpint(poll(&pfd, 1, 1000), ==, 1);
+    g_assert_true(pfd.revents & POLLIN);
+    g_assert_cmpint(recv(fd, &value, sizeof(value), 0), ==, sizeof(value));
+    return value;
+}
+
+static void wait_for_uart_rx(QTestState *qts)
+{
+    int64_t deadline = g_get_monotonic_time() + G_USEC_PER_SEC;
+
+    while (g_get_monotonic_time() < deadline) {
+        if (qtest_readl(qts, DW_UART_LSR) & UART_LSR_DR) {
+            return;
+        }
+        g_usleep(1000);
+    }
+    g_error("UART input was not received within one second");
 }
 
 static void c900_plic_set_input(QTestState *qts, const char *name,
@@ -341,6 +415,160 @@ static void test_c900_plic_completion_qualification(void)
     qtest_quit(qts);
 }
 
+static void assert_dw_uart_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IER_DLH), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR), ==,
+                    UART_IIR_NO_INT);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_LCR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_LSR), ==,
+                    UART_LSR_THRE | UART_LSR_TEMT);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_SCR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_USR), ==,
+                    UART_USR_TFNF | UART_USR_TFE);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_DLF), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_CPR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_UCV), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_CTR), ==, 0x44570110);
+}
+
+static void test_dw_uart_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_dw_uart_reset_state(qts);
+
+    qtest_writel(qts, DW_UART_SCR, 0x123456a5);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_SCR), ==, 0xa5);
+
+    /* Unknown TH1520 synthesis options stay disabled until measured. */
+    qtest_writel(qts, DW_UART_DLF, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_DLF), ==, 0);
+    qtest_writel(qts, DW_UART_RE_EN, 1);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_RE_EN), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_TFL), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_RFL), ==, 0);
+
+    qtest_writel(qts, DW_UART_SRR, UART_SRR_UR);
+    assert_dw_uart_reset_state(qts);
+
+    qtest_writel(qts, DW_UART_SCR, 0x5a);
+    qtest_system_reset(qts);
+    assert_dw_uart_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_dw_uart_configurable_features(void)
+{
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none "
+        "-global dw-apb-uart.dlf-width=4 "
+        "-global dw-apb-uart.fifo-size=32 "
+        "-global dw-apb-uart.component-parameters=0x20000 "
+        "-global dw-apb-uart.component-version=0x3331302a "
+        "-global dw-apb-uart.fifo-stat=on");
+
+    g_assert_cmphex(qtest_readl(qts, DW_UART_CPR), ==, 0x20000);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_UCV), ==, 0x3331302a);
+    qtest_writel(qts, DW_UART_DLF, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_DLF), ==, 0xf);
+
+    qtest_writel(qts, DW_UART_SRR, UART_SRR_UR);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_DLF), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR), ==,
+                    UART_IIR_NO_INT);
+    qtest_quit(qts);
+}
+
+static void test_dw_uart_tx_rx(void)
+{
+    QTestState *qts;
+    int serial_fd;
+    uint8_t input = 0x5a;
+
+    qts = qtest_init_with_serial("-machine beaglev-ahead -bios none",
+                                 &serial_fd);
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    enable_uart0_supervisor_irq(qts);
+
+    qtest_writel(qts, DW_UART_LCR, 3);
+    qtest_writel(qts, DW_UART_RBR_THR_DLL, 0xa5);
+    g_assert_cmphex(read_serial_byte(serial_fd), ==, 0xa5);
+    g_assert_true(qtest_readl(qts, DW_UART_LSR) & UART_LSR_THRE);
+    g_assert_false(qtest_readl(qts, DW_UART_LSR) & UART_LSR_TEMT);
+    g_assert_true(qtest_readl(qts, DW_UART_USR) & UART_USR_BUSY);
+    qtest_clock_step(qts, 5 * G_USEC_PER_SEC);
+    g_assert_true(qtest_readl(qts, DW_UART_LSR) & UART_LSR_TEMT);
+
+    qtest_writel(qts, DW_UART_IER_DLH, UART_IER_RDI);
+    g_assert_cmpint(send(serial_fd, &input, sizeof(input), 0), ==,
+                    sizeof(input));
+    wait_for_uart_rx(qts);
+    g_assert_true(qtest_readl(qts, DW_UART_USR) & UART_USR_RFNE);
+    g_assert_true(qtest_readl(qts, DW_UART_USR) & UART_USR_RFF);
+    g_assert_true(c900_plic_pending(qts, TH1520_UART0_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_UART0_IRQ);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR), ==, UART_IIR_RDI);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_RBR_THR_DLL), ==, input);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_UART0_IRQ);
+    assert_no_irq(qts);
+
+    g_assert_cmpint(send(serial_fd, &input, sizeof(input), 0), ==,
+                    sizeof(input));
+    wait_for_uart_rx(qts);
+    qtest_writel(qts, DW_UART_SRR, UART_SRR_RFR);
+    g_assert_false(qtest_readl(qts, DW_UART_LSR) & UART_LSR_DR);
+
+    close(serial_fd);
+    qtest_quit(qts);
+}
+
+static void test_dw_uart_interrupts(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    uint32_t usr;
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    enable_uart0_supervisor_irq(qts);
+
+    qtest_writel(qts, DW_UART_IER_DLH, UART_IER_THRI);
+    g_assert_true(c900_plic_pending(qts, TH1520_UART0_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_UART0_IRQ);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR), ==, UART_IIR_THRI);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_UART0_IRQ);
+    assert_no_irq(qts);
+
+    qtest_writel(qts, DW_UART_IER_DLH, 0);
+    qtest_writel(qts, DW_UART_LCR, 3);
+    qtest_writel(qts, DW_UART_RBR_THR_DLL, 'x');
+    qtest_writel(qts, DW_UART_LCR, UART_LCR_DLAB | 3);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_LCR), ==, 3);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR) & 0xf, ==,
+                    UART_IIR_BUSY);
+    g_assert_true(c900_plic_pending(qts, TH1520_UART0_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_UART0_IRQ);
+
+    usr = qtest_readl(qts, DW_UART_USR);
+    g_assert_true(usr & UART_USR_BUSY);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR), ==,
+                    UART_IIR_NO_INT);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_UART0_IRQ);
+    assert_no_irq(qts);
+
+    qtest_clock_step(qts, 200 * G_USEC_PER_SEC);
+    g_assert_true(qtest_readl(qts, DW_UART_LSR) & UART_LSR_TEMT);
+    qtest_writel(qts, DW_UART_LCR, UART_LCR_DLAB | 3);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_LCR), ==,
+                    UART_LCR_DLAB | 3);
+    qtest_quit(qts);
+}
+
 static void test_c900_clint_reset(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -541,6 +769,64 @@ static void test_c900_plic_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_dw_uart_migration(void)
+{
+    const char *const properties =
+        "-global dw-apb-uart.dlf-width=4 "
+        "-global dw-apb-uart.component-parameters=0x10000";
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-uart-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_initf("-machine beaglev-ahead -bios none %s", properties);
+    dst = qtest_initf("-machine beaglev-ahead -bios none -incoming defer %s",
+                      properties);
+
+    qtest_writel(src, DW_UART_LCR, UART_LCR_DLAB | 3);
+    qtest_writel(src, DW_UART_RBR_THR_DLL, 0x34);
+    qtest_writel(src, DW_UART_IER_DLH, 0x12);
+    qtest_writel(src, DW_UART_DLF, 0xb);
+    qtest_writel(src, DW_UART_LCR, 3);
+    qtest_writel(src, DW_UART_SCR, 0x5a);
+    qtest_writel(src, DW_UART_RBR_THR_DLL, 'm');
+    qtest_writel(src, DW_UART_LCR, UART_LCR_DLAB | 3);
+    g_assert_cmphex(qtest_readl(src, DW_UART_IIR_FCR) & 0xf, ==,
+                    UART_IIR_BUSY);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, DW_UART_SCR), ==, 0x5a);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_DLF), ==, 0xb);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_LCR), ==, 3);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_IIR_FCR) & 0xf, ==,
+                    UART_IIR_BUSY);
+    g_assert_true(qtest_readl(dst, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_IIR_FCR), ==,
+                    UART_IIR_NO_INT);
+
+    qtest_clock_step(dst, 20 * G_USEC_PER_SEC);
+    qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -579,6 +865,16 @@ int main(int argc, char **argv)
                             &c900_clint_banks[3], test_c900_clint_bank);
         qtest_add_func("/beaglev-ahead/c900-clint/migration",
                        test_c900_clint_migration);
+        qtest_add_func("/beaglev-ahead/dw-uart/registers",
+                       test_dw_uart_registers);
+        qtest_add_func("/beaglev-ahead/dw-uart/configurable-features",
+                       test_dw_uart_configurable_features);
+        qtest_add_func("/beaglev-ahead/dw-uart/tx-rx",
+                       test_dw_uart_tx_rx);
+        qtest_add_func("/beaglev-ahead/dw-uart/interrupts",
+                       test_dw_uart_interrupts);
+        qtest_add_func("/beaglev-ahead/dw-uart/migration",
+                       test_dw_uart_migration);
     }
 
     return g_test_run();

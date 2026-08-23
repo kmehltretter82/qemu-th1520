@@ -20,12 +20,11 @@
 #include "system/memory.h"
 #include "target/riscv/cpu.h"
 #include "target/riscv/cpu_bits.h"
-#include "hw/char/serial-mm.h"
+#include "hw/char/dw_apb_uart.h"
 #include "hw/core/loader.h"
 #include "hw/core/sysbus.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
-#include "hw/misc/unimp.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
 #include "hw/riscv/machines-qom.h"
@@ -109,6 +108,7 @@ static void th1520_soc_init(Object *obj)
                             TYPE_THEAD_C900_CLINT);
     object_initialize_child(obj, "plic", &s->plic,
                             TYPE_THEAD_C900_PLIC);
+    object_initialize_child(obj, "uart0", &s->uart0, TYPE_DW_APB_UART);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "hartid-base", 0);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "num-harts",
                          TH1520_C910_HARTS);
@@ -126,6 +126,8 @@ static void th1520_soc_init(Object *obj)
                          TH1520_C910_HARTS);
     qdev_prop_set_uint32(DEVICE(&s->plic), "num-sources",
                          TH1520_PLIC_NUM_SOURCES);
+    qdev_prop_set_uint32(DEVICE(&s->uart0), "baudbase",
+                         TH1520_UART_INPUT_FREQ / 16);
 }
 
 static void th1520_soc_realize(DeviceState *dev, Error **errp)
@@ -187,19 +189,15 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                     qdev_get_gpio_in(cpu, IRQ_S_TIMER));
     }
 
-    /*
-     * TH1520 uses a DesignWare APB UART.  serial-mm implements its 16550
-     * register subset; the low-priority region covers DW-specific registers
-     * until a complete DW APB UART model is available.
-     */
-    create_unimplemented_device("th1520.uart0",
-                                th1520_memmap[TH1520_DEV_UART0].base,
-                                th1520_memmap[TH1520_DEV_UART0].size);
-    serial_mm_init(system_memory, th1520_memmap[TH1520_DEV_UART0].base, 2,
-                   qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
-                                          TH1520_UART0_IRQ),
-                   TH1520_UART_INPUT_FREQ / 16, serial_hd(0),
-                   DEVICE_LITTLE_ENDIAN);
+    qdev_prop_set_chr(DEVICE(&s->uart0), "chardev", serial_hd(0));
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->uart0), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->uart0), 0,
+                    th1520_memmap[TH1520_DEV_UART0].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->uart0), 0,
+                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                              TH1520_UART0_IRQ));
 }
 
 static void th1520_soc_class_init(ObjectClass *oc, const void *data)

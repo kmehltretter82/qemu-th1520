@@ -15,8 +15,9 @@ The machine currently provides:
 * the scalar RV64IMAFDC, Zfh, and implemented scalar XThead instructions;
 * XTheadVector 1.0, derived from Vector 0.7.1, with 128-bit vector
   registers and the six T-Head vector CSRs;
-* the C910 Privileged ISA 1.10 identity, Sv39 MMU, 40-bit physical addresses,
-  and T-Head custom CSR aperture;
+* the C910 Privileged ISA 1.10 identity, T-Head ``mvendorid`` 0x5b7, zero
+  ``marchid``/``mimpid``, Sv39 MMU, 40-bit physical addresses, and T-Head
+  custom CSR aperture;
 * 16 C910 programmable performance counters, C9xx counter overflow CSRs and
   local interrupt 17, plus the board's Linux/OpenSBI PMU event mappings;
 * 4 GiB RAM at ``0x0000000000``;
@@ -27,7 +28,9 @@ The machine currently provides:
   edge/level inputs;
 * a C900 CLINT at ``0xffdc000000``, with four-hart MSIP, MTIMECMP,
   SSIP, and STIMECMP banks and a 3 MHz architectural timer; and
-* the UART0 16550 register subset at ``0xffe7014000`` and PLIC interrupt 36.
+* a DesignWare APB UART0 at ``0xffe7014000``, including the 16550 register
+  bank, DesignWare status/reset/probe registers, busy detection, and PLIC
+  interrupt 36.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, memory,
 and cache topology bindings as upstream Linux's BeagleV Ahead device tree.  It
@@ -104,9 +107,31 @@ modeled.  Physical-board validation is still needed for timer rollover and
 latching, system-bus handling of wider CPU accesses, oscillator stability,
 and reset-domain behavior.
 
-UART0 currently uses QEMU's generic ``serial-mm`` 16550 subset.  Reads and
-writes to DesignWare-specific registers are accepted by a low-priority
-unimplemented aperture but do not have hardware behavior.
+UART0 uses a reusable DesignWare APB wrapper around QEMU's 16550 core.  It
+implements aligned 32-bit register accesses, USR FIFO/busy status, SRR reset,
+busy-detect interrupts, the fractional divisor, synthesis probe registers,
+configurable FIFO depth, reset, and migration.  UART RX, TX, THRE and busy
+interrupts are connected through C900 PLIC source 36 and have both qtest and
+guest-executed coverage.
+
+The exact TH1520 UART synthesis is not publicly established.  The board model
+therefore uses conservative defaults: a functional 16-byte FIFO while optional
+CPR, UCV, DLF, and FIFO-statistics features report unavailable unless
+configured explicitly.  Unproved shadow, DMA-extra, and RS-485 registers read
+zero and ignore writes; partial implementations are intentionally not exposed.
+The architectural component-type register reports the DesignWare
+identification value.  Exact FIFO depth, optional-feature presence,
+version/parameter values, subword and wider system-bus behavior, and
+reset-domain details remain physical-hardware validation items.
+
+An upstream Linux image built from commit
+``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` has been exercised with both
+the full and dependency-minimal QEMU builds.  OpenSBI passes the C910 identity
+to S-mode, Linux activates the T-Head noncoherent cache-maintenance path,
+brings up four harts, uses earlycon, and binds the DesignWare UART as
+``ttyS0``.  With no block device attached, the expected endpoint is a
+missing-root-filesystem panic; this is a bring-up test, not a claim that a
+production image is supported.
 
 Storage, Ethernet, DMA, GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe,
 display, audio, camera, video codecs, GPU, NPU, the C906 and E902 auxiliary

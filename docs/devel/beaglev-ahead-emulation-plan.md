@@ -9,7 +9,7 @@ QEMU baseline: eea8fe61b8be8f3016e522e6af24924a0266ca95
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
 
-Linux evidence baseline: a2ff812c7712fc5021030e528f42494ca4a1e185
+Linux evidence baseline: 2709dd5ae32f0828f386327c76bba9f39f63a1c6
 
 The companion
 [hardware validation ledger](beaglev-ahead-hardware-validation.md) records
@@ -133,7 +133,7 @@ validation.
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
-| UART0-5 | Generic 16550 serial-mm exists | Add DW APB wrapper/probe registers, reg-shift 2, 32-bit accesses and clocks |
+| UART0-5 | Generic 16550 support exists; this workspace adds a reusable DW APB wrapper and integrates UART0 | Verify TH1520 synthesis values and bus behavior, complete optional shadow/DMA/RS-485 behavior, clocks/resets, and integrate UART1-5 |
 | I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
 | USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
 | SD/eMMC | SD card and generic SDHCI foundations exist | New DWC MSHC controller/glue, PHY, tuning, CQE and three instances |
@@ -157,9 +157,10 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * a dependency-minimal ``beaglev-ahead`` machine with four ``thead-c910``
   harts, the physical RAM/SRAM/ROM map, PLIC, CLINT, UART0, generated DT, and
   direct OpenSBI/kernel boot;
-* C910 scalar identity, 40-bit physical-address constraints, the TH1520
-  no-PMP configuration, the initial custom CSR bank, migration state, and
-  provisional MAEE PTE acceptance;
+* C910 scalar identity, including the T-Head vendor ID and exact zero
+  architecture/implementation IDs, 40-bit physical-address constraints, the
+  TH1520 no-PMP configuration, the initial custom CSR bank, migration state,
+  and provisional MAEE PTE acceptance;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
   machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
   event maps, and focused CSR/fixed-counter overflow tests; microarchitectural
@@ -175,14 +176,40 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   topology and public-RTL delegation, pending, priority, arbitration,
   trigger, claim/complete, reset and migration behavior, plus qtests for all
   contexts and a TCG M/S/U privilege and interrupt-delivery test; and
+* a reusable DesignWare APB UART wrapper replacing the temporary 16550/
+  unimplemented-region combination, with DesignWare status, software reset,
+  busy detection, fractional-divisor and synthesis-probe behavior, configurable
+  FIFO depth, UART0-to-PLIC wiring, VMState, focused RX/TX/IRQ/reset/migration
+  qtests, and a guest-executed access/interrupt test.  Unproved shadow, DMA,
+  and RS-485 blocks are deliberately omitted rather than exposed as partial
+  features; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
-The C900 PLIC and CLINT portions of the Phase 1 interrupt gate are implemented,
-but Phase 1 is not closed: the exact UART, SMP payload, Linux, sanitizer, and
-whole-machine migration gates remain.  Phases 2 and 3 likewise retain their
-exhaustive and physical-differential gates.  All provisional behavior is
-linked to an open item in the companion ledger.
+The C900 PLIC, CLINT and boot-critical UART portions of the Phase 1 interrupt
+gate are implemented.  OpenSBI and Linux earlycon now pass with both the full
+and dependency-minimal builds.  Phase 1 is not closed: an all-hart UART
+payload, sanitizer, and whole-machine migration gates remain, and exact UART
+synthesis values still require hardware.  Phases 2 and 3 likewise retain
+their exhaustive and physical-differential gates.  All provisional behavior
+is linked to an open item in the companion ledger.
+
+### Current boot-validation snapshot
+
+Linux commit ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` was built with its
+TH1520, T-Head errata/noncoherent DMA, SBI, SMP, 8250 console and DesignWare
+8250 support enabled.  The same unmodified image boots under the full and
+dependency-minimal QEMU builds through bundled OpenSBI, reports the BeagleV
+Ahead model, brings up all four harts, uses the 3 MHz timer, and binds UART0 as
+``ttyS0`` at ``0xffe7014000`` with IRQ 12 and base baud 6250000.  It then
+reaches the expected panic because no root device is attached.  The log has no
+noncoherent-DMA warning and no leaked UART FIFO-probe byte sequence.
+
+The focused gate currently comprises 25 board qtests in each build, C910 CSR
+identity tests, XTheadVector and UART/PLIC guest payloads, and an S-mode SBI
+identity probe.  This snapshot proves the boot-critical interfaces exercised
+by those tests; it does not resolve any hardware-only ledger item or imply
+stock-image compatibility.
 
 ## Intended source architecture
 

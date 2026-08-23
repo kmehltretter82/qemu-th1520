@@ -152,7 +152,8 @@ static void serial_update_irq(SerialState *s)
 
 static void serial_update_parameters(SerialState *s)
 {
-    float speed;
+    double divisor;
+    double speed;
     int parity, data_bits, stop_bits, frame_size;
     QEMUSerialSetParams ssp;
 
@@ -176,8 +177,14 @@ static void serial_update_parameters(SerialState *s)
 
     data_bits = (s->lcr & UART_LCR_WLS) + 5;
     frame_size += data_bits + stop_bits;
+    divisor = s->divider;
+    if (s->divisor_fraction_bits) {
+        divisor += (double)s->divisor_fraction /
+                   (1U << s->divisor_fraction_bits);
+    }
+
     /* Zero divisor should give about 3500 baud */
-    speed = (s->divider == 0) ? 3500 : (float) s->baudbase / s->divider;
+    speed = (divisor == 0) ? 3500 : (double)s->baudbase / divisor;
     ssp.speed = speed;
     ssp.parity = parity;
     ssp.data_bits = data_bits;
@@ -185,6 +192,15 @@ static void serial_update_parameters(SerialState *s)
     s->char_transmit_time =  (NANOSECONDS_PER_SECOND / speed) * frame_size;
     qemu_chr_fe_ioctl(&s->chr, CHR_IOCTL_SERIAL_SET_PARAMS, &ssp);
     trace_serial_update_parameters(speed, parity, data_bits, stop_bits);
+}
+
+void serial_set_divisor_fraction(SerialState *s, uint32_t value, uint8_t bits)
+{
+    assert(bits < 32);
+
+    s->divisor_fraction_bits = bits;
+    s->divisor_fraction = bits ? value & MAKE_64BIT_MASK(0, bits) : 0;
+    serial_update_parameters(s);
 }
 
 static void serial_update_msl(SerialState *s)
@@ -293,19 +309,19 @@ static void serial_write_fcr(SerialState *s, uint8_t val)
 
     if (val & UART_FCR_FE) {
         s->iir |= UART_IIR_FE;
-        /* Set recv_fifo trigger Level */
+        /* Set the receive FIFO trigger level. */
         switch (val & 0xC0) {
         case UART_FCR_ITL_1:
             s->recv_fifo_itl = 1;
             break;
         case UART_FCR_ITL_2:
-            s->recv_fifo_itl = 4;
+            s->recv_fifo_itl = MAX(1, s->fifo_size / 4);
             break;
         case UART_FCR_ITL_3:
-            s->recv_fifo_itl = 8;
+            s->recv_fifo_itl = MAX(1, s->fifo_size / 2);
             break;
         case UART_FCR_ITL_4:
-            s->recv_fifo_itl = 14;
+            s->recv_fifo_itl = MAX(1, s->fifo_size - 2);
             break;
         }
     } else {
@@ -560,7 +576,7 @@ static int serial_can_receive(SerialState *s)
         if (!fifo8_is_full(&s->recv_fifo)) {
             /*
              * Advertise (fifo.itl - fifo.count) bytes when count < ITL, and 1
-             * if above. If UART_FIFO_LENGTH - fifo.count is advertised the
+             * if above. If fifo_size - fifo.count is advertised the
              * effect will be to almost always fill the fifo completely before
              * the guest has a chance to respond, effectively overriding the ITL
              * that the guest has set.
@@ -853,9 +869,9 @@ const VMStateDescription vmstate_serial = {
     }
 };
 
-static void serial_reset(void *opaque)
+static void serial_reset(DeviceState *dev)
 {
-    SerialState *s = opaque;
+    SerialState *s = SERIAL(dev);
     g_clear_handle_id(&s->watch_tag, g_source_remove);
 
     s->rbr = 0;
@@ -887,6 +903,11 @@ static void serial_reset(void *opaque)
 
     serial_update_msl(s);
     s->msr &= ~UART_MSR_ANY_DELTA;
+}
+
+static void serial_system_reset(void *opaque)
+{
+    serial_reset(DEVICE(opaque));
 }
 
 static int serial_be_change(void *opaque)
@@ -921,15 +942,19 @@ static void serial_realize(DeviceState *dev, Error **errp)
 {
     SerialState *s = SERIAL(dev);
 
+    if (!s->fifo_size) {
+        error_setg(errp, "fifo-size must be greater than zero");
+        return;
+    }
+
     s->modem_status_poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, (QEMUTimerCB *) serial_update_msl, s);
 
     s->fifo_timeout_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, (QEMUTimerCB *) fifo_timeout_int, s);
-    qemu_register_reset(serial_reset, s);
-
+    qemu_register_reset(serial_system_reset, dev);
     qemu_chr_fe_set_handlers(&s->chr, serial_can_receive1, serial_receive1,
                              serial_event, serial_be_change, s, NULL, true);
-    fifo8_create(&s->recv_fifo, UART_FIFO_LENGTH);
-    fifo8_create(&s->xmit_fifo, UART_FIFO_LENGTH);
+    fifo8_create(&s->recv_fifo, s->fifo_size);
+    fifo8_create(&s->xmit_fifo, s->fifo_size);
 }
 
 static void serial_unrealize(DeviceState *dev)
@@ -946,7 +971,7 @@ static void serial_unrealize(DeviceState *dev)
     fifo8_destroy(&s->recv_fifo);
     fifo8_destroy(&s->xmit_fifo);
 
-    qemu_unregister_reset(serial_reset, s);
+    qemu_unregister_reset(serial_system_reset, dev);
 }
 
 const MemoryRegionOps serial_io_ops = {
@@ -965,6 +990,8 @@ const MemoryRegionOps serial_io_ops = {
 static const Property serial_properties[] = {
     DEFINE_PROP_CHR("chardev", SerialState, chr),
     DEFINE_PROP_UINT32("baudbase", SerialState, baudbase, 115200),
+    DEFINE_PROP_UINT32("fifo-size", SerialState, fifo_size,
+                       UART_FIFO_LENGTH),
     DEFINE_PROP_BOOL("wakeup", SerialState, wakeup, false),
 };
 
@@ -976,6 +1003,7 @@ static void serial_class_init(ObjectClass *klass, const void *data)
     dc->user_creatable = false;
     dc->realize = serial_realize;
     dc->unrealize = serial_unrealize;
+    device_class_set_legacy_reset(dc, serial_reset);
     device_class_set_props(dc, serial_properties);
 }
 

@@ -14,10 +14,9 @@ config BEAGLEV_AHEAD
     default y
     depends on RISCV64
     select DEVICE_TREE
-    select SERIAL_MM
+    select DW_APB_UART
     select THEAD_C900_CLINT
     select THEAD_C900_PLIC
-    select UNIMP
 
 config MICROCHIP_PFSOC
     bool

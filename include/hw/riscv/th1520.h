@@ -8,6 +8,7 @@
 #define HW_RISCV_TH1520_H
 
 #include "hw/core/boards.h"
+#include "hw/char/dw_apb_uart.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/riscv/riscv_hart.h"
@@ -23,6 +24,7 @@ struct TH1520SoCState {
     MemoryRegion brom;
     THeadC900CLINTState clint;
     THeadC900PLICState plic;
+    DWAPBUARTState uart0;
 };
 
 #define TYPE_BEAGLEV_AHEAD_MACHINE MACHINE_TYPE_NAME("beaglev-ahead")

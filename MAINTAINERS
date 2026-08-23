@@ -1789,9 +1789,11 @@ S: Orphan
 F: configs/devices/riscv64-softmmu/beaglev-ahead.mak
 F: docs/devel/beaglev-ahead-*.md
 F: docs/system/riscv/beaglev-ahead.rst
+F: hw/char/dw_apb_uart.c
 F: hw/intc/thead_c900_clint.c
 F: hw/intc/thead_c900_plic.c
 F: hw/riscv/th1520.c
+F: include/hw/char/dw_apb_uart.h
 F: include/hw/intc/thead_c900_clint.h
 F: include/hw/intc/thead_c900_plic.h
 F: include/hw/riscv/th1520.h
@@ -1799,6 +1801,7 @@ F: target/riscv/*theadvector*
 F: target/riscv/tcg/*theadvector*
 F: target/riscv/tcg/th_csr.c
 F: tests/qtest/beaglev-ahead-test.c
+F: tests/tcg/riscv64/test-dw-apb-uart.S
 F: tests/tcg/riscv64/test-thead-*
 
 OpenTitan

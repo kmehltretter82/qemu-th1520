@@ -32,7 +32,7 @@
 #include "qemu/fifo8.h"
 #include "qom/object.h"
 
-#define UART_FIFO_LENGTH    16      /* 16550A Fifo Length */
+#define UART_FIFO_LENGTH    16      /* 16550A FIFO length */
 
 struct SerialState {
     DeviceState parent;
@@ -58,6 +58,9 @@ struct SerialState {
     CharFrontend chr;
     int last_break_enable;
     uint32_t baudbase;
+    uint32_t fifo_size;
+    uint32_t divisor_fraction;
+    uint8_t divisor_fraction_bits;
     uint32_t tsr_retry;
     guint watch_tag;
     bool wakeup;
@@ -67,7 +70,7 @@ struct SerialState {
     Fifo8 recv_fifo;
     Fifo8 xmit_fifo;
     /* Interrupt trigger level for recv_fifo */
-    uint8_t recv_fifo_itl;
+    uint32_t recv_fifo_itl;
 
     QEMUTimer *fifo_timeout_timer;
     int timeout_ipending;           /* timeout interrupt pending state */
@@ -81,6 +84,9 @@ struct SerialState {
 
 extern const VMStateDescription vmstate_serial;
 extern const MemoryRegionOps serial_io_ops;
+
+void serial_set_divisor_fraction(struct SerialState *s, uint32_t value,
+                                 uint8_t bits);
 
 #define TYPE_SERIAL "serial"
 OBJECT_DECLARE_SIMPLE_TYPE(SerialState, SERIAL)
