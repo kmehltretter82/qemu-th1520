@@ -417,6 +417,25 @@ static void riscv_cpu_validate_v(CPURISCVState *env, RISCVCPUConfig *cfg,
     }
 }
 
+static bool riscv_cpu_c910_allows_legacy_ext(RISCVCPU *cpu,
+                                             const RISCVIsaExtData *edata)
+{
+    /*
+     * C910 reports Privileged ISA 1.10 but implements Zfh and the scalar
+     * XThead extensions.  Their instruction semantics do not depend on the
+     * newer privileged architecture version used as their generic QEMU
+     * registration floor.  Ziccrse names the legacy counter behavior that
+     * this core also exposes in its hardware device tree.
+     */
+    if (!object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910)) {
+        return false;
+    }
+
+    return !strcmp(edata->name, "zfh") ||
+           !strcmp(edata->name, "ziccrse") ||
+           g_str_has_prefix(edata->name, "xthead");
+}
+
 static void riscv_cpu_disable_priv_spec_isa_exts(RISCVCPU *cpu)
 {
     CPURISCVState *env = &cpu->env;
@@ -425,7 +444,8 @@ static void riscv_cpu_disable_priv_spec_isa_exts(RISCVCPU *cpu)
     /* Force disable extensions if priv spec version does not match */
     for (edata = isa_edata_arr; edata && edata->name; edata++) {
         if (isa_ext_is_enabled(cpu, edata->ext_enable_offset) &&
-            (env->priv_ver < edata->min_version)) {
+            (env->priv_ver < edata->min_version) &&
+            !riscv_cpu_c910_allows_legacy_ext(cpu, edata)) {
             /*
              * These two extensions are always enabled as they were supported
              * by QEMU before they were added as extensions in the ISA.
@@ -483,7 +503,9 @@ static void riscv_cpu_update_cfg(RISCVCPU *cpu)
     cpu->cfg.ext_sha = riscv_has_ext(&cpu->env, RVH) &&
                        cpu->cfg.ext_ssstateen;
 
-    cpu->cfg.ext_ziccrse = cpu->cfg.has_priv_1_11;
+    if (cpu->cfg.has_priv_1_11) {
+        cpu->cfg.ext_ziccrse = true;
+    }
 }
 
 static void riscv_cpu_validate_g(RISCVCPU *cpu)

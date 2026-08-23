@@ -3527,6 +3527,47 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .vext_spec = VEXT_VERSION_1_00_0,
     ),
 
+    /*
+     * The C910 in TH1520 implements T-Head's pre-ratification vector ISA,
+     * not ratified RVV 1.0.  Keep vectors disabled until XTheadVector is
+     * modeled; advertising RVV here would make guests execute incompatible
+     * encodings.  Target C9xx cores report marchid and mimpid as zero, which
+     * Linux also uses to select the applicable T-Head errata.
+     *
+     * Remaining CPU validation items are tracked in
+     * docs/devel/beaglev-ahead-hardware-validation.md.
+     */
+    DEFINE_RISCV_CPU(TYPE_RISCV_CPU_THEAD_C910, TYPE_RISCV_VENDOR_CPU,
+        .misa_mxl_max = MXL_RV64,
+        .misa_ext = RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU,
+        .priv_spec = PRIV_VERSION_1_10_0,
+
+        .cfg.ext_ziccrse = true,
+        .cfg.ext_zicntr = true,
+        .cfg.ext_zicsr = true,
+        .cfg.ext_zifencei = true,
+        .cfg.ext_zihpm = true,
+        .cfg.ext_zfh = true,
+        .cfg.ext_xtheadba = true,
+        .cfg.ext_xtheadbb = true,
+        .cfg.ext_xtheadbs = true,
+        .cfg.ext_xtheadcmo = true,
+        .cfg.ext_xtheadcondmov = true,
+        .cfg.ext_xtheadfmemidx = true,
+        .cfg.ext_xtheadmac = true,
+        .cfg.ext_xtheadmemidx = true,
+        .cfg.ext_xtheadmempair = true,
+        .cfg.ext_xtheadsync = true,
+        .cfg.pmp = true,
+        .cfg.mmu = true,
+
+        .cfg.mvendorid = THEAD_VENDOR_ID,
+        .cfg.max_satp_mode = VM_1_10_SV39,
+#if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
+        .custom_csrs = th_csr_list,
+#endif
+    ),
+
     DEFINE_RISCV_CPU(TYPE_RISCV_CPU_TT_ASCALON, TYPE_RISCV_VENDOR_CPU,
         .misa_mxl_max = MXL_RV64,
         .misa_ext = RVG | RVC | RVS | RVU | RVH | RVV,

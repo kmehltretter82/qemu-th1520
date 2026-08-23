@@ -9,6 +9,16 @@ config IBEX
 
 # RISC-V machines in alphabetical order
 
+config BEAGLEV_AHEAD
+    bool
+    default y
+    depends on RISCV64
+    select DEVICE_TREE
+    select RISCV_ACLINT
+    select SERIAL_MM
+    select SIFIVE_PLIC
+    select UNIMP
+
 config MICROCHIP_PFSOC
     bool
     default y

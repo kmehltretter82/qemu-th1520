@@ -24,6 +24,17 @@ class RiscvOpenSBI(QemuSystemTest):
         self.set_machine('spike')
         self.boot_opensbi()
 
+    def test_riscv_beaglev_ahead(self):
+        self.set_machine('beaglev-ahead')
+        self.vm.set_console()
+        self.vm.launch()
+        wait_for_console_pattern(self, 'Platform Name               : BeagleV Ahead')
+        wait_for_console_pattern(self, 'Platform HART Count         : 4')
+        wait_for_console_pattern(self,
+                                 'Platform Timer Device       : aclint-mtimer @ 3000000Hz')
+        wait_for_console_pattern(self, 'Platform Console Device     : uart8250')
+        wait_for_console_pattern(self, 'Boot HART Priv Version      : v1.10')
+
     def test_riscv_sifive_u(self):
         self.set_machine('sifive_u')
         self.boot_opensbi()
