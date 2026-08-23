@@ -14,6 +14,7 @@
 #include "qemu/module.h"
 #include "hw/i2c/i2c.h"
 #include "hw/nvram/eeprom_at24c.h"
+#include "migration/vmstate.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "system/block-backend.h"
@@ -234,6 +235,20 @@ static const Property at24c_eeprom_props[] = {
     DEFINE_PROP_DRIVE("drive", EEPROMState, blk),
 };
 
+static const VMStateDescription vmstate_at24c_eeprom = {
+    .name = TYPE_AT24C_EE,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_I2C_SLAVE(parent_obj, EEPROMState),
+        VMSTATE_UINT16(cur, EEPROMState),
+        VMSTATE_BOOL(changed, EEPROMState),
+        VMSTATE_UINT8(haveaddr, EEPROMState),
+        VMSTATE_VBUFFER_UINT32(mem, EEPROMState, 1, NULL, rsize),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static
 void at24c_eeprom_class_init(ObjectClass *klass, const void *data)
 {
@@ -241,6 +256,7 @@ void at24c_eeprom_class_init(ObjectClass *klass, const void *data)
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
     dc->realize = &at24c_eeprom_realize;
+    dc->vmsd = &vmstate_at24c_eeprom;
     k->event = &at24c_eeprom_event;
     k->recv = &at24c_eeprom_recv;
     k->send = &at24c_eeprom_send;
