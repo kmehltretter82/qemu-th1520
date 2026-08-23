@@ -311,6 +311,8 @@ const RISCVIsaExtData isa_edata_arr[] = {
     ISA_EXT_DATA_ENTRY(xtheadmemidx, PRIV_VERSION_1_11_0, ext_xtheadmemidx),
     ISA_EXT_DATA_ENTRY(xtheadmempair, PRIV_VERSION_1_11_0, ext_xtheadmempair),
     ISA_EXT_DATA_ENTRY(xtheadsync, PRIV_VERSION_1_11_0, ext_xtheadsync),
+    ISA_EXT_DATA_ENTRY(xtheadvector, PRIV_VERSION_1_10_0, ext_xtheadvector),
+    ISA_EXT_DATA_ENTRY(xtheadzvamo, PRIV_VERSION_1_10_0, ext_xtheadzvamo),
     ISA_EXT_DATA_ENTRY(xventanacondops, PRIV_VERSION_1_12_0, ext_XVentanaCondOps),
 
     { },
@@ -712,7 +714,8 @@ static void riscv_cpu_dump_state(CPUState *cs, FILE *f, int flags)
             }
         }
     }
-    if (riscv_cpu_cfg(env)->ext_zve32x && (flags & CPU_DUMP_VPU)) {
+    if ((riscv_cpu_cfg(env)->ext_zve32x ||
+         riscv_cpu_cfg(env)->ext_xtheadvector) && (flags & CPU_DUMP_VPU)) {
         static const int dump_rvv_csrs[] = {
                     CSR_VSTART,
                     CSR_VXSAT,
@@ -3538,11 +3541,13 @@ static const TypeInfo riscv_cpu_type_infos[] = {
     ),
 
     /*
-     * The C910 in TH1520 implements T-Head's pre-ratification vector ISA,
-     * not ratified RVV 1.0.  Keep vectors disabled until XTheadVector is
-     * modeled; advertising RVV here would make guests execute incompatible
-     * encodings.  Target C9xx cores report marchid and mimpid as zero, which
-     * Linux also uses to select the applicable T-Head errata.
+     * The C910 in TH1520 implements T-Head's pre-ratification XTheadVector
+     * ISA, not ratified RVV 1.0.  Do not set misa.V in misa_ext: the CSR read
+     * path supplies the identifying V bit while the ratified decoder remains
+     * disabled.  XTheadZvamo is a separate extension and stays disabled until
+     * CPU-013 in the hardware-validation ledger is resolved.  Target C9xx
+     * cores report marchid and mimpid as zero, which Linux also uses to select
+     * the applicable T-Head errata.
      *
      * Remaining CPU validation items are tracked in
      * docs/devel/beaglev-ahead-hardware-validation.md.
@@ -3569,9 +3574,12 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_xtheadmemidx = true,
         .cfg.ext_xtheadmempair = true,
         .cfg.ext_xtheadsync = true,
+        .cfg.ext_xtheadvector = true,
         .cfg.pmp = true,
         .cfg.pmp_addr_bits = 40,
         .cfg.mmu = true,
+        .cfg.vlenb = 128 >> 3,
+        .cfg.elen = 64,
 
         .cfg.mvendorid = THEAD_VENDOR_ID,
         .cfg.max_satp_mode = VM_1_10_SV39,

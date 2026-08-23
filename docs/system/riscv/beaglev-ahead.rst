@@ -13,6 +13,8 @@ The machine currently provides:
 
 * four T-Head C910 RV64 harts at hart IDs 0 through 3;
 * the scalar RV64IMAFDC, Zfh, and implemented scalar XThead instructions;
+* XTheadVector 1.0, derived from Vector 0.7.1, with 128-bit vector
+  registers and the six T-Head vector CSRs;
 * the C910 Privileged ISA 1.10 identity, Sv39 MMU, PMP, and T-Head custom CSR
   aperture;
 * 4 GiB RAM at ``0x0000000000``;
@@ -23,7 +25,8 @@ The machine currently provides:
 * the UART0 16550 register subset at ``0xffe7014000`` and PLIC interrupt 36.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, memory,
-and cache topology bindings as upstream Linux's BeagleV Ahead device tree.
+and cache topology bindings as upstream Linux's BeagleV Ahead device tree.  It
+advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every C910 hart.
 
 Boot options
 ------------
@@ -52,10 +55,20 @@ CPU limitation
 
 The real C910 implements T-Head's pre-ratification XTheadVector ISA, derived
 from RISC-V Vector 0.7.1 with a 128-bit vector length.  Its encodings and some
-semantics conflict with ratified RVV 1.0.  The current CPU model therefore does
-not advertise vectors; selecting RVV 1.0 would be incorrect.  XTheadVector,
-MAEE page-table attributes, full custom-CSR behavior, and hardware-accurate
-performance events remain to be implemented.
+semantics conflict with ratified RVV 1.0.  QEMU therefore uses a separate
+``xtheadvector`` feature and decoder; it reports the identifying ``misa.V``
+bit without enabling the ratified RVV 1.0 decoder.  ``XTheadZvamo`` is treated
+as a distinct optional extension and is conservatively disabled for C910
+pending physical-board confirmation.
+
+The XTheadVector engine covers the frozen instruction set, CSR/status layout,
+debug register file, reset, and migration state.  Current regression coverage
+is an architectural smoke test rather than the exhaustive and differential
+coverage needed to claim silicon equivalence.  Likewise, MAEE PTE attribute
+bits are accepted but their cacheability and ordering effects are not modeled;
+some custom CSRs remain placeholders and performance events are not
+hardware-accurate.  These uncertainties are itemized in the hardware
+validation ledger.
 
 Peripheral limitations
 ----------------------

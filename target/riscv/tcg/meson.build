@@ -2,6 +2,7 @@ if 'CONFIG_TCG' not in config_all_accel
   subdir_done()
 endif
 
+# xtheadvector_helper.c is included by vector_helper.c to share static helpers.
 riscv_ss.add(files(
   'bitmanip_helper.c',
  'cpu_helper.c',
@@ -25,5 +26,3 @@ riscv_system_ss.add(files(
   'pmu.c',
   'th_csr.c',
 ))
-
-

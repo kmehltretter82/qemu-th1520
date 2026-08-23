@@ -164,7 +164,8 @@ static bool vector_needed(void *opaque)
     CPURISCVState *env = &cpu->env;
 
     return kvm_enabled() ? riscv_has_ext(env, RVV) :
-                           riscv_cpu_cfg(env)->ext_zve32x;
+                           (riscv_cpu_cfg(env)->ext_zve32x ||
+                            riscv_cpu_cfg(env)->ext_xtheadvector);
 }
 
 static const VMStateDescription vmstate_vector = {

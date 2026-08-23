@@ -746,6 +746,14 @@ typedef enum {
 #define THEAD_MXSTATUS_MAEE       BIT_ULL(21)
 #define THEAD_MXSTATUS_THEADISAEE BIT_ULL(22)
 
+/* XTheadVector 0.7.1-derived status and vtype layouts. */
+#define THEAD_MSTATUS_VS          0x01800000
+#define THEAD_FCSR_VXSAT          BIT(8)
+#define THEAD_FCSR_VXRM           MAKE_64BIT_MASK(9, 2)
+#define THEAD_VTYPE_VLMUL         MAKE_64BIT_MASK(0, 2)
+#define THEAD_VTYPE_VSEW          MAKE_64BIT_MASK(2, 3)
+#define THEAD_VTYPE_RESERVED      MAKE_64BIT_MASK(5, 3)
+
 /* Page table PPN shift amount */
 #define PTE_PPN_SHIFT       10
 

@@ -98,12 +98,25 @@ static RISCVException fs(CPURISCVState *env, int csrno)
 
 static RISCVException vs(CPURISCVState *env, int csrno)
 {
-    if (riscv_cpu_cfg(env)->ext_zve32x) {
+    if (riscv_cpu_cfg(env)->ext_zve32x ||
+        riscv_cpu_cfg(env)->ext_xtheadvector) {
 #if !defined(CONFIG_USER_ONLY)
         if (!env->debugger && !riscv_cpu_vector_enabled(env)) {
             return RISCV_EXCP_ILLEGAL_INST;
         }
 #endif
+        if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+            if (csrno == CSR_VCSR) {
+                return RISCV_EXCP_ILLEGAL_INST;
+            }
+#if !defined(CONFIG_USER_ONLY)
+            if (!env->debugger &&
+                (csrno == CSR_VXSAT || csrno == CSR_VXRM) &&
+                !riscv_cpu_fp_enabled(env)) {
+                return RISCV_EXCP_ILLEGAL_INST;
+            }
+#endif
+        }
         return RISCV_EXCP_NONE;
     }
     return RISCV_EXCP_ILLEGAL_INST;
@@ -968,6 +981,13 @@ static RISCVException read_vtype(CPURISCVState *env, int csrno,
         g_assert_not_reached();
     }
     *val = (target_ulong)vill | env->vtype;
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        *val = set_field(*val, THEAD_VTYPE_VLMUL,
+                         FIELD_EX64(env->vtype, VTYPE, VLMUL));
+        *val = set_field(*val, THEAD_VTYPE_VSEW,
+                         FIELD_EX64(env->vtype, VTYPE, VSEW));
+        *val &= ~THEAD_VTYPE_RESERVED;
+    }
     return RISCV_EXCP_NONE;
 }
 
@@ -1938,10 +1958,33 @@ static uint64_t add_status_sd(RISCVMXL xl, uint64_t status)
     return status;
 }
 
+static target_ulong thead_status_to_guest(CPURISCVState *env,
+                                           target_ulong status)
+{
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        status = set_field(status, THEAD_MSTATUS_VS,
+                           get_field(status, MSTATUS_VS));
+        status &= ~MSTATUS_VS;
+    }
+    return status;
+}
+
+static target_ulong thead_status_from_guest(CPURISCVState *env,
+                                             target_ulong status)
+{
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        status = set_field(status, MSTATUS_VS,
+                           get_field(status, THEAD_MSTATUS_VS));
+        status &= ~THEAD_MSTATUS_VS;
+    }
+    return status;
+}
+
 static RISCVException read_mstatus(CPURISCVState *env, int csrno,
                                    target_ulong *val)
 {
-    *val = add_status_sd(riscv_cpu_mxl(env), env->mstatus);
+    *val = thead_status_to_guest(env,
+        add_status_sd(riscv_cpu_mxl(env), env->mstatus));
     return RISCV_EXCP_NONE;
 }
 
@@ -2038,6 +2081,7 @@ static RISCVException write_mstatus(CPURISCVState *env, int csrno,
      * MPP field have been made WARL since priv version 1.11. However,
      * legalization for it will not break any software running on 1.10.
      */
+    val = thead_status_from_guest(env, val);
     val = legalize_mpp(env, get_field(mstatus, MSTATUS_MPP), val);
 
     /* flush tlb on mstatus fields that affect VM */
@@ -2053,7 +2097,8 @@ static RISCVException write_mstatus(CPURISCVState *env, int csrno,
         mask |= MSTATUS_FS;
     }
 
-    if (riscv_cpu_cfg(env)->ext_zve32x) {
+    if (riscv_cpu_cfg(env)->ext_zve32x ||
+        riscv_cpu_cfg(env)->ext_xtheadvector) {
         mask |= MSTATUS_VS;
     }
 
@@ -2133,7 +2178,12 @@ static RISCVException read_mstatus_i128(CPURISCVState *env, int csrno,
 static RISCVException read_misa_i128(CPURISCVState *env, int csrno,
                                      Int128 *val)
 {
-    *val = int128_make128(env->misa_ext, (uint64_t)MXL_RV128 << 62);
+    uint32_t misa_ext = env->misa_ext;
+
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        misa_ext |= RVV;
+    }
+    *val = int128_make128(misa_ext, (uint64_t)MXL_RV128 << 62);
     return RISCV_EXCP_NONE;
 }
 
@@ -2156,6 +2206,9 @@ static RISCVException read_misa(CPURISCVState *env, int csrno,
     }
 
     *val = misa | env->misa_ext;
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        *val |= RVV;
+    }
     return RISCV_EXCP_NONE;
 }
 
@@ -4020,7 +4073,8 @@ static RISCVException read_sstatus(CPURISCVState *env, int csrno,
         mask |= SSTATUS_SDT;
     }
     /* TODO: Use SXL not MXL. */
-    *val = add_status_sd(riscv_cpu_mxl(env), env->mstatus & mask);
+    *val = thead_status_to_guest(env,
+        add_status_sd(riscv_cpu_mxl(env), env->mstatus & mask));
     return RISCV_EXCP_NONE;
 }
 
@@ -4041,7 +4095,15 @@ static RISCVException write_sstatus(CPURISCVState *env, int csrno,
     if (riscv_cpu_cfg(env)->ext_ssdbltrp) {
         mask |= SSTATUS_SDT;
     }
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        val = set_field(val, MSTATUS_VS,
+                        get_field(val, THEAD_MSTATUS_VS));
+    }
     target_ulong newval = (env->mstatus & ~mask) | (val & mask);
+    if (riscv_cpu_cfg(env)->ext_xtheadvector) {
+        newval = set_field(newval, THEAD_MSTATUS_VS,
+                           get_field(newval, MSTATUS_VS));
+    }
     return write_mstatus(env, CSR_MSTATUS, newval, ra);
 }
 

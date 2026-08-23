@@ -347,7 +347,7 @@ void riscv_cpu_register_gdb_regs_for_features(CPUState *cs)
         gdb_register_coprocessor(cs, riscv_gdb_get_fpu, riscv_gdb_set_fpu,
                                  gdb_find_static_feature("riscv-32bit-fpu.xml"));
     }
-    if (cpu->cfg.ext_zve32x) {
+    if (cpu->cfg.ext_zve32x || cpu->cfg.ext_xtheadvector) {
         gdb_register_coprocessor(cs, riscv_gdb_get_vector,
                                  riscv_gdb_set_vector,
                                  ricsv_gen_dynamic_vector_feature(cs, cs->gdb_num_regs));

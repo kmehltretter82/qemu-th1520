@@ -96,9 +96,11 @@ typedef struct DisasContext {
      *     1/2      111      -1
      */
     int8_t lmul;
+    uint8_t mlen;
     uint8_t sew;
     uint8_t vta;
     uint8_t vma;
+    bool bf16;
     bool cfg_vta_all_1s;
     bool vstart_eq_zero;
     bool vl_eq_vlmax;
@@ -1218,6 +1220,8 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
 #include "decode-xmips.c.inc"
 #include "decode-xlrbr.c.inc"
 #include "insn_trans/trans_xthead.c.inc"
+#include "decode-xtheadvector.c.inc"
+#include "insn_trans/trans_xtheadvector.c.inc"
 #include "insn_trans/trans_xventanacondops.c.inc"
 #include "insn_trans/trans_xmips.c.inc"
 #include "insn_trans/trans_xlrbr.c.inc"
@@ -1239,6 +1243,7 @@ const RISCVDecoder decoder_table[] = {
     { always_true_p, decode_insn32 },
     { has_xmips_p, decode_xmips},
     { has_xthead_p, decode_xthead},
+    { has_xtheadvector_p, decode_xtheadvector},
     { has_XVentanaCondOps_p, decode_XVentanaCodeOps},
     { has_xlrbr_p, decode_xlrbr},
 };
@@ -1330,6 +1335,8 @@ static void riscv_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     ctx->lmul = sextract32(FIELD_EX32(tb_flags, TB_FLAGS, LMUL), 0, 3);
     ctx->vta = FIELD_EX32(tb_flags, TB_FLAGS, VTA) && cpu->cfg.rvv_ta_all_1s;
     ctx->vma = FIELD_EX32(tb_flags, TB_FLAGS, VMA) && cpu->cfg.rvv_ma_all_1s;
+    /* C910 XTheadVector implements IEEE binary16, not vendor BF16 mode. */
+    ctx->bf16 = false;
     ctx->cfg_vta_all_1s = cpu->cfg.rvv_ta_all_1s;
     ctx->vstart_eq_zero = FIELD_EX32(tb_flags, TB_FLAGS, VSTART_EQ_ZERO);
     ctx->vl_eq_vlmax = FIELD_EX32(tb_flags, TB_FLAGS, VL_EQ_VLMAX);
@@ -1357,6 +1364,9 @@ static void riscv_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     ctx->decoders = cpu->decoders;
     ctx->mo_endianness = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, BIG_ENDIAN)
                          ? MO_BE : MO_LE;
+    if (cpu->cfg.ext_xtheadvector) {
+        ctx->mlen = 1 << (ctx->sew + 3 - ctx->lmul);
+    }
 }
 
 static void riscv_tr_tb_start(DisasContextBase *db, CPUState *cpu)

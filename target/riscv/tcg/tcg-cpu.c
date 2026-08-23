@@ -109,7 +109,7 @@ static TCGTBCPUState riscv_get_tb_cpu_state(CPUState *cs)
     uint64_t ext_flags = 0;
     bool pm_signext = riscv_cpu_virt_mem_enabled(env, false);
 
-    if (cpu->cfg.ext_zve32x) {
+    if (cpu->cfg.ext_zve32x || cpu->cfg.ext_xtheadvector) {
         /*
          * If env->vl equals to VLMAX, we can use generic vector operation
          * expanders (GVEC) to accerlate the vector operations.
@@ -393,7 +393,19 @@ static void riscv_cpu_validate_v(CPURISCVState *env, RISCVCPUConfig *cfg,
     uint32_t min_vlen;
     uint32_t vlen = cfg->vlenb << 3;
 
-    if (riscv_has_ext(env, RVV)) {
+    if (cfg->ext_xtheadzvamo && !cfg->ext_xtheadvector) {
+        error_setg(errp, "XTheadZvamo requires XTheadVector");
+        return;
+    }
+
+    if (cfg->ext_xtheadzvamo && !riscv_has_ext(env, RVA)) {
+        error_setg(errp, "XTheadZvamo requires A");
+        return;
+    }
+
+    if (cfg->ext_xtheadvector) {
+        min_vlen = 32;
+    } else if (riscv_has_ext(env, RVV)) {
         min_vlen = 128;
     } else if (cfg->ext_zve64x) {
         min_vlen = 64;
@@ -422,6 +434,12 @@ static void riscv_cpu_validate_v(CPURISCVState *env, RISCVCPUConfig *cfg,
                          "to be greater than or equal to ELEN");
         return;
     }
+
+    if (cfg->ext_xtheadvector && riscv_has_ext(env, RVV)) {
+        error_setg(errp, "XTheadVector is incompatible with RVV 1.0");
+        return;
+    }
+
 }
 
 static bool riscv_cpu_c910_allows_legacy_ext(RISCVCPU *cpu,

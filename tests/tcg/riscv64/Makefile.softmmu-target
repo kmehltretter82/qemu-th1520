@@ -41,5 +41,10 @@ comma:= ,
 run-test-crc32: test-crc32
 	$(call run-test, $<, $(QEMU) -cpu rv64$(comma)xlrbr=true $(QEMU_OPTS)$<)
 
+EXTRA_RUNS += run-test-xtheadvector
+test-xtheadvector: test-xtheadvector.o
+run-test-xtheadvector: test-xtheadvector
+	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
+
 # We don't currently support the multiarch system tests
 undefine MULTIARCH_TESTS

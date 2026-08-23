@@ -96,6 +96,13 @@ FIELD(VDATA, VMA, 6, 1)
 FIELD(VDATA, NF, 7, 4)
 FIELD(VDATA, WD, 7, 1)
 
+/* XTheadVector mask elements occupy MLEN = SEW / LMUL bits. */
+FIELD(VDATA_TH, MLEN, 0, 8)
+FIELD(VDATA_TH, VM, 8, 1)
+FIELD(VDATA_TH, LMUL, 9, 2)
+FIELD(VDATA_TH, NF, 11, 4)
+FIELD(VDATA_TH, WD, 11, 1)
+
 /* float point classify helpers */
 target_ulong fclass_h_bf16(uint64_t frs1);
 target_ulong fclass_h(uint64_t frs1);

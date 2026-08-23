@@ -73,10 +73,16 @@ The implementation must cite and pin the evidence used for each block:
 * Official BeagleBoard hardware repository at the baseline above:
   https://github.com/beagleboard/beaglev-ahead
 * T-Head extension specifications:
-  https://github.com/XUANTIE-RV/thead-extension-spec
+  https://github.com/XUANTIE-RV/thead-extension-spec at commit
+  e744688edd2f88be2e032c67e20789030436ac08
 * Official openC910 RTL at commit
   b91c90914c19f114d35c8f6b73408eb241ed847c:
   https://github.com/XUANTIE-RV/openc910
+* Alibaba/XuanTie QEMU's XTheadVector implementation at commit
+  3287d345c7f5d60d5c8774d90752f5f710744f85, reconciled with the older
+  upstream RVV 0.7.1 implementation at
+  e523773040ed914b60c8b68c25a96c88b2bb112a.  The retained GPL and copyright
+  notices and upstream provenance review are tracked as DOC-003.
 * Firmware and kernel versions used by an official BeagleV Ahead image, pinned
   by commit and image hash before compatibility work starts.
 
@@ -139,6 +145,26 @@ validation.
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
 | Migration | Not applicable until devices exist | VMState for every persistent/volatile modeled state item |
+
+## Workspace implementation status
+
+The branch is being advanced in reviewable milestones rather than treating
+the roadmap as a claim of completion.  At the current milestone it contains:
+
+* a dependency-minimal ``beaglev-ahead`` machine with four ``thead-c910``
+  harts, the physical RAM/SRAM/ROM map, PLIC, CLINT, UART0, generated DT, and
+  direct OpenSBI/kernel boot;
+* C910 scalar identity, 40-bit physical-address constraints, the initial
+  custom CSR bank, migration state, and provisional MAEE PTE acceptance;
+* XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
+  and CSR behavior, debugger/migration integration, and focused qtest/TCG
+  smoke coverage; and
+* a minimal device build that excludes unrelated boards and most unused
+  devices without deleting shared source prematurely.
+
+This does not close Phases 1 through 3: their exhaustive, sanitizer,
+migration, Linux, and physical-differential gates still apply.  All provisional
+behavior is linked to an open item in the companion ledger.
 
 ## Intended source architecture
 

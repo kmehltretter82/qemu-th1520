@@ -5871,3 +5871,10 @@ GEN_VEXT_INT_EXT(vsext_vf2_d, int64_t, int32_t, H8, H4)
 GEN_VEXT_INT_EXT(vsext_vf4_w, int32_t, int8_t,  H4, H1)
 GEN_VEXT_INT_EXT(vsext_vf4_d, int64_t, int16_t, H8, H2)
 GEN_VEXT_INT_EXT(vsext_vf8_d, int64_t, int8_t,  H8, H1)
+
+/*
+ * XTheadVector shares the scalar arithmetic primitives above.  Keep its
+ * version-0.7.1 execution engine in this translation unit so those internal
+ * primitives do not become an exported target/riscv API.
+ */
+#include "xtheadvector_helper.c"

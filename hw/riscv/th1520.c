@@ -42,6 +42,11 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_BROM]  = { 0xffffd00000, 0x00100000 },
 };
 
+static GlobalProperty beaglev_ahead_cpu_defaults[] = {
+    /* CPU-011: do not advertise standardized Sdtrig without evidence. */
+    { TYPE_RISCV_CPU_THEAD_C910, "debug", "off" },
+};
+
 static DeviceState *th1520_create_plic(void)
 {
     g_autofree char *hart_config =
@@ -199,6 +204,8 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_string_array(ms->fdt, cpu_name, "compatible",
                                       (char **)&cpu_compat,
                                       ARRAY_SIZE(cpu_compat));
+        qemu_fdt_setprop_cell(ms->fdt, cpu_name, "thead,vlenb",
+                              TH1520_C910_VLENB);
         qemu_fdt_setprop_cell(ms->fdt, cpu_name, "i-cache-block-size", 64);
         qemu_fdt_setprop_cell(ms->fdt, cpu_name, "i-cache-size", 64 * KiB);
         qemu_fdt_setprop_cell(ms->fdt, cpu_name, "i-cache-sets", 512);
@@ -365,6 +372,8 @@ static void beaglev_ahead_machine_class_init(ObjectClass *oc,
     mc->default_ram_size = 4 * GiB;
     mc->default_ram_id = "beaglev-ahead.ram";
     mc->no_cdrom = true;
+    compat_props_add(mc->compat_props, beaglev_ahead_cpu_defaults,
+                     G_N_ELEMENTS(beaglev_ahead_cpu_defaults));
 }
 
 static const TypeInfo beaglev_ahead_types[] = {

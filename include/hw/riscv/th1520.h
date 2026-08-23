@@ -42,6 +42,7 @@ enum {
 };
 
 #define TH1520_C910_HARTS 4
+#define TH1520_C910_VLENB 16
 #define TH1520_TIMEBASE_FREQ 3000000
 
 /* riscv,ndev describes IDs 1..240; QEMU's PLIC count includes ID zero. */

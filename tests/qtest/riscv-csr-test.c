@@ -18,9 +18,18 @@
 #include "libqtest.h"
 
 #define CSR_MVENDORID       0xf11
+#define CSR_MIMPID          0xf13
 #define CSR_MISELECT        0x350
+#define CSR_MSTATUS         0x300
+#define CSR_MISA            0x301
 #define CSR_SATP            0x180
 #define CSR_PMPADDR0        0x3b0
+#define CSR_VSTART          0x008
+#define CSR_VXSAT           0x009
+#define CSR_VXRM            0x00a
+#define CSR_VL              0xc20
+#define CSR_VTYPE           0xc21
+#define CSR_VLENB           0xc22
 #define CSR_TH_SXSTATUS     0x5c0
 #define CSR_TH_MXSTATUS     0x7c0
 #define CSR_TH_MHCR         0x7c1
@@ -90,6 +99,10 @@ static void run_test_thead_c910_csrs(void)
     uint64_t satp_expected = (8ULL << 60) | (0xffffULL << 44) |
                              ((1ULL << 28) - 1);
 
+    g_assert_cmphex(get_csr(qts, CSR_MVENDORID), ==, 0x5b7);
+    g_assert_cmphex(get_csr(qts, CSR_MIMPID), ==, 0);
+    g_assert_cmphex(get_csr(qts, CSR_MISA) & (1ULL << 21), ==,
+                    1ULL << 21);
     g_assert_cmphex(get_csr(qts, CSR_TH_MXSTATUS), ==, 0xc0638000);
     g_assert_cmphex(get_csr(qts, CSR_TH_SXSTATUS), ==, 0xc0638000);
     g_assert_cmphex(get_csr(qts, CSR_TH_MHCR), ==, 0x108);
@@ -118,6 +131,20 @@ static void run_test_thead_c910_csrs(void)
                     (1ULL << 38) - 1);
     set_csr(qts, CSR_SATP, (8ULL << 60) | ((1ULL << 60) - 1));
     g_assert_cmphex(get_csr(qts, CSR_SATP), ==, satp_expected);
+
+    /* XTheadVector uses T-Head's status position and has no vcsr CSR. */
+    set_csr(qts, CSR_MSTATUS, (1ULL << 13) | (1ULL << 23));
+    g_assert_cmphex(get_csr(qts, CSR_MSTATUS) & (3ULL << 23), ==,
+                    1ULL << 23);
+    g_assert_cmphex(get_csr(qts, CSR_VLENB), ==, 16);
+    g_assert_cmphex(get_csr(qts, CSR_VL), ==, 0);
+    g_assert_cmphex(get_csr(qts, CSR_VTYPE), ==, 1ULL << 63);
+    set_csr(qts, CSR_VSTART, 7);
+    g_assert_cmphex(get_csr(qts, CSR_VSTART), ==, 7);
+    set_csr(qts, CSR_VXRM, 2);
+    g_assert_cmphex(get_csr(qts, CSR_VXRM), ==, 2);
+    set_csr(qts, CSR_VXSAT, 1);
+    g_assert_cmphex(get_csr(qts, CSR_VXSAT), ==, 1);
 
     qtest_quit(qts);
 }
