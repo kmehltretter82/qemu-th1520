@@ -31,6 +31,12 @@
 #define TH1520_UART3_BASE          0xffe7f04000ULL
 #define TH1520_UART4_BASE          0xfff7f08000ULL
 #define TH1520_UART5_BASE          0xfff7f0c000ULL
+#define TH1520_GPIO0_BASE          0xffec005000ULL
+#define TH1520_GPIO1_BASE          0xffec006000ULL
+#define TH1520_GPIO2_BASE          0xffe7f34000ULL
+#define TH1520_GPIO3_BASE          0xffe7f38000ULL
+#define TH1520_GPIO4_BASE          0xfffff52000ULL
+#define TH1520_AOGPIO_BASE         0xfffff41000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -75,6 +81,24 @@
 #define DW_UART_SCR_OFFSET         0x1c
 #define DW_UART_CTR_OFFSET         0xfc
 
+#define DW_GPIO_SWPORTA_DR         0x00
+#define DW_GPIO_SWPORTA_DDR        0x04
+#define DW_GPIO_SWPORTA_CTL        0x08
+#define DW_GPIO_INTEN              0x30
+#define DW_GPIO_INTMASK            0x34
+#define DW_GPIO_INTTYPE_LEVEL      0x38
+#define DW_GPIO_INT_POLARITY       0x3c
+#define DW_GPIO_INTSTATUS          0x40
+#define DW_GPIO_RAW_INTSTATUS      0x44
+#define DW_GPIO_PORTA_DEBOUNCE     0x48
+#define DW_GPIO_PORTA_EOI          0x4c
+#define DW_GPIO_EXT_PORTA          0x50
+#define DW_GPIO_LS_SYNC            0x60
+#define DW_GPIO_ID_CODE            0x64
+#define DW_GPIO_VER_ID_CODE        0x6c
+#define DW_GPIO_CONFIG_REG2        0x70
+#define DW_GPIO_CONFIG_REG1        0x74
+
 #define CSR_TIME                   0xc01
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
@@ -94,6 +118,12 @@
 #define TH1520_UART3_IRQ           39
 #define TH1520_UART4_IRQ           40
 #define TH1520_UART5_IRQ           41
+#define TH1520_GPIO0_IRQ           56
+#define TH1520_GPIO1_IRQ           57
+#define TH1520_GPIO2_IRQ           58
+#define TH1520_GPIO3_IRQ           59
+#define TH1520_GPIO4_IRQ           55
+#define TH1520_AOGPIO_IRQ          76
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
@@ -106,6 +136,7 @@
 #define TH1520_CLK_EMMC_SDIO       43
 #define TH1520_CLK_GMAC1           44
 #define TH1520_CLK_GMAC_AXI        48
+#define TH1520_CLK_GPIO3           49
 #define TH1520_CLK_GMAC0           50
 #define TH1520_CLK_UART0_PCLK      55
 #define TH1520_CLK_UART1_PCLK      56
@@ -113,6 +144,9 @@
 #define TH1520_CLK_UART3_PCLK      58
 #define TH1520_CLK_UART4_PCLK      59
 #define TH1520_CLK_UART5_PCLK      60
+#define TH1520_CLK_GPIO0           61
+#define TH1520_CLK_GPIO1           62
+#define TH1520_CLK_GPIO2           63
 #define TH1520_CLK_UART_SCLK       85
 
 #define TH1520_PLL_STS             0x080
@@ -310,6 +344,14 @@ typedef struct TH1520UARTController {
     bool board_enabled;
 } TH1520UARTController;
 
+typedef struct TH1520GPIOController {
+    const char *name;
+    uint64_t base;
+    uint32_t irq;
+    uint32_t ngpios;
+    int32_t clock_id;
+} TH1520GPIOController;
+
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
     { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
@@ -336,6 +378,19 @@ static const TH1520UARTController th1520_uart_controllers[] = {
       TH1520_CLK_UART4_PCLK, false },
     { "uart5", TH1520_UART5_BASE, 0x4000, TH1520_UART5_IRQ,
       TH1520_CLK_UART5_PCLK, false },
+};
+
+static const TH1520GPIOController th1520_gpio_controllers[] = {
+    { "gpio0",  TH1520_GPIO0_BASE,  TH1520_GPIO0_IRQ,  32,
+      TH1520_CLK_GPIO0 },
+    { "gpio1",  TH1520_GPIO1_BASE,  TH1520_GPIO1_IRQ,  31,
+      TH1520_CLK_GPIO1 },
+    { "gpio2",  TH1520_GPIO2_BASE,  TH1520_GPIO2_IRQ,  32,
+      TH1520_CLK_GPIO2 },
+    { "gpio3",  TH1520_GPIO3_BASE,  TH1520_GPIO3_IRQ,  23,
+      TH1520_CLK_GPIO3 },
+    { "gpio4",  TH1520_GPIO4_BASE,  TH1520_GPIO4_IRQ,  23, -1 },
+    { "aogpio", TH1520_AOGPIO_BASE, TH1520_AOGPIO_IRQ, 16, -1 },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -764,6 +819,108 @@ static void assert_uart_fdt(const void *fdt,
     g_assert_cmpstr(fdt_get_alias(fdt, alias), ==, path);
 }
 
+static uint32_t assert_gpio_fdt(const void *fdt,
+                                const TH1520GPIOController *controller,
+                                uint32_t clock_phandle)
+{
+    g_autofree char *path =
+        g_strdup_printf("/soc/gpio@%" PRIx64, controller->base);
+    g_autofree char *port =
+        g_strdup_printf("%s/gpio-controller@0", path);
+    const fdt32_t *cells;
+    const char *text;
+    char alias[8];
+    uint32_t phandle;
+    int node;
+    int len;
+
+    node = fdt_path_offset(fdt, path);
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dw-apb-gpio");
+    assert_fdt_mmio(fdt, node, controller->base, 0x1000);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#address-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#size-cells"), ==, 0);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    if (controller->clock_id >= 0) {
+        g_assert_nonnull(cells);
+        g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+        g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+        g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                        controller->clock_id);
+        text = fdt_getprop(fdt, node, "clock-names", &len);
+        g_assert_nonnull(text);
+        g_assert_cmpstr(text, ==, "bus");
+    } else {
+        g_assert_null(cells);
+        g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+        g_assert_null(fdt_getprop(fdt, node, "clock-names", &len));
+        g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+    }
+
+    node = fdt_path_offset(fdt, port);
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dw-apb-gpio-port");
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "reg"), ==, 0);
+    assert_fdt_bool(fdt, node, "gpio-controller", true);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#gpio-cells"), ==, 2);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "ngpios"), ==,
+                    controller->ngpios);
+    assert_fdt_bool(fdt, node, "interrupt-controller", true);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#interrupt-cells"), ==, 2);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+    g_assert_null(fdt_getprop(fdt, node, "gpio-ranges", &len));
+    g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+
+    phandle = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(phandle, !=, 0);
+    snprintf(alias, sizeof(alias), "gpio%u",
+             (unsigned)(controller - th1520_gpio_controllers));
+    g_assert_cmpstr(fdt_get_alias(fdt, alias), ==, port);
+
+    return phandle;
+}
+
+static void assert_led_fdt(const void *fdt, uint32_t gpio4_phandle)
+{
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, "/leds");
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "gpio-leds");
+
+    for (unsigned int i = 0; i < 5; i++) {
+        g_autofree char *path = g_strdup_printf("/leds/led-%u", i + 1);
+        g_autofree char *label = g_strdup_printf("led%u", i + 1);
+
+        node = fdt_path_offset(fdt, path);
+        g_assert_cmpint(node, >=, 0);
+        cells = fdt_getprop(fdt, node, "gpios", &len);
+        g_assert_nonnull(cells);
+        g_assert_cmpint(len, ==, 3 * sizeof(*cells));
+        g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, gpio4_phandle);
+        g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 8 + i);
+        g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, 0);
+        g_assert_cmphex(fdt_prop_u32(fdt, node, "color"), ==, 3);
+        text = fdt_getprop(fdt, node, "label", &len);
+        g_assert_nonnull(text);
+        g_assert_cmpstr(text, ==, label);
+    }
+}
+
 static void test_direct_boot_contract(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -775,6 +932,7 @@ static void test_direct_boot_contract(void)
     uint32_t cpu0_phandle;
     uint32_t osc_phandle;
     uint32_t ap_clock_phandle;
+    uint32_t gpio_phandles[ARRAY_SIZE(th1520_gpio_controllers)];
     uint32_t stmmac_axi_phandle;
     int clock_offset;
     int config_offset;
@@ -857,6 +1015,13 @@ static void test_direct_boot_contract(void)
         assert_uart_fdt(fdt, &th1520_uart_controllers[i],
                         ap_clock_phandle);
     }
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        gpio_phandles[i] = assert_gpio_fdt(fdt,
+                                           &th1520_gpio_controllers[i],
+                                           ap_clock_phandle);
+    }
+    assert_led_fdt(fdt, gpio_phandles[4]);
 
     g_assert_cmpint(fdt_path_offset(fdt, "/dmac-clock"), ==,
                     -FDT_ERR_NOTFOUND);
@@ -2216,6 +2381,163 @@ static void test_dw_uart_interrupts(void)
     qtest_quit(qts);
 }
 
+static uint32_t dw_gpio_mask(const TH1520GPIOController *controller)
+{
+    return controller->ngpios == 32 ? UINT32_MAX :
+           BIT(controller->ngpios) - 1;
+}
+
+static void assert_dw_gpio_reset_state(
+    QTestState *qts, const TH1520GPIOController *controller)
+{
+    uint64_t base = controller->base;
+
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DDR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_CTL), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTEN), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTMASK), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTTYPE_LEVEL), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INT_POLARITY), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_RAW_INTSTATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_PORTA_DEBOUNCE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_LS_SYNC), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_ID_CODE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_VER_ID_CODE), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_CONFIG_REG2), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_CONFIG_REG1), ==, 0);
+}
+
+static void test_dw_gpio_registers(void)
+{
+    const char *const gpio0_path = "/machine/soc/gpio0";
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, gpio0_path, "gpio-out");
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        const TH1520GPIOController *controller =
+            &th1520_gpio_controllers[i];
+        uint32_t mask = dw_gpio_mask(controller);
+        uint64_t base = controller->base;
+
+        assert_dw_gpio_reset_state(qts, controller);
+        qtest_writel(qts, base + DW_GPIO_SWPORTA_DR, UINT32_MAX);
+        qtest_writel(qts, base + DW_GPIO_SWPORTA_CTL, UINT32_MAX);
+        qtest_writel(qts, base + DW_GPIO_PORTA_DEBOUNCE, UINT32_MAX);
+        qtest_writel(qts, base + DW_GPIO_LS_SYNC, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DR), ==,
+                        mask);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_CTL), ==,
+                        mask);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_PORTA_DEBOUNCE),
+                        ==, mask);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_LS_SYNC), ==, 1);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==, 0);
+
+        qtest_writel(qts, base + DW_GPIO_SWPORTA_DDR, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DDR), ==,
+                        mask);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==,
+                        mask);
+
+        qtest_writel(qts, base + DW_GPIO_SWPORTA_DDR, 0);
+        qtest_writel(qts, base + DW_GPIO_SWPORTA_DR, 0);
+        qtest_writel(qts, base + DW_GPIO_SWPORTA_CTL, 0);
+        qtest_writel(qts, base + DW_GPIO_PORTA_DEBOUNCE, 0);
+        qtest_writel(qts, base + DW_GPIO_LS_SYNC, 0);
+    }
+
+    qtest_writel(qts, TH1520_GPIO0_BASE + DW_GPIO_SWPORTA_DR, BIT(5));
+    g_assert_false(qtest_get_irq(qts, 5));
+    qtest_writel(qts, TH1520_GPIO0_BASE + DW_GPIO_SWPORTA_DDR, BIT(5));
+    g_assert_true(qtest_get_irq(qts, 5));
+    qtest_writel(qts, TH1520_GPIO0_BASE + DW_GPIO_SWPORTA_DR, 0);
+    g_assert_false(qtest_get_irq(qts, 5));
+    qtest_writel(qts, TH1520_GPIO0_BASE + DW_GPIO_SWPORTA_DDR, 0);
+
+    qtest_set_irq_in(qts, gpio0_path, "gpio-in", 5, 1);
+    g_assert_true(qtest_get_irq(qts, 5));
+    g_assert_true(qtest_readl(qts, TH1520_GPIO0_BASE + DW_GPIO_EXT_PORTA) &
+                  BIT(5));
+    qtest_set_irq_in(qts, gpio0_path, "gpio-in", 5, -1);
+    g_assert_false(qtest_get_irq(qts, 5));
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        assert_dw_gpio_reset_state(qts, &th1520_gpio_controllers[i]);
+    }
+    qtest_quit(qts);
+}
+
+static void test_dw_gpio_interrupts(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        const TH1520GPIOController *controller =
+            &th1520_gpio_controllers[i];
+        g_autofree char *path =
+            g_strdup_printf("/machine/soc/%s", controller->name);
+        uint32_t pin = controller->ngpios - 1;
+        uint32_t bit = BIT(pin);
+        uint64_t base = controller->base;
+
+        qtest_writel(qts, C900_PLIC_PRIORITY(controller->irq), 5);
+        c900_plic_set_enable(qts, 1, controller->irq, true);
+
+        /* A rising edge is latched until PORTA_EOI is written. */
+        qtest_set_irq_in(qts, path, "gpio-in", pin, 0);
+        qtest_writel(qts, base + DW_GPIO_INTTYPE_LEVEL, bit);
+        qtest_writel(qts, base + DW_GPIO_INT_POLARITY, bit);
+        qtest_writel(qts, base + DW_GPIO_INTEN, bit);
+        qtest_set_irq_in(qts, path, "gpio-in", pin, 1);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_RAW_INTSTATUS),
+                        ==, bit);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==,
+                        bit);
+        g_assert_true(c900_plic_pending(qts, controller->irq));
+        assert_only_irq(qts, 0);
+        g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                        controller->irq);
+        assert_no_irq(qts);
+        qtest_writel(qts, base + DW_GPIO_PORTA_EOI, bit);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==, 0);
+        qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
+        assert_no_irq(qts);
+
+        /* Active-low level interrupts ignore EOI and obey INTMASK. */
+        qtest_writel(qts, base + DW_GPIO_INTTYPE_LEVEL, 0);
+        qtest_writel(qts, base + DW_GPIO_INT_POLARITY, 0);
+        qtest_set_irq_in(qts, path, "gpio-in", pin, 0);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==,
+                        bit);
+        assert_only_irq(qts, 0);
+        g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                        controller->irq);
+        qtest_writel(qts, base + DW_GPIO_PORTA_EOI, bit);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==,
+                        bit);
+        qtest_writel(qts, base + DW_GPIO_INTMASK, bit);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_RAW_INTSTATUS),
+                        ==, bit);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==, 0);
+        qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
+        assert_no_irq(qts);
+
+        qtest_set_irq_in(qts, path, "gpio-in", pin, 1);
+        qtest_writel(qts, base + DW_GPIO_INTMASK, 0);
+        qtest_writel(qts, base + DW_GPIO_INTEN, 0);
+        qtest_set_irq_in(qts, path, "gpio-in", pin, -1);
+        c900_plic_set_enable(qts, 1, controller->irq, false);
+        assert_no_irq(qts);
+    }
+
+    qtest_quit(qts);
+}
+
 static void test_c900_clint_reset(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -2526,6 +2848,87 @@ static void wait_for_migration_complete(QTestState *qts)
         g_usleep(10000);
     }
     g_error("migration did not complete within 30 seconds");
+}
+
+static void test_dw_gpio_migration(void)
+{
+    const TH1520GPIOController *edge_controller =
+        &th1520_gpio_controllers[2];
+    const uint32_t edge_pin = 15;
+    const uint32_t edge_bit = BIT(edge_pin);
+    g_autofree char *edge_path =
+        g_strdup_printf("/machine/soc/%s", edge_controller->name);
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-gpio-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        uint64_t base = th1520_gpio_controllers[i].base;
+
+        qtest_writel(src, base + DW_GPIO_SWPORTA_DR, BIT(i));
+        qtest_writel(src, base + DW_GPIO_SWPORTA_DDR, BIT(i));
+        qtest_writel(src, base + DW_GPIO_SWPORTA_CTL, BIT(i + 6));
+        qtest_writel(src, base + DW_GPIO_PORTA_DEBOUNCE, BIT(i + 8));
+        qtest_writel(src, base + DW_GPIO_LS_SYNC, i & 1);
+    }
+
+    qtest_set_irq_in(src, edge_path, "gpio-in", edge_pin, 0);
+    qtest_writel(src, edge_controller->base + DW_GPIO_INTTYPE_LEVEL,
+                  edge_bit);
+    qtest_writel(src, edge_controller->base + DW_GPIO_INT_POLARITY,
+                  edge_bit);
+    qtest_writel(src, edge_controller->base + DW_GPIO_INTEN, edge_bit);
+    qtest_set_irq_in(src, edge_path, "gpio-in", edge_pin, 1);
+    g_assert_cmphex(qtest_readl(src, edge_controller->base +
+                                DW_GPIO_INTSTATUS), ==, edge_bit);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        uint64_t base = th1520_gpio_controllers[i].base;
+
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_SWPORTA_DR), ==,
+                        BIT(i));
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_SWPORTA_DDR), ==,
+                        BIT(i));
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_SWPORTA_CTL), ==,
+                        BIT(i + 6));
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_PORTA_DEBOUNCE),
+                        ==, BIT(i + 8));
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_LS_SYNC), ==,
+                        i & 1);
+    }
+    g_assert_cmphex(qtest_readl(dst, edge_controller->base +
+                                DW_GPIO_EXT_PORTA) & edge_bit, ==,
+                    edge_bit);
+    g_assert_cmphex(qtest_readl(dst, edge_controller->base +
+                                DW_GPIO_RAW_INTSTATUS), ==, edge_bit);
+    g_assert_cmphex(qtest_readl(dst, edge_controller->base +
+                                DW_GPIO_INTSTATUS), ==, edge_bit);
+    qtest_writel(dst, edge_controller->base + DW_GPIO_PORTA_EOI,
+                  edge_bit);
+    g_assert_cmphex(qtest_readl(dst, edge_controller->base +
+                                DW_GPIO_INTSTATUS), ==, 0);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_ap_cpr_migration(void)
@@ -3040,6 +3443,12 @@ static void test_whole_machine_migration(void)
         qtest_writel(src, th1520_uart_controllers[i].base +
                      DW_UART_SCR_OFFSET, 0x60 + i);
     }
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        uint64_t base = th1520_gpio_controllers[i].base;
+
+        qtest_writel(src, base + DW_GPIO_SWPORTA_DR, BIT(i));
+        qtest_writel(src, base + DW_GPIO_SWPORTA_DDR, BIT(i));
+    }
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -3089,6 +3498,14 @@ static void test_whole_machine_migration(void)
         g_assert_cmphex(qtest_readl(dst, th1520_uart_controllers[i].base +
                                     DW_UART_SCR_OFFSET), ==, 0x60 + i);
     }
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
+        uint64_t base = th1520_gpio_controllers[i].base;
+
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_SWPORTA_DR), ==,
+                        BIT(i));
+        g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_SWPORTA_DDR), ==,
+                        BIT(i));
+    }
     qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
     g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
     g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
@@ -3111,6 +3528,12 @@ int main(int argc, char **argv)
                        test_ap_reset_registers);
         qtest_add_func("/beaglev-ahead/cpr/migration",
                        test_ap_cpr_migration);
+        qtest_add_func("/beaglev-ahead/dw-gpio/registers",
+                       test_dw_gpio_registers);
+        qtest_add_func("/beaglev-ahead/dw-gpio/interrupts",
+                       test_dw_gpio_interrupts);
+        qtest_add_func("/beaglev-ahead/dw-gpio/migration",
+                       test_dw_gpio_migration);
         qtest_add_func("/beaglev-ahead/dmac/registers",
                        test_dmac_registers);
         qtest_add_func("/beaglev-ahead/dmac/direct-transfer",

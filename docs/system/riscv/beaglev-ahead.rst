@@ -28,9 +28,15 @@ The machine currently provides:
   edge/level inputs;
 * a C900 CLINT at ``0xffdc000000``, with four-hart MSIP, MTIMECMP,
   SSIP, and STIMECMP banks and a 3 MHz architectural timer; and
-* a DesignWare APB UART0 at ``0xffe7014000``, including the 16550 register
-  bank, DesignWare status/reset/probe registers, busy detection, and PLIC
-  interrupt 36; and
+* six DesignWare APB UARTs at their TH1520 addresses, including the 16550
+  register banks, DesignWare status/reset/probe registers, busy detection,
+  and PLIC interrupts 36 through 41.  UART0 at ``0xffe7014000`` is the board
+  console and UART1 through UART5 are disabled in the board device tree;
+* six DesignWare APB GPIO controllers at ``0xffec005000``, ``0xffec006000``,
+  ``0xffe7f34000``, ``0xffe7f38000``, ``0xfffff52000``, and
+  ``0xfffff41000``.  Their 157 Linux-described GPIO lines support input,
+  output, edge/level interrupts, masking, reset and migration.  The generated
+  board device tree describes its five GPIO4 LEDs;
 * three DesignWare Mobile Storage Host Controllers at ``0xffe7080000``
   (eMMC), ``0xffe7090000`` (microSD/SDIO0), and ``0xffe70a0000``
   (on-board Wi-Fi/SDIO1), connected to PLIC sources 62, 64, and 71.  The
@@ -45,10 +51,10 @@ The machine currently provides:
   27, with direct and linked-list memory-to-memory copies, 64-bit addresses,
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
-The generated device tree uses the same board, CPU, PLIC, CLINT, UART, storage,
-memory, and cache topology bindings as upstream Linux's BeagleV Ahead device
-tree.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every
-C910 hart.
+The generated device tree uses the same board, CPU, PLIC, CLINT, UART, GPIO,
+storage, memory, and cache topology bindings as upstream Linux's BeagleV Ahead
+device tree.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for
+every C910 hart.
 
 Boot options
 ------------
@@ -135,7 +141,8 @@ modeled.  Physical-board validation is still needed for timer rollover and
 latching, system-bus handling of wider CPU accesses, oscillator stability,
 and reset-domain behavior.
 
-UART0 uses a reusable DesignWare APB wrapper around QEMU's 16550 core.  It
+The six UARTs use a reusable DesignWare APB wrapper around QEMU's 16550 core.
+It
 implements aligned 32-bit register accesses, USR FIFO/busy status, SRR reset,
 busy-detect interrupts, the fractional divisor, synthesis probe registers,
 configurable FIFO depth, reset, and migration.  UART RX, TX, THRE and busy
@@ -151,6 +158,25 @@ The architectural component-type register reports the DesignWare
 identification value.  Exact FIFO depth, optional-feature presence,
 version/parameter values, subword and wider system-bus behavior, and
 reset-domain details remain physical-hardware validation items.
+
+The six GPIO controllers use a reusable one-port DesignWare APB model.  The
+model implements software data and direction, external pin sampling, combined
+edge/level interrupt generation, polarity, enable/mask, edge EOI, synchronous
+sampling selection, reset and migration.  Linux commit
+``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` binds all six generated nodes.
+Focused qtests cover all bank widths, addresses, PLIC sources, AP clock IDs,
+DT aliases, five LED descriptions, pin input/output, interrupt modes and a
+pending edge across migration.
+
+Several GPIO details remain deliberately provisional.  QEMU follows the Linux
+driver convention that a set direction bit means output, despite ambiguous
+wording in the publicly hosted TH1520 manual.  Debounce selection is retained
+but no temporal filter is applied, hardware-controlled port functions are not
+present, and synthesis identification registers default to zero.  Undriven
+inputs deterministically read low; this is not a claim about physical pulls.
+The pad controller, ``gpio-ranges``, header muxing, and GPIO connections to the
+Wi-Fi module, Ethernet PHY, card detect, buttons, and other board signals are
+deferred until their electrical reset and pull behavior can be represented.
 
 The three storage controllers use a reusable DesignWare MSHC wrapper around
 QEMU's SDHCI engine.  The model exposes the TH1520's 64 KiB apertures, vendor
@@ -207,9 +233,10 @@ the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
-CLINT, PLIC, UART, storage and GMAC state in one stream.  A focused migration
+CLINT, PLIC, all six UARTs, all six GPIO controllers, storage and GMAC state in
+one stream.  A focused migration
 test additionally preserves completed AXI-DMAC data/register/interrupt state.
-Together with the focused device tests, the complete 43-test board gate runs
+Together with the focused device tests, the complete 50-test board gate runs
 in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
@@ -218,10 +245,11 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera,
+Pinctrl/padctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera,
 video codecs, GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security
-blocks, the secure DMA controller, and board Wi-Fi/Bluetooth are not modeled
-yet.  The remaining storage, Ethernet and general-DMA gaps are listed above.
+blocks, the secure DMA controller, board buttons, and Wi-Fi/Bluetooth are not
+modeled yet.  GPIO-connected PHY/Wi-Fi/card-detect signals are not wired yet.
+The remaining storage, Ethernet and general-DMA gaps are listed above.
 The development plan and the hardware differential-validation ledger are in
 ``docs/devel/beaglev-ahead-emulation-plan.md`` and
 ``docs/devel/beaglev-ahead-hardware-validation.md``.

@@ -10,6 +10,7 @@
 #include "hw/core/boards.h"
 #include "hw/char/dw_apb_uart.h"
 #include "hw/dma/dw_axi_dmac.h"
+#include "hw/gpio/dw_apb_gpio.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
@@ -21,6 +22,7 @@
 #define TH1520_MSHC_COUNT 3
 #define TH1520_GMAC_COUNT 2
 #define TH1520_UART_COUNT 6
+#define TH1520_GPIO_COUNT 6
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
 OBJECT_DECLARE_SIMPLE_TYPE(TH1520SoCState, RISCV_TH1520_SOC)
@@ -36,6 +38,7 @@ struct TH1520SoCState {
     TH1520APClockState ap_clock;
     TH1520APResetState ap_reset;
     DWAPBUARTState uart[TH1520_UART_COUNT];
+    DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
     DWAxiDMACState dmac0;
     DWGMACState gmac[TH1520_GMAC_COUNT];
     TH1520GMACAPBState gmac_apb[TH1520_GMAC_COUNT];
@@ -65,6 +68,12 @@ enum {
     TH1520_DEV_UART3,
     TH1520_DEV_UART4,
     TH1520_DEV_UART5,
+    TH1520_DEV_GPIO0,
+    TH1520_DEV_GPIO1,
+    TH1520_DEV_GPIO2,
+    TH1520_DEV_GPIO3,
+    TH1520_DEV_GPIO4,
+    TH1520_DEV_AOGPIO,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
@@ -87,6 +96,7 @@ enum {
 #define TH1520_CLK_EMMC_SDIO 43
 #define TH1520_CLK_GMAC1 44
 #define TH1520_CLK_GMAC_AXI 48
+#define TH1520_CLK_GPIO3 49
 #define TH1520_CLK_GMAC0 50
 #define TH1520_CLK_UART0_PCLK 55
 #define TH1520_CLK_UART1_PCLK 56
@@ -94,6 +104,9 @@ enum {
 #define TH1520_CLK_UART3_PCLK 58
 #define TH1520_CLK_UART4_PCLK 59
 #define TH1520_CLK_UART5_PCLK 60
+#define TH1520_CLK_GPIO0 61
+#define TH1520_CLK_GPIO1 62
+#define TH1520_CLK_GPIO2 63
 #define TH1520_CLK_UART_SCLK 85
 
 /* riscv,ndev describes IDs 1..240; QEMU's PLIC count includes ID zero. */
@@ -107,6 +120,13 @@ enum {
 #define TH1520_UART4_IRQ 40
 #define TH1520_UART5_IRQ 41
 #define TH1520_UART_INPUT_FREQ 100000000
+
+#define TH1520_GPIO0_IRQ 56
+#define TH1520_GPIO1_IRQ 57
+#define TH1520_GPIO2_IRQ 58
+#define TH1520_GPIO3_IRQ 59
+#define TH1520_GPIO4_IRQ 55
+#define TH1520_AOGPIO_IRQ 76
 
 #define TH1520_DMAC0_IRQ 27
 #define TH1520_DMAC_CHANNELS 4

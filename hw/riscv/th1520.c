@@ -52,6 +52,12 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_UART3] = { 0xffe7f04000, 0x00000100 },
     [TH1520_DEV_UART4] = { 0xfff7f08000, 0x00004000 },
     [TH1520_DEV_UART5] = { 0xfff7f0c000, 0x00004000 },
+    [TH1520_DEV_GPIO0] = { 0xffec005000, 0x00001000 },
+    [TH1520_DEV_GPIO1] = { 0xffec006000, 0x00001000 },
+    [TH1520_DEV_GPIO2] = { 0xffe7f34000, 0x00001000 },
+    [TH1520_DEV_GPIO3] = { 0xffe7f38000, 0x00001000 },
+    [TH1520_DEV_GPIO4] = { 0xfffff52000, 0x00001000 },
+    [TH1520_DEV_AOGPIO] = { 0xfffff41000, 0x00001000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -94,6 +100,27 @@ static const uint32_t th1520_uart_pclk_ids[TH1520_UART_COUNT] = {
     TH1520_CLK_UART3_PCLK,
     TH1520_CLK_UART4_PCLK,
     TH1520_CLK_UART5_PCLK,
+};
+
+typedef struct TH1520GPIOInfo {
+    const char *name;
+    int memmap;
+    uint32_t irq;
+    uint8_t ngpios;
+    int16_t clock_id;
+} TH1520GPIOInfo;
+
+static const TH1520GPIOInfo th1520_gpio_info[TH1520_GPIO_COUNT] = {
+    { "gpio0",  TH1520_DEV_GPIO0,  TH1520_GPIO0_IRQ,  32,
+      TH1520_CLK_GPIO0 },
+    { "gpio1",  TH1520_DEV_GPIO1,  TH1520_GPIO1_IRQ,  31,
+      TH1520_CLK_GPIO1 },
+    { "gpio2",  TH1520_DEV_GPIO2,  TH1520_GPIO2_IRQ,  32,
+      TH1520_CLK_GPIO2 },
+    { "gpio3",  TH1520_DEV_GPIO3,  TH1520_GPIO3_IRQ,  23,
+      TH1520_CLK_GPIO3 },
+    { "gpio4",  TH1520_DEV_GPIO4,  TH1520_GPIO4_IRQ,  23, -1 },
+    { "aogpio", TH1520_DEV_AOGPIO, TH1520_AOGPIO_IRQ, 16, -1 },
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -205,6 +232,12 @@ static void th1520_soc_init(Object *obj)
                                 TYPE_DW_APB_UART);
         qdev_prop_set_uint32(DEVICE(&s->uart[i]), "baudbase",
                              TH1520_UART_INPUT_FREQ / 16);
+    }
+    for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
+        object_initialize_child(obj, th1520_gpio_info[i].name, &s->gpio[i],
+                                TYPE_DW_APB_GPIO);
+        qdev_prop_set_uint8(DEVICE(&s->gpio[i]), "ngpios",
+                            th1520_gpio_info[i].ngpios);
     }
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
@@ -343,6 +376,19 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                                   th1520_uart_irqs[i]));
     }
 
+    for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
+        const TH1520GPIOInfo *info = &th1520_gpio_info[i];
+        SysBusDevice *gpio = SYS_BUS_DEVICE(&s->gpio[i]);
+
+        if (!sysbus_realize(gpio, errp)) {
+            return;
+        }
+        sysbus_mmio_map(gpio, 0, th1520_memmap[info->memmap].base);
+        sysbus_connect_irq(gpio, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  info->irq));
+    }
+
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
         return;
     }
@@ -434,6 +480,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t osc_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
+    uint32_t gpio_phandles[TH1520_GPIO_COUNT];
     uint32_t stmmac_axi_phandle;
     uint32_t phy_phandle;
     g_autofree char *plic_name = NULL;
@@ -580,6 +627,60 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_cell(ms->fdt,
                           "/soc/reset-controller@ffef014000", "phandle",
                           ap_reset_phandle);
+
+    for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
+        const TH1520GPIOInfo *info = &th1520_gpio_info[i];
+        const MemMapEntry *map = &th1520_memmap[info->memmap];
+        g_autofree char *name =
+            g_strdup_printf("/soc/gpio@%" HWADDR_PRIx, map->base);
+        g_autofree char *port =
+            g_strdup_printf("%s/gpio-controller@0", name);
+        char alias[8];
+
+        gpio_phandles[i] = phandle++;
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string(ms->fdt, name, "compatible",
+                                "snps,dw-apb-gpio");
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
+                                     2, map->size);
+        qemu_fdt_setprop_cell(ms->fdt, name, "#address-cells", 1);
+        qemu_fdt_setprop_cell(ms->fdt, name, "#size-cells", 0);
+        if (info->clock_id >= 0) {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle, info->clock_id);
+            qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "bus");
+        }
+
+        qemu_fdt_add_subnode(ms->fdt, port);
+        qemu_fdt_setprop_string(ms->fdt, port, "compatible",
+                                "snps,dw-apb-gpio-port");
+        qemu_fdt_setprop_cell(ms->fdt, port, "reg", 0);
+        qemu_fdt_setprop(ms->fdt, port, "gpio-controller", NULL, 0);
+        qemu_fdt_setprop_cell(ms->fdt, port, "#gpio-cells", 2);
+        qemu_fdt_setprop_cell(ms->fdt, port, "ngpios", info->ngpios);
+        qemu_fdt_setprop(ms->fdt, port, "interrupt-controller", NULL, 0);
+        qemu_fdt_setprop_cell(ms->fdt, port, "#interrupt-cells", 2);
+        qemu_fdt_setprop_cells(ms->fdt, port, "interrupts", info->irq, 4);
+        qemu_fdt_setprop_cell(ms->fdt, port, "phandle",
+                              gpio_phandles[i]);
+
+        snprintf(alias, sizeof(alias), "gpio%d", i);
+        qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, port);
+    }
+
+    /* Pinctrl ranges await the pad-controller model (ledger item PIN-001). */
+    qemu_fdt_add_subnode(ms->fdt, "/leds");
+    qemu_fdt_setprop_string(ms->fdt, "/leds", "compatible", "gpio-leds");
+    for (int i = 0; i < 5; i++) {
+        g_autofree char *name = g_strdup_printf("/leds/led-%d", i + 1);
+        g_autofree char *label = g_strdup_printf("led%d", i + 1);
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_cells(ms->fdt, name, "gpios", gpio_phandles[4],
+                               8 + i, 0);
+        qemu_fdt_setprop_cell(ms->fdt, name, "color", 3);
+        qemu_fdt_setprop_string(ms->fdt, name, "label", label);
+    }
 
     for (int i = 0; i < TH1520_UART_COUNT; i++) {
         const MemMapEntry *map = &th1520_memmap[th1520_uart_memmap[i]];
