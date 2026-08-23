@@ -146,7 +146,8 @@ validation.
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node | Validate the TH1520 synthesis and board wiring; add QSPI/XIP and only physically established flash/backends |
-| GPIO/pinctrl/PWM | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets and electrical effects on hardware; add GPIO consumer wiring, PWM, mux-driven signal routing and deterministic header/device backends |
+| PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  It uses a provisional fixed 125 MHz QEMU input and exposes test-only QOM outputs; the board has no generated PWM consumer | Validate reset/register/strobe semantics, clock rate/gating, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
+| GPIO/pinctrl | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets and electrical effects on hardware; add GPIO consumer wiring, mux-driven signal routing and deterministic header/device backends |
 | APB timers | A reusable four-counter DesignWare model and both TH1520 components now provide eight 125 MHz countdown channels, PLIC sources 16-23, local/aggregate EOI and status, reset and VMState; all eight upstream-DT nodes remain board-disabled | Validate component synthesis, clocks, access widths, reload/zero/enable edges, cascade/PWM and reset-domain behavior on hardware; couple clock gates and resets |
 | RTC/watchdog | Timer framework exists; no matching TH1520 set | New register models and clock/reset behavior |
 | AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT wiring and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential validation |
@@ -155,7 +156,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, APB timer, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
 
 ## Workspace implementation status
 
@@ -216,6 +217,17 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   defaults, not claims about the TH1520; four focused qtests cover the
   register, PLIC, error and migration contracts.  No flash, QSPI, XIP, DMA,
   clock/reset coupling, pinmux or physical peripheral wiring is asserted; and
+* a six-channel TH1520 PWM controller at ``0xffec01c000`` using the current
+  Linux ``thead,th1520-pwm`` binding and AP clock ID 51.  The ``0xb0`` bytes
+  used by the in-tree Linux driver accept aligned 32-bit control, period and
+  falling-point accesses.  Continuous normal/inverted waveforms, boundary-
+  latched configuration updates, reset, virtual-time edges and VMState are
+  implemented with a provisional 125 MHz input.  Three focused qtests cover
+  all six channel register banks, polarity/timing and pending-update
+  migration; the direct-DT test covers the binding.  The model exposes six
+  QOM output lines only for emulator tests: no physical pin, board consumer,
+  one-shot/inactive-output behavior, AP gate/reset coupling or reserved-
+  aperture behavior is claimed; and
 * a reusable four-counter DesignWare APB timer with aligned 32-bit load,
   current, control, EOI, local and aggregate status, component-version,
   second-load and protection registers.  Periodic and free-running countdown,
@@ -314,7 +326,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 66 board qtests in the normal,
+The focused gate currently comprises 69 board qtests in the normal,
 dependency-minimal and ASan/UBSan builds.  These include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
@@ -351,6 +363,10 @@ of a running countdown with latched interrupt.  Four SPI0 tests cover generic
 reset/masks, loopback and receive-only operation, PLIC delivery and
 overflow/underflow clearing, plus migration; the direct-DT test checks its
 disabled Linux-compatible node, address, interrupt, clock ID and alias.  A
+three-test TH1520 PWM group checks all six reset register banks, normal and
+inverted virtual waveforms, glitch-free boundary updates and migration of a
+running waveform with a pending update; the direct-DT test confirms the Linux
+binding and that no ``status`` property is present.  A
 boot test also proves that
 an externally supplied DTB reaches the firmware handoff.  The
 complete gate includes whole-machine migration; C910 CSR identity tests;
@@ -656,10 +672,15 @@ board peripheral or flash.  Four focused qtests cover its reset, PLIC, error
 and migration contracts.  Its FIFO depth, native chip-select count,
 component/probe identity, serial timing, gate/reset behavior, pinmux and
 physical board wiring remain open.  QSPI0/1, XIP and boot-media behavior are
-not part of this submilestone.  The three focused clock/reset tests and
-complete 66-test board gate pass in the
+not part of this submilestone.  The TH1520 PWM submilestone maps the six-
+channel controller at the exact Linux address and binding, drives test-only
+QOM output lines from a provisional 125 MHz clock and preserves staged
+configuration/phase across migration.  It does not assert a board pin or
+consumer and leaves one-shot, inactive output, aperture, gate/reset and
+electrical behavior open.  The three focused clock/reset tests and complete
+69-test board gate pass in the
 full, dependency-minimal and ASan/UBSan builds.  Clock and reset outputs are not
-yet coupled to UART, I2C, SPI0, GPIO, DMA, storage, GMAC, timers or the harts,
+yet coupled to UART, I2C, SPI0, PWM, GPIO, DMA, storage, GMAC, timers or the harts,
 so guest gate/reset writes currently change controller state without stopping
 those child models.
 Direct boot also releases all four harts even though the modeled C910
@@ -675,7 +696,8 @@ route signals, and physical pulls, voltage domains, drive/slew/Schmitt effects,
 tri-state/contention behavior, header conflicts and active-low board-consumer
 wiring remain open.  Remaining AP behavior, all other clock/reset and power
 domains, SPI0 serial timing/DMA/advanced framing and board peripheral routing,
-QSPI/XIP/boot-flash behavior, timer cascade/PWM/load-count-2 waveform behavior and exact
+QSPI/XIP/boot-flash behavior, standalone-PWM one-shot/inactive/output-routing
+behavior, timer cascade/load-count-2 waveform behavior and exact
 enable/reload/zero-count edges, control I/O and every other P6 gate stay open
 until implemented and,
 where necessary, compared with the physical board.

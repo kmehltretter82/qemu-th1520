@@ -40,6 +40,13 @@ The machine currently provides:
 * one DesignWare APB SSI controller at ``0xffe700c000``, connected to PLIC
   source 54.  The ``spi0`` node is disabled to match upstream Linux and no
   flash or other board peripheral is attached;
+* one six-channel TH1520 PWM controller at ``0xffec01c000`` with the upstream
+  ``thead,th1520-pwm`` binding, AP clock ID 51 and ``#pwm-cells = <3>``.  It
+  models the aligned 32-bit control/period/falling-point register subset used
+  by Linux, continuous normal/inverted waveforms, staged period-boundary
+  updates, reset and migration.  Its fixed 125 MHz QEMU input and six QOM
+  output lines are provisional test facilities; no board pin or consumer is
+  wired;
 * two four-counter DesignWare APB timer components at ``0xffefc32000`` and
   ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
   sources 16 through 23.  All eight individual timer nodes remain disabled in
@@ -69,7 +76,7 @@ The machine currently provides:
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
-SPI0, APB timer, GPIO, pinctrl, storage, memory, and cache topology bindings as
+SPI0, PWM, APB timer, GPIO, pinctrl, storage, memory, and cache topology bindings as
 upstream Linux's TH1520 device tree, augmented with the
 schematic-established board EEPROM.  It advertises ``xtheadvector`` and
 ``thead,vlenb = <16>`` for every C910 hart.
@@ -240,6 +247,22 @@ routing, board SPI peripherals, QSPI0/1, XIP and boot-flash behavior are not
 modeled.  The disabled device-tree status means this model is not yet evidence
 that an unmodified mainline Linux SPI driver binds on this board.
 
+The separate TH1520 PWM controller follows the software contract of the
+in-tree Linux driver: six channels at a 0x20-byte stride, CTRL/PERIOD/FP at
+``+0x00/+0x08/+0x0c``, START and CFG_UPDATE strobes, continuous-mode output
+and FPOUT phase selection.  Period and falling-point writes are shadowed until
+the next period boundary.  The model drives six QOM ``pwm`` outputs so qtests
+can check normal and inverted phases, staged updates and migration; there is
+no virtual header/pad connection.  Its source is fixed at a provisional
+125 MHz and only the first 0xb0 bytes used by Linux are mapped, even though the
+DT aperture is 16 KiB.
+
+The exact reset/readback and reserved-register behavior, clock rate/gating and
+reset coupling, one-shot/inactive-output semantics, physical pinmux/header
+routing and electrical effects are deliberately not claimed.  The generated
+node has no ``status`` property, matching upstream Linux, but the board DTS
+has no PWM consumer and this documentation does not claim a real output pin.
+
 The two APB timer components use a reusable four-counter DesignWare model.
 Each counter has load, current-value, control, EOI and interrupt-status
 registers at the 0x14-byte hardware stride.  Periodic and free-running
@@ -359,8 +382,9 @@ CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
 APB timer components, all six GPIO controllers, all three pad controllers,
 storage and GMAC state in one stream.  Focused migration tests additionally preserve
 an in-flight I2C read and EEPROM address pointer, a running APB timer with a
-latched interrupt, plus completed AXI-DMAC data/register/interrupt state.
-Together with the focused device tests, the complete 66-test board gate runs
+latched interrupt, a running TH1520 PWM phase with a pending update, plus
+completed AXI-DMAC data/register/interrupt state.  Together with the focused
+device tests, the complete 69-test board gate runs
 in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
