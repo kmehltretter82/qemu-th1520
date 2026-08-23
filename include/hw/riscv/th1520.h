@@ -14,6 +14,7 @@
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_pinctrl.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
 #include "hw/riscv/riscv_hart.h"
@@ -23,6 +24,7 @@
 #define TH1520_GMAC_COUNT 2
 #define TH1520_UART_COUNT 6
 #define TH1520_GPIO_COUNT 6
+#define TH1520_PADCTRL_COUNT 3
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
 OBJECT_DECLARE_SIMPLE_TYPE(TH1520SoCState, RISCV_TH1520_SOC)
@@ -39,6 +41,7 @@ struct TH1520SoCState {
     TH1520APResetState ap_reset;
     DWAPBUARTState uart[TH1520_UART_COUNT];
     DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
+    TH1520PadCtrlState padctrl[TH1520_PADCTRL_COUNT];
     DWAxiDMACState dmac0;
     DWGMACState gmac[TH1520_GMAC_COUNT];
     TH1520GMACAPBState gmac_apb[TH1520_GMAC_COUNT];
@@ -74,6 +77,9 @@ enum {
     TH1520_DEV_GPIO3,
     TH1520_DEV_GPIO4,
     TH1520_DEV_AOGPIO,
+    TH1520_DEV_PADCTRL_AOSYS,
+    TH1520_DEV_PADCTRL1_APSYS,
+    TH1520_DEV_PADCTRL0_APSYS,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
@@ -95,6 +101,8 @@ enum {
 #define TH1520_CLK_PERISYS_APB4_HCLK 25
 #define TH1520_CLK_EMMC_SDIO 43
 #define TH1520_CLK_GMAC1 44
+#define TH1520_CLK_PADCTRL1 45
+#define TH1520_CLK_PADCTRL0 47
 #define TH1520_CLK_GMAC_AXI 48
 #define TH1520_CLK_GPIO3 49
 #define TH1520_CLK_GMAC0 50

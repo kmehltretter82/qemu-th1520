@@ -140,7 +140,7 @@ validation.
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
 | SPI/QSPI | Generic SSI/flash infrastructure exists | New DW APB SSI and TH1520 QSPI/XIP integration |
-| GPIO/pinctrl/PWM | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState; the board DT includes five GPIO4 LEDs | Validate synthesis IDs, resets, pulls, direction wording and debounce timing; add pinctrl/padctrl, GPIO consumer wiring, PWM and deterministic header/device backends |
+| GPIO/pinctrl/PWM | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets and electrical effects on hardware; add GPIO consumer wiring, PWM, mux-driven signal routing and deterministic header/device backends |
 | APB timers/RTC/watchdog | Timer framework exists; no matching TH1520 set | New register models and clock/reset behavior |
 | AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT wiring and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential validation |
 | Mailbox/system control | Missing | New C910/C906/E902/DSP handoff and control-plane models |
@@ -148,7 +148,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, GPIO, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
 
 ## Workspace implementation status
 
@@ -193,8 +193,15 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   IDs where applicable.  The generated DT provides gpio0-5 aliases and the
   five board LEDs on GPIO4 pins 8-12.  Focused qtests cover every bank, pin
   I/O, both interrupt modes and pending-edge migration; the pinned Linux
-  driver binds all six controllers.  Pinctrl ranges and PHY/Wi-Fi/card-detect
-  consumer wiring remain omitted pending pad/pull/reset modeling; and
+  driver binds all six controllers; and
+* a TH1520 pad-controller model with the three always-on and application-domain
+  instances at their exact apertures and clocks.  It preserves the documented
+  digital PADCFG/MUXCFG reset words, reserved-bit masks, system reset and
+  VMState.  The generated DT reproduces all six Linux GPIO range mappings and
+  the board's LED, GMAC0, UART0 and Wi-Fi pin groups; pinned Linux binds all
+  three controllers.  Actual mux-driven signal routing, pad electrical effects
+  and PHY/Wi-Fi/card-detect consumer wiring remain open hardware-validation
+  work; and
 * a reusable DesignWare Mobile Storage Host Controller wrapper with the
   TH1520's 64 KiB aperture, vendor pointers, v4.20 capabilities, vendor and
   PHY register state, deterministic power-good/DLL-lock behavior, VMState,
@@ -231,8 +238,9 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * a whole-machine migration test that moves DRAM, SRAM, per-hart base and
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
   CLINT, PLIC, AP clock/reset state, distinct state in all six UARTs and all
-  six GPIO controllers, all three storage controllers, both GMAC cores, PHY
-  banks and both GMAC APB-glue instances together; and
+  six GPIO controllers and all three pad controllers, all three storage
+  controllers, both GMAC cores, PHY banks and both GMAC APB-glue instances
+  together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -265,7 +273,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 50 board qtests in the normal,
+The focused gate currently comprises 52 board qtests in the normal,
 dependency-minimal and ASan/UBSan builds.  These include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
@@ -286,7 +294,12 @@ state in every instance.  Three GPIO tests verify the six exact parent/port
 DT nodes, gpio0-5 aliases,
 five GPIO4 LED descriptions, bank widths and reset masks, pin input/output,
 all six PLIC routes, rising-edge and active-low-level behavior, masking/EOI,
-and migration of distinct state in every bank plus a pending edge.  The
+and migration of distinct state in every bank plus a pending edge.  Two
+focused pad-controller tests and the direct-DT test verify all digital resets,
+representative writable and reserved masks, system reset, distinct
+three-instance migration state and the complete clock, GPIO-range and board
+pin-group DT contract.  The pinned kernel binds all six GPIO and all three
+pinctrl devices.  The
 complete gate includes whole-machine migration; C910 CSR identity tests;
 XTheadVector, PMU, CLINT, PLIC, UART and four-hart guest payloads; and an
 S-mode SBI identity probe.  The instrumented Linux run
@@ -553,19 +566,27 @@ submilestone adds a reusable one-port DW APB device and all six TH1520 banks,
 including exact bank widths, addresses, PLIC sources, AP clock IDs, DT aliases
 and five board LED descriptions.  Three focused tests cover register masks,
 pin I/O, edge/level interrupts, reset and migration; pinned Linux binds all six
-controllers.  The three focused clock/reset tests and complete 50-test board
-gate pass in the full, dependency-minimal and ASan/UBSan builds.  Clock and
-reset outputs are not yet coupled
+controllers.  The padctrl submilestone maps all three Linux-described
+controllers with exact apertures and clocks, preserves digital PADCFG/MUXCFG
+reset words and masks, supplies exact GPIO ranges and board LED, GMAC0, UART0
+and Wi-Fi groups, and migrates distinct state.  Two focused tests cover its
+register, reset and migration contracts, while the direct-DT test covers its
+binding; pinned Linux binds all three padctrl devices.  The three focused
+clock/reset tests and complete 52-test board gate pass in the full,
+dependency-minimal and ASan/UBSan builds.  Clock
+and reset outputs are not yet coupled
 to UART, GPIO, DMA, storage, GMAC or the harts, so guest gate/reset writes
 currently change controller state without stopping those child models.
 Direct boot also releases all four harts even though the modeled C910
 reset-register default releases only the top and core 0.  UART2/4/5 have 16
 KiB DT apertures but only the documented first 256-byte DW register block is
 mapped; reserved-aperture behavior remains a hardware question.  GPIO
-debounce timing, synthesis probes, physical pulls, pinctrl/padctrl and board
-consumer wiring remain open.  Remaining AP behavior, all other clock/reset
-and power domains, control I/O and every other P6 gate stay open until
-implemented and, where necessary, compared with the physical board.
+debounce timing and synthesis probes remain open.  Pad mux changes do not yet
+route signals, and physical pulls, voltage domains, drive/slew/Schmitt effects,
+tri-state/contention behavior, header conflicts and active-low board-consumer
+wiring remain open.  Remaining AP behavior, all other clock/reset and power
+domains, control I/O and every other P6 gate stay open until implemented and,
+where necessary, compared with the physical board.
 
 ### Phase 7 — USB and board radios
 

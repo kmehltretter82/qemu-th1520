@@ -20,6 +20,7 @@ config BEAGLEV_AHEAD
     select DWCMSHC
     select TH1520_GMAC
     select TH1520_CPR
+    select TH1520_PINCTRL
     select THEAD_C900_CLINT
     select THEAD_C900_PLIC
 

@@ -37,6 +37,11 @@ The machine currently provides:
   ``0xfffff41000``.  Their 157 Linux-described GPIO lines support input,
   output, edge/level interrupts, masking, reset and migration.  The generated
   board device tree describes its five GPIO4 LEDs;
+* three TH1520 pad controllers at ``0xfffff4a000``, ``0xffe7f3c000``, and
+  ``0xffec007000``.  Their PADCFG and MUXCFG register state, digital reset
+  values, reserved-bit masks, system reset and migration are modeled.  The
+  generated board device tree includes the exact Linux GPIO ranges and the
+  board's LED, GMAC0, UART0 and Wi-Fi pin groups;
 * three DesignWare Mobile Storage Host Controllers at ``0xffe7080000``
   (eMMC), ``0xffe7090000`` (microSD/SDIO0), and ``0xffe70a0000``
   (on-board Wi-Fi/SDIO1), connected to PLIC sources 62, 64, and 71.  The
@@ -52,9 +57,9 @@ The machine currently provides:
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, GPIO,
-storage, memory, and cache topology bindings as upstream Linux's BeagleV Ahead
-device tree.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for
-every C910 hart.
+pinctrl, storage, memory, and cache topology bindings as upstream Linux's
+BeagleV Ahead device tree.  It advertises ``xtheadvector`` and
+``thead,vlenb = <16>`` for every C910 hart.
 
 Boot options
 ------------
@@ -174,9 +179,21 @@ wording in the publicly hosted TH1520 manual.  Debounce selection is retained
 but no temporal filter is applied, hardware-controlled port functions are not
 present, and synthesis identification registers default to zero.  Undriven
 inputs deterministically read low; this is not a claim about physical pulls.
-The pad controller, ``gpio-ranges``, header muxing, and GPIO connections to the
-Wi-Fi module, Ethernet PHY, card detect, buttons, and other board signals are
-deferred until their electrical reset and pull behavior can be represented.
+
+The three pad-controller instances preserve software-visible PADCFG and
+MUXCFG state, documented digital reset values and writable masks.  Their exact
+apertures, 73.728 MHz always-on clock, AP clock IDs 45 and 47, GPIO ranges and
+board LED, GMAC0, UART0 and Wi-Fi pin groups match pinned upstream Linux.  The
+same kernel binds all three ``pinctrl-th1520`` devices.  Focused qtests cover
+all reset words, representative writable and reserved masks, system reset, the
+complete DT contract and migration of distinct state in all three instances.
+
+Pad state does not yet produce electrical signal routing.  Mux selection does
+not redirect GPIO or peripheral lines, and pull, voltage-domain, drive-current,
+slew, Schmitt-trigger, output-enable, tri-state and contention behavior are not
+modeled.  GPIO connections to the Wi-Fi module, Ethernet PHY, card detect,
+buttons and expansion headers remain unwired until their polarity, safe power
+sequence and physical routing are validated.
 
 The three storage controllers use a reusable DesignWare MSHC wrapper around
 QEMU's SDHCI engine.  The model exposes the TH1520's 64 KiB apertures, vendor
@@ -233,11 +250,11 @@ the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
-CLINT, PLIC, all six UARTs, all six GPIO controllers, storage and GMAC state in
-one stream.  A focused migration
-test additionally preserves completed AXI-DMAC data/register/interrupt state.
-Together with the focused device tests, the complete 50-test board gate runs
-in the full, dependency-minimal and ASan/UBSan builds.  The
+CLINT, PLIC, all six UARTs, all six GPIO controllers, all three pad controllers,
+storage and GMAC state in one stream.  A focused migration test additionally
+preserves completed AXI-DMAC data/register/interrupt state.  Together with the
+focused device tests, the complete 52-test board gate runs in the full,
+dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
@@ -245,11 +262,12 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-Pinctrl/padctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera,
-video codecs, GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security
-blocks, the secure DMA controller, board buttons, and Wi-Fi/Bluetooth are not
-modeled yet.  GPIO-connected PHY/Wi-Fi/card-detect signals are not wired yet.
-The remaining storage, Ethernet and general-DMA gaps are listed above.
+I2C/SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera, video codecs,
+GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security blocks, the secure
+DMA controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
+Electrical pad routing and GPIO-connected PHY/Wi-Fi/card-detect signals are
+not wired yet.  The remaining storage, Ethernet and general-DMA gaps are
+listed above.
 The development plan and the hardware differential-validation ledger are in
 ``docs/devel/beaglev-ahead-emulation-plan.md`` and
 ``docs/devel/beaglev-ahead-hardware-validation.md``.

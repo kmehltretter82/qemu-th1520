@@ -58,6 +58,9 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_GPIO3] = { 0xffe7f38000, 0x00001000 },
     [TH1520_DEV_GPIO4] = { 0xfffff52000, 0x00001000 },
     [TH1520_DEV_AOGPIO] = { 0xfffff41000, 0x00001000 },
+    [TH1520_DEV_PADCTRL_AOSYS] = { 0xfffff4a000, 0x00002000 },
+    [TH1520_DEV_PADCTRL1_APSYS] = { 0xffe7f3c000, 0x00001000 },
+    [TH1520_DEV_PADCTRL0_APSYS] = { 0xffec007000, 0x00001000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -108,19 +111,44 @@ typedef struct TH1520GPIOInfo {
     uint32_t irq;
     uint8_t ngpios;
     int16_t clock_id;
+    uint8_t pad_group;
+    uint8_t nranges;
+    struct {
+        uint8_t gpio_offset;
+        uint8_t pin_offset;
+        uint8_t count;
+    } ranges[2];
 } TH1520GPIOInfo;
 
 static const TH1520GPIOInfo th1520_gpio_info[TH1520_GPIO_COUNT] = {
     { "gpio0",  TH1520_DEV_GPIO0,  TH1520_GPIO0_IRQ,  32,
-      TH1520_CLK_GPIO0 },
+      TH1520_CLK_GPIO0, 2, 1, { { 0, 0, 32 } } },
     { "gpio1",  TH1520_DEV_GPIO1,  TH1520_GPIO1_IRQ,  31,
-      TH1520_CLK_GPIO1 },
+      TH1520_CLK_GPIO1, 2, 1, { { 0, 32, 31 } } },
     { "gpio2",  TH1520_DEV_GPIO2,  TH1520_GPIO2_IRQ,  32,
-      TH1520_CLK_GPIO2 },
+      TH1520_CLK_GPIO2, 3, 1, { { 0, 0, 32 } } },
     { "gpio3",  TH1520_DEV_GPIO3,  TH1520_GPIO3_IRQ,  23,
-      TH1520_CLK_GPIO3 },
-    { "gpio4",  TH1520_DEV_GPIO4,  TH1520_GPIO4_IRQ,  23, -1 },
-    { "aogpio", TH1520_DEV_AOGPIO, TH1520_AOGPIO_IRQ, 16, -1 },
+      TH1520_CLK_GPIO3, 3, 1, { { 0, 32, 23 } } },
+    { "gpio4",  TH1520_DEV_GPIO4,  TH1520_GPIO4_IRQ,  23, -1,
+      1, 2, { { 0, 25, 22 }, { 22, 7, 1 } } },
+    { "aogpio", TH1520_DEV_AOGPIO, TH1520_AOGPIO_IRQ, 16, -1,
+      1, 1, { { 0, 9, 16 } } },
+};
+
+typedef struct TH1520PadCtrlInfo {
+    const char *name;
+    int memmap;
+    uint8_t group;
+    int16_t clock_id;
+} TH1520PadCtrlInfo;
+
+static const TH1520PadCtrlInfo
+th1520_padctrl_info[TH1520_PADCTRL_COUNT] = {
+    { "padctrl-aosys",  TH1520_DEV_PADCTRL_AOSYS,  1, -1 },
+    { "padctrl1-apsys", TH1520_DEV_PADCTRL1_APSYS, 2,
+      TH1520_CLK_PADCTRL1 },
+    { "padctrl0-apsys", TH1520_DEV_PADCTRL0_APSYS, 3,
+      TH1520_CLK_PADCTRL0 },
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -238,6 +266,12 @@ static void th1520_soc_init(Object *obj)
                                 TYPE_DW_APB_GPIO);
         qdev_prop_set_uint8(DEVICE(&s->gpio[i]), "ngpios",
                             th1520_gpio_info[i].ngpios);
+    }
+    for (int i = 0; i < TH1520_PADCTRL_COUNT; i++) {
+        object_initialize_child(obj, th1520_padctrl_info[i].name,
+                                &s->padctrl[i], TYPE_TH1520_PADCTRL);
+        qdev_prop_set_uint8(DEVICE(&s->padctrl[i]), "pad-group",
+                            th1520_padctrl_info[i].group);
     }
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
@@ -389,6 +423,16 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                                   info->irq));
     }
 
+    for (int i = 0; i < TH1520_PADCTRL_COUNT; i++) {
+        const TH1520PadCtrlInfo *info = &th1520_padctrl_info[i];
+        SysBusDevice *padctrl = SYS_BUS_DEVICE(&s->padctrl[i]);
+
+        if (!sysbus_realize(padctrl, errp)) {
+            return;
+        }
+        sysbus_mmio_map(padctrl, 0, th1520_memmap[info->memmap].base);
+    }
+
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
         return;
     }
@@ -442,6 +486,243 @@ static void th1520_soc_class_init(ObjectClass *oc, const void *data)
     dc->realize = th1520_soc_realize;
 }
 
+enum {
+    TH1520_PIN_BIAS_DISABLE    = BIT(0),
+    TH1520_PIN_BIAS_PULL_UP    = BIT(1),
+    TH1520_PIN_INPUT_ENABLE    = BIT(2),
+    TH1520_PIN_INPUT_DISABLE   = BIT(3),
+    TH1520_PIN_SCHMITT_ENABLE  = BIT(4),
+    TH1520_PIN_SCHMITT_DISABLE = BIT(5),
+};
+
+typedef struct TH1520PinConfigFDT {
+    const char *name;
+    const char *const *pins;
+    size_t npins;
+    const char *function;
+    uint32_t drive_strength;
+    uint32_t flags;
+} TH1520PinConfigFDT;
+
+static const char *const th1520_led_pins[] = {
+    "AUDIO_PA8", "AUDIO_PA9", "AUDIO_PA10", "AUDIO_PA11", "AUDIO_PA12",
+};
+
+static const TH1520PinConfigFDT th1520_led_configs[] = {
+    {
+        .name = "led-pins",
+        .pins = th1520_led_pins,
+        .npins = ARRAY_SIZE(th1520_led_pins),
+        .drive_strength = 3,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_DISABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    },
+};
+
+static const char *const th1520_gmac0_tx_pins[] = {
+    "GMAC0_TX_CLK", "GMAC0_TXEN", "GMAC0_TXD0", "GMAC0_TXD1",
+    "GMAC0_TXD2", "GMAC0_TXD3",
+};
+
+static const char *const th1520_gmac0_rx_pins[] = {
+    "GMAC0_RX_CLK", "GMAC0_RXDV", "GMAC0_RXD0", "GMAC0_RXD1",
+    "GMAC0_RXD2", "GMAC0_RXD3",
+};
+
+static const char *const th1520_gmac0_mdc_pins[] = { "GMAC0_MDC" };
+static const char *const th1520_gmac0_mdio_pins[] = { "GMAC0_MDIO" };
+static const char *const th1520_gmac0_reset_pins[] = { "GMAC0_COL" };
+static const char *const th1520_gmac0_irq_pins[] = { "GMAC0_CRS" };
+
+static const TH1520PinConfigFDT th1520_gmac0_configs[] = {
+    {
+        .name = "tx-pins",
+        .pins = th1520_gmac0_tx_pins,
+        .npins = ARRAY_SIZE(th1520_gmac0_tx_pins),
+        .function = "gmac0",
+        .drive_strength = 25,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_DISABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    }, {
+        .name = "rx-pins",
+        .pins = th1520_gmac0_rx_pins,
+        .npins = ARRAY_SIZE(th1520_gmac0_rx_pins),
+        .function = "gmac0",
+        .drive_strength = 1,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_ENABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    }, {
+        .name = "mdc-pins",
+        .pins = th1520_gmac0_mdc_pins,
+        .npins = ARRAY_SIZE(th1520_gmac0_mdc_pins),
+        .function = "gmac0",
+        .drive_strength = 13,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_DISABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    }, {
+        .name = "mdio-pins",
+        .pins = th1520_gmac0_mdio_pins,
+        .npins = ARRAY_SIZE(th1520_gmac0_mdio_pins),
+        .function = "gmac0",
+        .drive_strength = 13,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_ENABLE |
+                 TH1520_PIN_SCHMITT_ENABLE,
+    }, {
+        .name = "phy-reset-pins",
+        .pins = th1520_gmac0_reset_pins,
+        .npins = ARRAY_SIZE(th1520_gmac0_reset_pins),
+        .drive_strength = 3,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_DISABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    }, {
+        .name = "phy-interrupt-pins",
+        .pins = th1520_gmac0_irq_pins,
+        .npins = ARRAY_SIZE(th1520_gmac0_irq_pins),
+        .function = "gpio",
+        .drive_strength = 1,
+        .flags = TH1520_PIN_BIAS_PULL_UP | TH1520_PIN_INPUT_ENABLE |
+                 TH1520_PIN_SCHMITT_ENABLE,
+    },
+};
+
+static const char *const th1520_uart0_tx_pins[] = { "UART0_TXD" };
+static const char *const th1520_uart0_rx_pins[] = { "UART0_RXD" };
+
+static const TH1520PinConfigFDT th1520_uart0_configs[] = {
+    {
+        .name = "tx-pins",
+        .pins = th1520_uart0_tx_pins,
+        .npins = ARRAY_SIZE(th1520_uart0_tx_pins),
+        .function = "uart",
+        .drive_strength = 3,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_DISABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    }, {
+        .name = "rx-pins",
+        .pins = th1520_uart0_rx_pins,
+        .npins = ARRAY_SIZE(th1520_uart0_rx_pins),
+        .function = "uart",
+        .drive_strength = 1,
+        .flags = TH1520_PIN_BIAS_PULL_UP | TH1520_PIN_INPUT_ENABLE |
+                 TH1520_PIN_SCHMITT_ENABLE,
+    },
+};
+
+static const char *const th1520_wifi_wake_pins[] = { "GPIO2_25" };
+static const char *const th1520_wifi_reg_on_pins[] = { "GPIO2_31" };
+
+static const TH1520PinConfigFDT th1520_wifi_configs[] = {
+    {
+        .name = "host-wake-pins",
+        .pins = th1520_wifi_wake_pins,
+        .npins = ARRAY_SIZE(th1520_wifi_wake_pins),
+        .function = "gpio",
+        .drive_strength = 1,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_ENABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    }, {
+        .name = "reg-on-pins",
+        .pins = th1520_wifi_reg_on_pins,
+        .npins = ARRAY_SIZE(th1520_wifi_reg_on_pins),
+        .function = "gpio",
+        .drive_strength = 3,
+        .flags = TH1520_PIN_BIAS_DISABLE | TH1520_PIN_INPUT_DISABLE |
+                 TH1520_PIN_SCHMITT_DISABLE,
+    },
+};
+
+static uint32_t th1520_create_pin_group_fdt(
+    void *fdt, const char *controller, const char *name,
+    const TH1520PinConfigFDT *configs, size_t nconfigs, uint32_t *phandle)
+{
+    g_autofree char *group = g_strdup_printf("%s/%s", controller, name);
+    uint32_t group_phandle = (*phandle)++;
+
+    qemu_fdt_add_subnode(fdt, group);
+    qemu_fdt_setprop_cell(fdt, group, "phandle", group_phandle);
+    for (size_t i = 0; i < nconfigs; i++) {
+        const TH1520PinConfigFDT *config = &configs[i];
+        g_autofree char *node = g_strdup_printf("%s/%s", group,
+                                                config->name);
+
+        qemu_fdt_add_subnode(fdt, node);
+        qemu_fdt_setprop_string_array(fdt, node, "pins",
+                                      (char **)config->pins,
+                                      config->npins);
+        if (config->function) {
+            qemu_fdt_setprop_string(fdt, node, "function",
+                                    config->function);
+        }
+        if (config->flags & TH1520_PIN_BIAS_DISABLE) {
+            qemu_fdt_setprop(fdt, node, "bias-disable", NULL, 0);
+        }
+        if (config->flags & TH1520_PIN_BIAS_PULL_UP) {
+            qemu_fdt_setprop(fdt, node, "bias-pull-up", NULL, 0);
+        }
+        if (config->flags & TH1520_PIN_INPUT_ENABLE) {
+            qemu_fdt_setprop(fdt, node, "input-enable", NULL, 0);
+        }
+        if (config->flags & TH1520_PIN_INPUT_DISABLE) {
+            qemu_fdt_setprop(fdt, node, "input-disable", NULL, 0);
+        }
+        if (config->flags & TH1520_PIN_SCHMITT_ENABLE) {
+            qemu_fdt_setprop(fdt, node, "input-schmitt-enable", NULL, 0);
+        }
+        if (config->flags & TH1520_PIN_SCHMITT_DISABLE) {
+            qemu_fdt_setprop(fdt, node, "input-schmitt-disable", NULL, 0);
+        }
+        qemu_fdt_setprop_cell(fdt, node, "drive-strength",
+                              config->drive_strength);
+        qemu_fdt_setprop_cell(fdt, node, "slew-rate", 0);
+    }
+
+    return group_phandle;
+}
+
+static void th1520_create_pinctrl_fdt(
+    void *fdt, uint32_t ap_clock_phandle, uint32_t aonsys_clock_phandle,
+    uint32_t *phandle, uint32_t padctrl_phandles[TH1520_PADCTRL_COUNT],
+    uint32_t *led_phandle, uint32_t *gmac0_phandle,
+    uint32_t *uart0_phandle, uint32_t *wifi_phandle)
+{
+    for (int i = 0; i < TH1520_PADCTRL_COUNT; i++) {
+        const TH1520PadCtrlInfo *info = &th1520_padctrl_info[i];
+        const MemMapEntry *map = &th1520_memmap[info->memmap];
+        g_autofree char *name =
+            g_strdup_printf("/soc/pinctrl@%" HWADDR_PRIx, map->base);
+
+        padctrl_phandles[i] = (*phandle)++;
+        qemu_fdt_add_subnode(fdt, name);
+        qemu_fdt_setprop_string(fdt, name, "compatible",
+                                "thead,th1520-pinctrl");
+        qemu_fdt_setprop_sized_cells(fdt, name, "reg", 2, map->base,
+                                     2, map->size);
+        if (info->clock_id < 0) {
+            qemu_fdt_setprop_cell(fdt, name, "clocks",
+                                  aonsys_clock_phandle);
+        } else {
+            qemu_fdt_setprop_cells(fdt, name, "clocks",
+                                   ap_clock_phandle, info->clock_id);
+        }
+        qemu_fdt_setprop_cell(fdt, name, "thead,pad-group", info->group);
+        qemu_fdt_setprop_cell(fdt, name, "phandle",
+                              padctrl_phandles[i]);
+    }
+
+    *led_phandle = th1520_create_pin_group_fdt(
+        fdt, "/soc/pinctrl@fffff4a000", "led-0", th1520_led_configs,
+        ARRAY_SIZE(th1520_led_configs), phandle);
+    *gmac0_phandle = th1520_create_pin_group_fdt(
+        fdt, "/soc/pinctrl@ffec007000", "gmac0-0", th1520_gmac0_configs,
+        ARRAY_SIZE(th1520_gmac0_configs), phandle);
+    *uart0_phandle = th1520_create_pin_group_fdt(
+        fdt, "/soc/pinctrl@ffec007000", "uart0-0", th1520_uart0_configs,
+        ARRAY_SIZE(th1520_uart0_configs), phandle);
+    *wifi_phandle = th1520_create_pin_group_fdt(
+        fdt, "/soc/pinctrl@ffec007000", "wifi-0", th1520_wifi_configs,
+        ARRAY_SIZE(th1520_wifi_configs), phandle);
+}
+
 static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
 {
     static const char *const board_compat[] = {
@@ -478,8 +759,14 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t l2_phandle;
     uint32_t plic_phandle;
     uint32_t osc_phandle;
+    uint32_t aonsys_clock_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
+    uint32_t padctrl_phandles[TH1520_PADCTRL_COUNT];
+    uint32_t led_pins_phandle;
+    uint32_t gmac0_pins_phandle;
+    uint32_t uart0_pins_phandle;
+    uint32_t wifi_pins_phandle;
     uint32_t gpio_phandles[TH1520_GPIO_COUNT];
     uint32_t stmmac_axi_phandle;
     uint32_t phy_phandle;
@@ -591,6 +878,18 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                             "osc_24m");
     qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "phandle", osc_phandle);
 
+    aonsys_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/clock-73728000");
+    qemu_fdt_setprop_string(ms->fdt, "/clock-73728000", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "clock-frequency",
+                          73728000);
+    qemu_fdt_setprop_string(ms->fdt, "/clock-73728000",
+                            "clock-output-names", "aonsys_clk");
+    qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "phandle",
+                          aonsys_clock_phandle);
+
     ap_clock_phandle = phandle++;
     qemu_fdt_add_subnode(ms->fdt,
                          "/soc/clock-controller@ffef010000");
@@ -628,9 +927,16 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                           "/soc/reset-controller@ffef014000", "phandle",
                           ap_reset_phandle);
 
+    th1520_create_pinctrl_fdt(ms->fdt, ap_clock_phandle,
+                              aonsys_clock_phandle, &phandle,
+                              padctrl_phandles, &led_pins_phandle,
+                              &gmac0_pins_phandle, &uart0_pins_phandle,
+                              &wifi_pins_phandle);
+
     for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
         const TH1520GPIOInfo *info = &th1520_gpio_info[i];
         const MemMapEntry *map = &th1520_memmap[info->memmap];
+        fdt32_t ranges[2 * 4];
         g_autofree char *name =
             g_strdup_printf("/soc/gpio@%" HWADDR_PRIx, map->base);
         g_autofree char *port =
@@ -658,6 +964,19 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop(ms->fdt, port, "gpio-controller", NULL, 0);
         qemu_fdt_setprop_cell(ms->fdt, port, "#gpio-cells", 2);
         qemu_fdt_setprop_cell(ms->fdt, port, "ngpios", info->ngpios);
+
+        for (int range = 0; range < info->nranges; range++) {
+            ranges[range * 4] = cpu_to_fdt32(
+                padctrl_phandles[info->pad_group - 1]);
+            ranges[range * 4 + 1] = cpu_to_fdt32(
+                info->ranges[range].gpio_offset);
+            ranges[range * 4 + 2] = cpu_to_fdt32(
+                info->ranges[range].pin_offset);
+            ranges[range * 4 + 3] = cpu_to_fdt32(
+                info->ranges[range].count);
+        }
+        qemu_fdt_setprop(ms->fdt, port, "gpio-ranges", ranges,
+                         info->nranges * 4 * sizeof(*ranges));
         qemu_fdt_setprop(ms->fdt, port, "interrupt-controller", NULL, 0);
         qemu_fdt_setprop_cell(ms->fdt, port, "#interrupt-cells", 2);
         qemu_fdt_setprop_cells(ms->fdt, port, "interrupts", info->irq, 4);
@@ -668,9 +987,11 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, port);
     }
 
-    /* Pinctrl ranges await the pad-controller model (ledger item PIN-001). */
     qemu_fdt_add_subnode(ms->fdt, "/leds");
     qemu_fdt_setprop_string(ms->fdt, "/leds", "compatible", "gpio-leds");
+    qemu_fdt_setprop_string(ms->fdt, "/leds", "pinctrl-names", "default");
+    qemu_fdt_setprop_cell(ms->fdt, "/leds", "pinctrl-0",
+                          led_pins_phandle);
     for (int i = 0; i < 5; i++) {
         g_autofree char *name = g_strdup_printf("/leds/led-%d", i + 1);
         g_autofree char *label = g_strdup_printf("led%d", i + 1);
@@ -705,6 +1026,12 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_cell(ms->fdt, name, "reg-io-width", 4);
         qemu_fdt_setprop_string(ms->fdt, name, "status",
                                 i ? "disabled" : "okay");
+        if (i == 0) {
+            qemu_fdt_setprop_string(ms->fdt, name, "pinctrl-names",
+                                    "default");
+            qemu_fdt_setprop_cell(ms->fdt, name, "pinctrl-0",
+                                  uart0_pins_phandle);
+        }
         snprintf(alias, sizeof(alias), "serial%d", i);
         qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, name);
     }
@@ -770,6 +1097,10 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop(ms->fdt, name, "non-removable", NULL, 0);
             qemu_fdt_setprop(ms->fdt, name, "keep-power-in-suspend",
                              NULL, 0);
+            qemu_fdt_setprop_string(ms->fdt, name, "pinctrl-names",
+                                    "default");
+            qemu_fdt_setprop_cell(ms->fdt, name, "pinctrl-0",
+                                  wifi_pins_phandle);
         }
     }
 
@@ -842,6 +1173,10 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop_cell(ms->fdt, phy, "phandle", phy_phandle);
             qemu_fdt_setprop_cell(ms->fdt, name, "phy-handle", phy_phandle);
             qemu_fdt_setprop_string(ms->fdt, name, "phy-mode", "rgmii-id");
+            qemu_fdt_setprop_string(ms->fdt, name, "pinctrl-names",
+                                    "default");
+            qemu_fdt_setprop_cell(ms->fdt, name, "pinctrl-0",
+                                  gmac0_pins_phandle);
             qemu_fdt_setprop_string(ms->fdt, name, "status", "okay");
             qemu_fdt_setprop_string(ms->fdt, "/aliases", "ethernet0", name);
         } else {

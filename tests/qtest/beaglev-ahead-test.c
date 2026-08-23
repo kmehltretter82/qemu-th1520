@@ -37,6 +37,9 @@
 #define TH1520_GPIO3_BASE          0xffe7f38000ULL
 #define TH1520_GPIO4_BASE          0xfffff52000ULL
 #define TH1520_AOGPIO_BASE         0xfffff41000ULL
+#define TH1520_PADCTRL_AOSYS_BASE  0xfffff4a000ULL
+#define TH1520_PADCTRL1_APSYS_BASE 0xffe7f3c000ULL
+#define TH1520_PADCTRL0_APSYS_BASE 0xffec007000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -135,6 +138,8 @@
 #define TH1520_CLK_PERISYS_APB4    25
 #define TH1520_CLK_EMMC_SDIO       43
 #define TH1520_CLK_GMAC1           44
+#define TH1520_CLK_PADCTRL1        45
+#define TH1520_CLK_PADCTRL0        47
 #define TH1520_CLK_GMAC_AXI        48
 #define TH1520_CLK_GPIO3           49
 #define TH1520_CLK_GMAC0           50
@@ -350,7 +355,22 @@ typedef struct TH1520GPIOController {
     uint32_t irq;
     uint32_t ngpios;
     int32_t clock_id;
+    uint32_t pad_group;
+    uint32_t nranges;
+    struct {
+        uint32_t gpio_offset;
+        uint32_t pin_offset;
+        uint32_t count;
+    } ranges[2];
 } TH1520GPIOController;
+
+typedef struct TH1520PadCtrl {
+    const char *name;
+    uint64_t base;
+    uint32_t size;
+    uint32_t group;
+    int32_t clock_id;
+} TH1520PadCtrl;
 
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
@@ -382,15 +402,25 @@ static const TH1520UARTController th1520_uart_controllers[] = {
 
 static const TH1520GPIOController th1520_gpio_controllers[] = {
     { "gpio0",  TH1520_GPIO0_BASE,  TH1520_GPIO0_IRQ,  32,
-      TH1520_CLK_GPIO0 },
+      TH1520_CLK_GPIO0, 2, 1, { { 0, 0, 32 } } },
     { "gpio1",  TH1520_GPIO1_BASE,  TH1520_GPIO1_IRQ,  31,
-      TH1520_CLK_GPIO1 },
+      TH1520_CLK_GPIO1, 2, 1, { { 0, 32, 31 } } },
     { "gpio2",  TH1520_GPIO2_BASE,  TH1520_GPIO2_IRQ,  32,
-      TH1520_CLK_GPIO2 },
+      TH1520_CLK_GPIO2, 3, 1, { { 0, 0, 32 } } },
     { "gpio3",  TH1520_GPIO3_BASE,  TH1520_GPIO3_IRQ,  23,
-      TH1520_CLK_GPIO3 },
-    { "gpio4",  TH1520_GPIO4_BASE,  TH1520_GPIO4_IRQ,  23, -1 },
-    { "aogpio", TH1520_AOGPIO_BASE, TH1520_AOGPIO_IRQ, 16, -1 },
+      TH1520_CLK_GPIO3, 3, 1, { { 0, 32, 23 } } },
+    { "gpio4",  TH1520_GPIO4_BASE,  TH1520_GPIO4_IRQ,  23, -1,
+      1, 2, { { 0, 25, 22 }, { 22, 7, 1 } } },
+    { "aogpio", TH1520_AOGPIO_BASE, TH1520_AOGPIO_IRQ, 16, -1,
+      1, 1, { { 0, 9, 16 } } },
+};
+
+static const TH1520PadCtrl th1520_padctrls[] = {
+    { "padctrl-aosys", TH1520_PADCTRL_AOSYS_BASE, 0x2000, 1, -1 },
+    { "padctrl1-apsys", TH1520_PADCTRL1_APSYS_BASE, 0x1000, 2,
+      TH1520_CLK_PADCTRL1 },
+    { "padctrl0-apsys", TH1520_PADCTRL0_APSYS_BASE, 0x1000, 3,
+      TH1520_CLK_PADCTRL0 },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -538,6 +568,198 @@ static void assert_fdt_stringlist(const void *fdt, int node, const char *name,
         g_assert_nonnull(value);
         g_assert_cmpstr(value, ==, expected[i]);
     }
+}
+
+enum {
+    PIN_ASSERT_BIAS_DISABLE    = BIT(0),
+    PIN_ASSERT_BIAS_PULL_UP    = BIT(1),
+    PIN_ASSERT_INPUT_ENABLE    = BIT(2),
+    PIN_ASSERT_INPUT_DISABLE   = BIT(3),
+    PIN_ASSERT_SCHMITT_ENABLE  = BIT(4),
+    PIN_ASSERT_SCHMITT_DISABLE = BIT(5),
+};
+
+static uint32_t assert_padctrl_fdt(const void *fdt,
+                                   const TH1520PadCtrl *controller,
+                                   uint32_t ap_clock_phandle,
+                                   uint32_t aonsys_clock_phandle)
+{
+    g_autofree char *path =
+        g_strdup_printf("/soc/pinctrl@%" PRIx64, controller->base);
+    const fdt32_t *cells;
+    const char *text;
+    uint32_t phandle;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "thead,th1520-pinctrl");
+    assert_fdt_mmio(fdt, node, controller->base, controller->size);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "thead,pad-group"), ==,
+                    controller->group);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    if (controller->clock_id < 0) {
+        g_assert_cmpint(len, ==, sizeof(*cells));
+        g_assert_cmphex(fdt32_to_cpu(cells[0]), ==,
+                        aonsys_clock_phandle);
+    } else {
+        g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+        g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, ap_clock_phandle);
+        g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                        controller->clock_id);
+    }
+
+    phandle = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(phandle, !=, 0);
+    return phandle;
+}
+
+static void assert_pin_config_fdt(const void *fdt, const char *path,
+                                  const char *const *pins, size_t npins,
+                                  const char *function,
+                                  uint32_t drive_strength, uint32_t flags)
+{
+    const char *text;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    assert_fdt_stringlist(fdt, node, "pins", pins, npins);
+    text = fdt_getprop(fdt, node, "function", &len);
+    if (function) {
+        g_assert_nonnull(text);
+        g_assert_cmpstr(text, ==, function);
+    } else {
+        g_assert_null(text);
+        g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+    }
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "drive-strength"), ==,
+                    drive_strength);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "slew-rate"), ==, 0);
+    assert_fdt_bool(fdt, node, "bias-disable",
+                    flags & PIN_ASSERT_BIAS_DISABLE);
+    assert_fdt_bool(fdt, node, "bias-pull-up",
+                    flags & PIN_ASSERT_BIAS_PULL_UP);
+    assert_fdt_bool(fdt, node, "input-enable",
+                    flags & PIN_ASSERT_INPUT_ENABLE);
+    assert_fdt_bool(fdt, node, "input-disable",
+                    flags & PIN_ASSERT_INPUT_DISABLE);
+    assert_fdt_bool(fdt, node, "input-schmitt-enable",
+                    flags & PIN_ASSERT_SCHMITT_ENABLE);
+    assert_fdt_bool(fdt, node, "input-schmitt-disable",
+                    flags & PIN_ASSERT_SCHMITT_DISABLE);
+}
+
+static void assert_board_pinctrl_fdt(const void *fdt,
+                                     uint32_t *led_phandle,
+                                     uint32_t *gmac0_phandle,
+                                     uint32_t *uart0_phandle,
+                                     uint32_t *wifi_phandle)
+{
+    static const char *const leds[] = {
+        "AUDIO_PA8", "AUDIO_PA9", "AUDIO_PA10", "AUDIO_PA11",
+        "AUDIO_PA12",
+    };
+    static const char *const gmac_tx[] = {
+        "GMAC0_TX_CLK", "GMAC0_TXEN", "GMAC0_TXD0", "GMAC0_TXD1",
+        "GMAC0_TXD2", "GMAC0_TXD3",
+    };
+    static const char *const gmac_rx[] = {
+        "GMAC0_RX_CLK", "GMAC0_RXDV", "GMAC0_RXD0", "GMAC0_RXD1",
+        "GMAC0_RXD2", "GMAC0_RXD3",
+    };
+    static const char *const gmac_mdc[] = { "GMAC0_MDC" };
+    static const char *const gmac_mdio[] = { "GMAC0_MDIO" };
+    static const char *const gmac_reset[] = { "GMAC0_COL" };
+    static const char *const gmac_irq[] = { "GMAC0_CRS" };
+    static const char *const uart_tx[] = { "UART0_TXD" };
+    static const char *const uart_rx[] = { "UART0_RXD" };
+    static const char *const wifi_wake[] = { "GPIO2_25" };
+    static const char *const wifi_reg_on[] = { "GPIO2_31" };
+    const uint32_t output_flags = PIN_ASSERT_BIAS_DISABLE |
+                                  PIN_ASSERT_INPUT_DISABLE |
+                                  PIN_ASSERT_SCHMITT_DISABLE;
+    const uint32_t input_flags = PIN_ASSERT_BIAS_DISABLE |
+                                 PIN_ASSERT_INPUT_ENABLE |
+                                 PIN_ASSERT_SCHMITT_DISABLE;
+    const uint32_t pulled_input_flags = PIN_ASSERT_BIAS_PULL_UP |
+                                        PIN_ASSERT_INPUT_ENABLE |
+                                        PIN_ASSERT_SCHMITT_ENABLE;
+    int node;
+
+    node = fdt_path_offset(fdt, "/soc/pinctrl@fffff4a000/led-0");
+    g_assert_cmpint(node, >=, 0);
+    *led_phandle = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(*led_phandle, !=, 0);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@fffff4a000/led-0/led-pins", leds,
+        ARRAY_SIZE(leds), NULL, 3, output_flags);
+
+    node = fdt_path_offset(fdt, "/soc/pinctrl@ffec007000/gmac0-0");
+    g_assert_cmpint(node, >=, 0);
+    *gmac0_phandle = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(*gmac0_phandle, !=, 0);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/gmac0-0/tx-pins", gmac_tx,
+        ARRAY_SIZE(gmac_tx), "gmac0", 25, output_flags);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/gmac0-0/rx-pins", gmac_rx,
+        ARRAY_SIZE(gmac_rx), "gmac0", 1, input_flags);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/gmac0-0/mdc-pins", gmac_mdc,
+        ARRAY_SIZE(gmac_mdc), "gmac0", 13, output_flags);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/gmac0-0/mdio-pins", gmac_mdio,
+        ARRAY_SIZE(gmac_mdio), "gmac0", 13,
+        PIN_ASSERT_BIAS_DISABLE | PIN_ASSERT_INPUT_ENABLE |
+        PIN_ASSERT_SCHMITT_ENABLE);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/gmac0-0/phy-reset-pins", gmac_reset,
+        ARRAY_SIZE(gmac_reset), NULL, 3, output_flags);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/gmac0-0/phy-interrupt-pins", gmac_irq,
+        ARRAY_SIZE(gmac_irq), "gpio", 1, pulled_input_flags);
+
+    node = fdt_path_offset(fdt, "/soc/pinctrl@ffec007000/uart0-0");
+    g_assert_cmpint(node, >=, 0);
+    *uart0_phandle = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(*uart0_phandle, !=, 0);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/uart0-0/tx-pins", uart_tx,
+        ARRAY_SIZE(uart_tx), "uart", 3, output_flags);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/uart0-0/rx-pins", uart_rx,
+        ARRAY_SIZE(uart_rx), "uart", 1, pulled_input_flags);
+
+    node = fdt_path_offset(fdt, "/soc/pinctrl@ffec007000/wifi-0");
+    g_assert_cmpint(node, >=, 0);
+    *wifi_phandle = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(*wifi_phandle, !=, 0);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/wifi-0/host-wake-pins", wifi_wake,
+        ARRAY_SIZE(wifi_wake), "gpio", 1, input_flags);
+    assert_pin_config_fdt(fdt,
+        "/soc/pinctrl@ffec007000/wifi-0/reg-on-pins", wifi_reg_on,
+        ARRAY_SIZE(wifi_reg_on), "gpio", 3, output_flags);
+}
+
+static void assert_pinctrl_reference(const void *fdt, const char *path,
+                                     uint32_t expected_phandle)
+{
+    const char *text;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "pinctrl-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "default");
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "pinctrl-0"), ==,
+                    expected_phandle);
 }
 
 static void assert_gmac_fdt(const void *fdt,
@@ -821,7 +1043,8 @@ static void assert_uart_fdt(const void *fdt,
 
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
-                                uint32_t clock_phandle)
+                                uint32_t clock_phandle,
+                                const uint32_t *padctrl_phandles)
 {
     g_autofree char *path =
         g_strdup_printf("/soc/gpio@%" PRIx64, controller->base);
@@ -878,8 +1101,20 @@ static uint32_t assert_gpio_fdt(const void *fdt,
     g_assert_cmpint(len, ==, 2 * sizeof(*cells));
     g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
     g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
-    g_assert_null(fdt_getprop(fdt, node, "gpio-ranges", &len));
-    g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+    cells = fdt_getprop(fdt, node, "gpio-ranges", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==,
+                    controller->nranges * 4 * sizeof(*cells));
+    for (uint32_t range = 0; range < controller->nranges; range++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[range * 4]), ==,
+                        padctrl_phandles[controller->pad_group - 1]);
+        g_assert_cmphex(fdt32_to_cpu(cells[range * 4 + 1]), ==,
+                        controller->ranges[range].gpio_offset);
+        g_assert_cmphex(fdt32_to_cpu(cells[range * 4 + 2]), ==,
+                        controller->ranges[range].pin_offset);
+        g_assert_cmphex(fdt32_to_cpu(cells[range * 4 + 3]), ==,
+                        controller->ranges[range].count);
+    }
 
     phandle = fdt_get_phandle(fdt, node);
     g_assert_cmphex(phandle, !=, 0);
@@ -931,7 +1166,13 @@ static void test_direct_boot_contract(void)
     uint64_t fdt_addr;
     uint32_t cpu0_phandle;
     uint32_t osc_phandle;
+    uint32_t aonsys_clock_phandle;
     uint32_t ap_clock_phandle;
+    uint32_t padctrl_phandles[ARRAY_SIZE(th1520_padctrls)];
+    uint32_t led_pins_phandle;
+    uint32_t gmac0_pins_phandle;
+    uint32_t uart0_pins_phandle;
+    uint32_t wifi_pins_phandle;
     uint32_t gpio_phandles[ARRAY_SIZE(th1520_gpio_controllers)];
     uint32_t stmmac_axi_phandle;
     int clock_offset;
@@ -981,6 +1222,21 @@ static void test_direct_boot_contract(void)
     osc_phandle = fdt_get_phandle(fdt, clock_offset);
     g_assert_cmphex(osc_phandle, !=, 0);
 
+    clock_offset = fdt_path_offset(fdt, "/clock-73728000");
+    g_assert_cmpint(clock_offset, >=, 0);
+    compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "fixed-clock");
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==,
+                    0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    73728000);
+    compatible = fdt_getprop(fdt, clock_offset, "clock-output-names", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "aonsys_clk");
+    aonsys_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(aonsys_clock_phandle, !=, 0);
+
     clock_offset = fdt_path_offset(fdt,
                                    "/soc/clock-controller@ffef010000");
     g_assert_cmpint(clock_offset, >=, 0);
@@ -1006,6 +1262,15 @@ static void test_direct_boot_contract(void)
 
     assert_dmac_fdt(fdt, ap_clock_phandle);
 
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_padctrls); i++) {
+        padctrl_phandles[i] = assert_padctrl_fdt(
+            fdt, &th1520_padctrls[i], ap_clock_phandle,
+            aonsys_clock_phandle);
+    }
+    assert_board_pinctrl_fdt(fdt, &led_pins_phandle,
+                             &gmac0_pins_phandle, &uart0_pins_phandle,
+                             &wifi_pins_phandle);
+
     for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
         assert_dwcmshc_fdt(fdt, &dwcmshc_controllers[i],
                            ap_clock_phandle);
@@ -1019,9 +1284,17 @@ static void test_direct_boot_contract(void)
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
         gpio_phandles[i] = assert_gpio_fdt(fdt,
                                            &th1520_gpio_controllers[i],
-                                           ap_clock_phandle);
+                                           ap_clock_phandle,
+                                           padctrl_phandles);
     }
     assert_led_fdt(fdt, gpio_phandles[4]);
+    assert_pinctrl_reference(fdt, "/leds", led_pins_phandle);
+    assert_pinctrl_reference(fdt, "/soc/serial@ffe7014000",
+                             uart0_pins_phandle);
+    assert_pinctrl_reference(fdt, "/soc/mmc@ffe70a0000",
+                             wifi_pins_phandle);
+    assert_pinctrl_reference(fdt, "/soc/ethernet@ffe7070000",
+                             gmac0_pins_phandle);
 
     g_assert_cmpint(fdt_path_offset(fdt, "/dmac-clock"), ==,
                     -FDT_ERR_NOTFOUND);
@@ -2381,6 +2654,111 @@ static void test_dw_uart_interrupts(void)
     qtest_quit(qts);
 }
 
+static void assert_padctrl_reset_state(QTestState *qts,
+                                       const TH1520PadCtrl *controller)
+{
+    uint64_t base = controller->base;
+    unsigned int pad_words;
+    unsigned int mux_words;
+
+    if (controller->group == 1) {
+        g_assert_cmphex(qtest_readl(qts, base + 0x000), ==, 0x00000125);
+        g_assert_cmphex(qtest_readl(qts, base + 0x004), ==, 0x001a0000);
+        g_assert_cmphex(qtest_readl(qts, base + 0x010), ==, 0x02380000);
+        g_assert_cmphex(qtest_readl(qts, base + 0x014), ==, 0x02080238);
+        g_assert_cmphex(qtest_readl(qts, base + 0x01c), ==, 0x02380208);
+        g_assert_cmphex(qtest_readl(qts, base + 0x020), ==, 0x02080218);
+        g_assert_cmphex(qtest_readl(qts, base + 0x024), ==, 0x02180208);
+        for (hwaddr offset = 0x028; offset <= 0x058; offset += 4) {
+            g_assert_cmphex(qtest_readl(qts, base + offset), ==,
+                            0x02080208);
+        }
+        g_assert_cmphex(qtest_readl(qts, base + 0x05c), ==, 0x00000208);
+        mux_words = 6;
+    } else {
+        pad_words = controller->group == 2 ? 32 : 28;
+        for (unsigned int word = 0; word < pad_words; word++) {
+            uint32_t expected = 0x02080208;
+
+            if (controller->group == 2 &&
+                (word == 3 || word == 4 || word == 14)) {
+                expected = 0x02380238;
+            } else if (controller->group == 2 && word == 13) {
+                expected = 0x02380208;
+            } else if (word == pad_words - 1) {
+                expected = 0x00000208;
+            }
+            g_assert_cmphex(qtest_readl(qts, base + 4 * word), ==,
+                            expected);
+        }
+        mux_words = controller->group == 2 ? 8 : 7;
+    }
+
+    for (unsigned int word = 0; word < mux_words; word++) {
+        g_assert_cmphex(qtest_readl(qts, base + 0x400 + 4 * word), ==, 0);
+    }
+}
+
+static void test_padctrl_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_padctrls); i++) {
+        assert_padctrl_reset_state(qts, &th1520_padctrls[i]);
+    }
+
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x000, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x004, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x010, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x014, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x05c, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x400, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x404, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL_AOSYS_BASE + 0x414, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x000),
+                    ==, 0x000001ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x004),
+                    ==, 0x001f0000);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x010),
+                    ==, 0x03ff0000);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x014),
+                    ==, 0x03ff03ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x05c),
+                    ==, 0x000003ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x400),
+                    ==, 0xf0000000);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x404),
+                    ==, 0xfffffff0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL_AOSYS_BASE + 0x414),
+                    ==, 0x0fffffff);
+
+    qtest_writel(qts, TH1520_PADCTRL1_APSYS_BASE + 0x000, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL1_APSYS_BASE + 0x07c, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL1_APSYS_BASE + 0x41c, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL1_APSYS_BASE + 0x000),
+                    ==, 0x03ff03ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL1_APSYS_BASE + 0x07c),
+                    ==, 0x000003ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL1_APSYS_BASE + 0x41c),
+                    ==, 0x0fffffff);
+
+    qtest_writel(qts, TH1520_PADCTRL0_APSYS_BASE + 0x000, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL0_APSYS_BASE + 0x06c, UINT32_MAX);
+    qtest_writel(qts, TH1520_PADCTRL0_APSYS_BASE + 0x418, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL0_APSYS_BASE + 0x000),
+                    ==, 0x03ff03ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL0_APSYS_BASE + 0x06c),
+                    ==, 0x000003ff);
+    g_assert_cmphex(qtest_readl(qts, TH1520_PADCTRL0_APSYS_BASE + 0x418),
+                    ==, 0x0fffffff);
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_padctrls); i++) {
+        assert_padctrl_reset_state(qts, &th1520_padctrls[i]);
+    }
+    qtest_quit(qts);
+}
+
 static uint32_t dw_gpio_mask(const TH1520GPIOController *controller)
 {
     return controller->ngpios == 32 ? UINT32_MAX :
@@ -2848,6 +3226,65 @@ static void wait_for_migration_complete(QTestState *qts)
         g_usleep(10000);
     }
     g_error("migration did not complete within 30 seconds");
+}
+
+static void test_padctrl_migration(void)
+{
+    static const struct {
+        uint64_t base;
+        uint32_t pad_offset;
+        uint32_t pad_value;
+        uint32_t mux_offset;
+        uint32_t mux_value;
+    } values[] = {
+        { TH1520_PADCTRL_AOSYS_BASE, 0x014, 0x01230345,
+          0x410, 0x54321012 },
+        { TH1520_PADCTRL1_APSYS_BASE, 0x030, 0x03210123,
+          0x418, 0x54321012 },
+        { TH1520_PADCTRL0_APSYS_BASE, 0x020, 0x02340321,
+          0x418, 0x07654321 },
+    };
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-padctrl-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    for (size_t i = 0; i < ARRAY_SIZE(values); i++) {
+        qtest_writel(src, values[i].base + values[i].pad_offset,
+                      values[i].pad_value);
+        qtest_writel(src, values[i].base + values[i].mux_offset,
+                      values[i].mux_value);
+    }
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    for (size_t i = 0; i < ARRAY_SIZE(values); i++) {
+        g_assert_cmphex(qtest_readl(dst,
+                                    values[i].base + values[i].pad_offset),
+                        ==, values[i].pad_value);
+        g_assert_cmphex(qtest_readl(dst,
+                                    values[i].base + values[i].mux_offset),
+                        ==, values[i].mux_value);
+    }
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_dw_gpio_migration(void)
@@ -3449,6 +3886,13 @@ static void test_whole_machine_migration(void)
         qtest_writel(src, base + DW_GPIO_SWPORTA_DR, BIT(i));
         qtest_writel(src, base + DW_GPIO_SWPORTA_DDR, BIT(i));
     }
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_padctrls); i++) {
+        uint32_t value = (i + 1) * 0x00010001;
+
+        qtest_writel(src, th1520_padctrls[i].base + 0x014, value);
+        qtest_writel(src, th1520_padctrls[i].base + 0x410,
+                      0x11111111 * (i + 1));
+    }
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -3506,6 +3950,14 @@ static void test_whole_machine_migration(void)
         g_assert_cmphex(qtest_readl(dst, base + DW_GPIO_SWPORTA_DDR), ==,
                         BIT(i));
     }
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_padctrls); i++) {
+        g_assert_cmphex(qtest_readl(dst,
+                                    th1520_padctrls[i].base + 0x014), ==,
+                        (i + 1) * 0x00010001);
+        g_assert_cmphex(qtest_readl(dst,
+                                    th1520_padctrls[i].base + 0x410), ==,
+                        0x11111111 * (i + 1));
+    }
     qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
     g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
     g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
@@ -3528,6 +3980,10 @@ int main(int argc, char **argv)
                        test_ap_reset_registers);
         qtest_add_func("/beaglev-ahead/cpr/migration",
                        test_ap_cpr_migration);
+        qtest_add_func("/beaglev-ahead/padctrl/registers",
+                       test_padctrl_registers);
+        qtest_add_func("/beaglev-ahead/padctrl/migration",
+                       test_padctrl_migration);
         qtest_add_func("/beaglev-ahead/dw-gpio/registers",
                        test_dw_gpio_registers);
         qtest_add_func("/beaglev-ahead/dw-gpio/interrupts",
