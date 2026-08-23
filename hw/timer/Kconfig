@@ -40,6 +40,10 @@ config CMSDK_APB_TIMER
     bool
     select PTIMER
 
+config DW_APB_TIMER
+    bool
+    select PTIMER
+
 config CMSDK_APB_DUALTIMER
     bool
     select PTIMER
