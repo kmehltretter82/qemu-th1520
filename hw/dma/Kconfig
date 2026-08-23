@@ -27,6 +27,9 @@ config STP2000
 config SIFIVE_PDMA
     bool
 
+config DW_AXI_DMAC
+    bool
+
 config XLNX_CSU_DMA
     bool
     select REGISTER

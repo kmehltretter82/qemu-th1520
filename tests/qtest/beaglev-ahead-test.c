@@ -24,6 +24,7 @@
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
+#define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
 #define TH1520_EMMC_BASE           0xffe7080000ULL
@@ -75,6 +76,7 @@
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 
 #define TH1520_UART0_IRQ           36
+#define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
 #define TH1520_GMAC0_IRQ           66
@@ -159,6 +161,42 @@
 #define DWCMSHC_BLOCK_SIZE         512
 #define DWCMSHC_ADMA_DESC_ADDR     (TH1520_SRAM_BASE + 0x10000)
 #define DWCMSHC_ADMA_DATA_ADDR     (TH1520_SRAM_BASE + 0x20000)
+
+#define DMAC_ID                    0x000
+#define DMAC_COMPONENT_VERSION     0x008
+#define DMAC_CFG                   0x010
+#define DMAC_CHEN                  0x018
+#define DMAC_INTSTATUS             0x030
+#define DMAC_RESET                 0x058
+#define DMAC_CHANNEL(channel)      (0x100 + (channel) * 0x100)
+#define DMAC_CH_SAR(channel)       (DMAC_CHANNEL(channel) + 0x00)
+#define DMAC_CH_DAR(channel)       (DMAC_CHANNEL(channel) + 0x08)
+#define DMAC_CH_BLOCK_TS(channel)  (DMAC_CHANNEL(channel) + 0x10)
+#define DMAC_CH_CTL(channel)       (DMAC_CHANNEL(channel) + 0x18)
+#define DMAC_CH_CFG(channel)       (DMAC_CHANNEL(channel) + 0x20)
+#define DMAC_CH_LLP(channel)       (DMAC_CHANNEL(channel) + 0x28)
+#define DMAC_CH_STATUS(channel)    (DMAC_CHANNEL(channel) + 0x30)
+#define DMAC_CH_INTSTATUS_EN(channel) (DMAC_CHANNEL(channel) + 0x80)
+#define DMAC_CH_INTSTATUS(channel) (DMAC_CHANNEL(channel) + 0x88)
+#define DMAC_CH_INTSIGNAL_EN(channel) (DMAC_CHANNEL(channel) + 0x90)
+#define DMAC_CH_INTCLEAR(channel)  (DMAC_CHANNEL(channel) + 0x98)
+
+#define DMAC_CFG_ENABLE            BIT(0)
+#define DMAC_CFG_INTERRUPT_ENABLE  BIT(1)
+#define DMAC_CH_ENABLE(channel)    BIT(channel)
+#define DMAC_CH_ENABLE_WE(channel) BIT((channel) + 8)
+#define DMAC_CTL_LLI_LAST          BIT(30)
+#define DMAC_CTL_LLI_VALID         BIT(31)
+#define DMAC_IRQ_BLOCK_TRANSFER    BIT(0)
+#define DMAC_IRQ_DMA_TRANSFER      BIT(1)
+#define DMAC_IRQ_LLI_READ_ERROR    BIT(9)
+#define DMAC_IRQ_INVALID_ERROR     BIT(13)
+#define DMAC_IRQ_ALL_ERRORS        0x003f7fe0U
+#define DMAC_COMPONENT_VERSION_RESET 0x3130312a
+#define DMAC_BLOCK_TS_MASK         0x003fffffU
+#define DMAC_TEST_SOURCE_ADDR      0x00200000
+#define DMAC_TEST_DEST_ADDR        0x00210000
+#define DMAC_TEST_LLI_ADDR         (TH1520_SRAM_BASE + 0x30000)
 
 #define BROM_RESET_FDT_ADDR        (TH1520_BROM_BASE + 32)
 #define BROM_FW_DYNAMIC_INFO       (TH1520_BROM_BASE + 40)
@@ -527,6 +565,68 @@ static void assert_dwcmshc_fdt(const void *fdt,
                     controller->base == TH1520_SDIO1_BASE);
 }
 
+static void assert_dmac_fdt(const void *fdt, uint32_t clock_phandle)
+{
+    static const char *const clock_names[] = { "core-clk", "cfgr-clk" };
+    const char *const path = "/soc/dma-controller@ffefc00000";
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,axi-dma-1.01a");
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "okay");
+    assert_fdt_stringlist(fdt, node, "clock-names", clock_names,
+                          ARRAY_SIZE(clock_names));
+
+    cells = fdt_getprop(fdt, node, "reg", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, TH1520_DMAC0_BASE >> 32);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                    (uint32_t)TH1520_DMAC0_BASE);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, 0);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, 0x1000);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, TH1520_DMAC0_IRQ);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, clock_phandle);
+
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#dma-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "dma-channels"), ==, 4);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,dma-masters"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,data-width"), ==, 4);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,axi-max-burst-len"), ==,
+                    16);
+
+    cells = fdt_getprop(fdt, node, "snps,block-size", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
+    for (unsigned i = 0; i < 4; i++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[i]), ==, 65536);
+    }
+
+    cells = fdt_getprop(fdt, node, "snps,priority", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
+    for (unsigned i = 0; i < 4; i++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[i]), ==, i);
+    }
+}
+
 static void test_direct_boot_contract(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -536,6 +636,7 @@ static void test_direct_boot_contract(void)
     g_autofree uint8_t *fdt = NULL;
     uint64_t fdt_addr;
     uint32_t cpu0_phandle;
+    uint32_t dmac_clock_phandle;
     uint32_t mshc_clock_phandle;
     uint32_t gmac_axi_clock_phandle;
     uint32_t gmac_pclk_phandle;
@@ -580,6 +681,14 @@ static void test_direct_boot_contract(void)
     g_assert_nonnull(cold_boot_harts);
     g_assert_cmpint(len, ==, sizeof(*cold_boot_harts));
     g_assert_cmphex(fdt32_to_cpu(*cold_boot_harts), ==, cpu0_phandle);
+
+    clock_offset = fdt_path_offset(fdt, "/dmac-clock");
+    g_assert_cmpint(clock_offset, >=, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    125000000);
+    dmac_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(dmac_clock_phandle, !=, 0);
+    assert_dmac_fdt(fdt, dmac_clock_phandle);
 
     clock_offset = fdt_path_offset(fdt, "/mshc-clock");
     g_assert_cmpint(clock_offset, >=, 0);
@@ -633,6 +742,278 @@ static void test_direct_boot_contract(void)
                         gmac_apb_clock_phandle,
                         stmmac_axi_phandle);
     }
+
+    qtest_quit(qts);
+}
+
+typedef struct QEMU_PACKED DWAxiDMACTestLLI {
+    uint64_t sar;
+    uint64_t dar;
+    uint32_t block_ts_low;
+    uint32_t block_ts_high;
+    uint64_t llp;
+    uint32_t ctl_low;
+    uint32_t ctl_high;
+    uint32_t source_status;
+    uint32_t destination_status;
+    uint32_t status_low;
+    uint32_t status_high;
+    uint32_t reserved_low;
+    uint32_t reserved_high;
+} DWAxiDMACTestLLI;
+
+static void dmac_write_lli(QTestState *qts, uint64_t address,
+                           const DWAxiDMACTestLLI *lli)
+{
+    DWAxiDMACTestLLI le = {
+        .sar = cpu_to_le64(lli->sar),
+        .dar = cpu_to_le64(lli->dar),
+        .block_ts_low = cpu_to_le32(lli->block_ts_low),
+        .block_ts_high = cpu_to_le32(lli->block_ts_high),
+        .llp = cpu_to_le64(lli->llp),
+        .ctl_low = cpu_to_le32(lli->ctl_low),
+        .ctl_high = cpu_to_le32(lli->ctl_high),
+        .source_status = cpu_to_le32(lli->source_status),
+        .destination_status = cpu_to_le32(lli->destination_status),
+        .status_low = cpu_to_le32(lli->status_low),
+        .status_high = cpu_to_le32(lli->status_high),
+        .reserved_low = cpu_to_le32(lli->reserved_low),
+        .reserved_high = cpu_to_le32(lli->reserved_high),
+    };
+
+    qtest_memwrite(qts, address, &le, sizeof(le));
+}
+
+static void dmac_read_lli(QTestState *qts, uint64_t address,
+                          DWAxiDMACTestLLI *lli)
+{
+    qtest_memread(qts, address, lli, sizeof(*lli));
+    lli->sar = le64_to_cpu(lli->sar);
+    lli->dar = le64_to_cpu(lli->dar);
+    lli->block_ts_low = le32_to_cpu(lli->block_ts_low);
+    lli->block_ts_high = le32_to_cpu(lli->block_ts_high);
+    lli->llp = le64_to_cpu(lli->llp);
+    lli->ctl_low = le32_to_cpu(lli->ctl_low);
+    lli->ctl_high = le32_to_cpu(lli->ctl_high);
+    lli->source_status = le32_to_cpu(lli->source_status);
+    lli->destination_status = le32_to_cpu(lli->destination_status);
+    lli->status_low = le32_to_cpu(lli->status_low);
+    lli->status_high = le32_to_cpu(lli->status_high);
+    lli->reserved_low = le32_to_cpu(lli->reserved_low);
+    lli->reserved_high = le32_to_cpu(lli->reserved_high);
+}
+
+static void assert_dmac_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE + DMAC_ID), ==, 0);
+    g_assert_cmphex(qtest_readq(qts,
+                                TH1520_DMAC0_BASE +
+                                DMAC_COMPONENT_VERSION), ==,
+                    DMAC_COMPONENT_VERSION_RESET);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE + DMAC_CFG), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE + DMAC_CHEN), ==, 0);
+    g_assert_cmphex(qtest_readq(qts,
+                                TH1520_DMAC0_BASE + DMAC_INTSTATUS), ==, 0);
+
+    for (unsigned channel = 0; channel < 4; channel++) {
+        g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_SAR(channel)), ==, 0);
+        g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_DAR(channel)), ==, 0);
+        g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_BLOCK_TS(channel)), ==, 0);
+        g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_CTL(channel)), ==, 0);
+        g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_CFG(channel)), ==, 0);
+        g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_LLP(channel)), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_INTSTATUS_EN(channel)), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_INTSTATUS(channel)), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                    DMAC_CH_INTSIGNAL_EN(channel)), ==, 0);
+    }
+}
+
+static void test_dmac_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_dmac_reset_state(qts);
+
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(3), UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_BLOCK_TS(3)), ==,
+                    DMAC_BLOCK_TS_MASK);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(3),
+                  0x1122334455667788ULL);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(3),
+                  0x8877665544332211ULL);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(3),
+                  0x123456789abcdef0ULL);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CFG(3),
+                  0x0fedcba987654321ULL);
+
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_RESET, 1);
+    assert_dmac_reset_state(qts);
+
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(0), 0x1234);
+    qtest_system_reset(qts);
+    assert_dmac_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_dmac_direct_transfer(void)
+{
+    enum { LENGTH = 257 };
+    uint8_t source[LENGTH];
+    uint8_t destination[LENGTH];
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    uint32_t irq_mask = DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER |
+                        DMAC_IRQ_ALL_ERRORS;
+
+    for (unsigned i = 0; i < LENGTH; i++) {
+        source[i] = i ^ 0xa5;
+    }
+    memset(destination, 0, sizeof(destination));
+    qtest_memwrite(qts, DMAC_TEST_SOURCE_ADDR, source, sizeof(source));
+    qtest_memwrite(qts, DMAC_TEST_DEST_ADDR, destination,
+                   sizeof(destination));
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_DMAC0_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_DMAC0_IRQ, true);
+
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(0),
+                  DMAC_TEST_SOURCE_ADDR);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(0),
+                  DMAC_TEST_DEST_ADDR);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(0), LENGTH - 1);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(0), 0);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CFG(0), 0);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSTATUS_EN(0),
+                  irq_mask);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSIGNAL_EN(0),
+                  DMAC_IRQ_DMA_TRANSFER | DMAC_IRQ_ALL_ERRORS);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CFG,
+                  DMAC_CFG_ENABLE | DMAC_CFG_INTERRUPT_ENABLE);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(0) | DMAC_CH_ENABLE_WE(0));
+
+    qtest_memread(qts, DMAC_TEST_DEST_ADDR, destination,
+                  sizeof(destination));
+    g_assert_cmpmem(destination, sizeof(destination), source, sizeof(source));
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE + DMAC_CHEN) &
+                    DMAC_CH_ENABLE(0), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(0)), ==,
+                    DMAC_TEST_SOURCE_ADDR + LENGTH);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(0)), ==,
+                    DMAC_TEST_DEST_ADDR + LENGTH);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_STATUS(0)), ==, LENGTH - 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_INTSTATUS(0)), ==,
+                    DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE + DMAC_INTSTATUS), ==,
+                    BIT(0));
+    g_assert_true(c900_plic_pending(qts, TH1520_DMAC0_IRQ));
+    assert_only_irq(qts, 0);
+
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_DMAC0_IRQ);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTCLEAR(0),
+                  DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_DMAC0_IRQ);
+    g_assert_false(c900_plic_pending(qts, TH1520_DMAC0_IRQ));
+    assert_no_irq(qts);
+
+    qtest_quit(qts);
+}
+
+static void test_dmac_linked_list(void)
+{
+    enum { FIRST_LENGTH = 256, SECOND_LENGTH = 128 };
+    uint8_t source[FIRST_LENGTH + SECOND_LENGTH];
+    uint8_t destination[sizeof(source)];
+    DWAxiDMACTestLLI first = {
+        .sar = DMAC_TEST_SOURCE_ADDR,
+        .dar = DMAC_TEST_DEST_ADDR,
+        .block_ts_low = FIRST_LENGTH - 1,
+        .llp = DMAC_TEST_LLI_ADDR + sizeof(DWAxiDMACTestLLI),
+        .ctl_high = DMAC_CTL_LLI_VALID,
+    };
+    DWAxiDMACTestLLI second = {
+        .sar = DMAC_TEST_SOURCE_ADDR + FIRST_LENGTH,
+        .dar = DMAC_TEST_DEST_ADDR + FIRST_LENGTH,
+        .block_ts_low = SECOND_LENGTH - 1,
+        .ctl_high = DMAC_CTL_LLI_VALID | DMAC_CTL_LLI_LAST,
+    };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    uint32_t irq_mask = DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER |
+                        DMAC_IRQ_ALL_ERRORS;
+
+    g_assert_cmpuint(sizeof(DWAxiDMACTestLLI), ==, 64);
+    for (unsigned i = 0; i < sizeof(source); i++) {
+        source[i] = i * 17 + 3;
+    }
+    memset(destination, 0, sizeof(destination));
+    qtest_memwrite(qts, DMAC_TEST_SOURCE_ADDR, source, sizeof(source));
+    qtest_memwrite(qts, DMAC_TEST_DEST_ADDR, destination,
+                   sizeof(destination));
+    dmac_write_lli(qts, DMAC_TEST_LLI_ADDR, &first);
+    dmac_write_lli(qts, DMAC_TEST_LLI_ADDR + sizeof(first), &second);
+
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CFG(1), 0xf);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_LLP(1),
+                  DMAC_TEST_LLI_ADDR);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSTATUS_EN(1),
+                  irq_mask);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSIGNAL_EN(1),
+                  DMAC_IRQ_DMA_TRANSFER | DMAC_IRQ_ALL_ERRORS);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CFG,
+                  DMAC_CFG_ENABLE | DMAC_CFG_INTERRUPT_ENABLE);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(1) | DMAC_CH_ENABLE_WE(1));
+
+    qtest_memread(qts, DMAC_TEST_DEST_ADDR, destination,
+                  sizeof(destination));
+    g_assert_cmpmem(destination, sizeof(destination), source, sizeof(source));
+    dmac_read_lli(qts, DMAC_TEST_LLI_ADDR, &first);
+    dmac_read_lli(qts, DMAC_TEST_LLI_ADDR + sizeof(first), &second);
+    g_assert_false(first.ctl_high & DMAC_CTL_LLI_VALID);
+    g_assert_false(second.ctl_high & DMAC_CTL_LLI_VALID);
+    g_assert_cmphex(first.status_low, ==, DMAC_IRQ_BLOCK_TRANSFER);
+    g_assert_cmphex(second.status_low, ==,
+                    DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_INTSTATUS(1)), ==,
+                    DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER);
+
+    /* An invalid LLI must fail visibly rather than copying stale data. */
+    first = (DWAxiDMACTestLLI) {
+        .sar = DMAC_TEST_SOURCE_ADDR,
+        .dar = DMAC_TEST_DEST_ADDR,
+        .block_ts_low = 31,
+    };
+    dmac_write_lli(qts, DMAC_TEST_LLI_ADDR, &first);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CFG(2), 0xf);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_LLP(2),
+                  DMAC_TEST_LLI_ADDR);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSTATUS_EN(2),
+                  irq_mask);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSIGNAL_EN(2),
+                  DMAC_IRQ_ALL_ERRORS);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(2) | DMAC_CH_ENABLE_WE(2));
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_INTSTATUS(2)), ==,
+                    DMAC_IRQ_INVALID_ERROR);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE + DMAC_CHEN) &
+                    DMAC_CH_ENABLE(2), ==, 0);
 
     qtest_quit(qts);
 }
@@ -1837,6 +2218,86 @@ static void wait_for_migration_complete(QTestState *qts)
     g_error("migration did not complete within 30 seconds");
 }
 
+static void test_dmac_migration(void)
+{
+    static const uint8_t source[64] = {
+        0x5a, 0xa5, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,
+    };
+    uint8_t destination[sizeof(source)];
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    uint32_t irq_mask = DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER |
+                        DMAC_IRQ_ALL_ERRORS;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-dmac-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    qtest_memwrite(src, DMAC_TEST_SOURCE_ADDR, source, sizeof(source));
+    qtest_writeq(src, TH1520_DMAC0_BASE + DMAC_CH_SAR(2),
+                  0x1122334455667788ULL);
+    qtest_writeq(src, TH1520_DMAC0_BASE + DMAC_CH_CFG(2),
+                  0x8877665544332211ULL);
+
+    qtest_writeq(src, TH1520_DMAC0_BASE + DMAC_CH_SAR(3),
+                  DMAC_TEST_SOURCE_ADDR);
+    qtest_writeq(src, TH1520_DMAC0_BASE + DMAC_CH_DAR(3),
+                  DMAC_TEST_DEST_ADDR);
+    qtest_writeq(src, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(3),
+                  sizeof(source) - 1);
+    qtest_writel(src, TH1520_DMAC0_BASE + DMAC_CH_INTSTATUS_EN(3),
+                  irq_mask);
+    qtest_writel(src, TH1520_DMAC0_BASE + DMAC_CH_INTSIGNAL_EN(3),
+                  DMAC_IRQ_DMA_TRANSFER | DMAC_IRQ_ALL_ERRORS);
+    qtest_writel(src, TH1520_DMAC0_BASE + DMAC_CFG,
+                  DMAC_CFG_ENABLE | DMAC_CFG_INTERRUPT_ENABLE);
+    qtest_writel(src, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(3) | DMAC_CH_ENABLE_WE(3));
+    g_assert_true(c900_plic_pending(src, TH1520_DMAC0_IRQ));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    qtest_memread(dst, DMAC_TEST_DEST_ADDR, destination,
+                  sizeof(destination));
+    g_assert_cmpmem(destination, sizeof(destination), source, sizeof(source));
+    g_assert_cmphex(qtest_readq(dst, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(2)), ==,
+                    0x1122334455667788ULL);
+    g_assert_cmphex(qtest_readq(dst, TH1520_DMAC0_BASE +
+                                DMAC_CH_CFG(2)), ==,
+                    0x8877665544332211ULL);
+    g_assert_cmphex(qtest_readq(dst, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(3)), ==,
+                    DMAC_TEST_SOURCE_ADDR + sizeof(source));
+    g_assert_cmphex(qtest_readq(dst, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(3)), ==,
+                    DMAC_TEST_DEST_ADDR + sizeof(source));
+    g_assert_cmphex(qtest_readq(dst, TH1520_DMAC0_BASE +
+                                DMAC_CH_STATUS(3)), ==,
+                    sizeof(source) - 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_DMAC0_BASE +
+                                DMAC_CH_INTSTATUS(3)), ==,
+                    DMAC_IRQ_BLOCK_TRANSFER | DMAC_IRQ_DMA_TRANSFER);
+    g_assert_true(c900_plic_pending(dst, TH1520_DMAC0_IRQ));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_c900_clint_migration(void)
 {
     g_autofree char *path = NULL;
@@ -2245,6 +2706,14 @@ int main(int argc, char **argv)
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/beaglev-ahead/boot/direct-contract",
                        test_direct_boot_contract);
+        qtest_add_func("/beaglev-ahead/dmac/registers",
+                       test_dmac_registers);
+        qtest_add_func("/beaglev-ahead/dmac/direct-transfer",
+                       test_dmac_direct_transfer);
+        qtest_add_func("/beaglev-ahead/dmac/linked-list",
+                       test_dmac_linked_list);
+        qtest_add_func("/beaglev-ahead/dmac/migration",
+                       test_dmac_migration);
         qtest_add_func("/beaglev-ahead/migration/whole-machine",
                        test_whole_machine_migration);
         qtest_add_func("/beaglev-ahead/gmac/registers",

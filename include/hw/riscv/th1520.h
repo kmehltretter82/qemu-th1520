@@ -9,6 +9,7 @@
 
 #include "hw/core/boards.h"
 #include "hw/char/dw_apb_uart.h"
+#include "hw/dma/dw_axi_dmac.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/net/dw_gmac.h"
@@ -31,6 +32,7 @@ struct TH1520SoCState {
     THeadC900CLINTState clint;
     THeadC900PLICState plic;
     DWAPBUARTState uart0;
+    DWAxiDMACState dmac0;
     DWGMACState gmac[TH1520_GMAC_COUNT];
     TH1520GMACAPBState gmac_apb[TH1520_GMAC_COUNT];
     DWCMSHCState mshc[TH1520_MSHC_COUNT];
@@ -52,6 +54,7 @@ enum {
     TH1520_DEV_CLINT,
     TH1520_DEV_SRAM,
     TH1520_DEV_UART0,
+    TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
     TH1520_DEV_GMAC0_APB,
@@ -72,6 +75,12 @@ enum {
 
 #define TH1520_UART0_IRQ 36
 #define TH1520_UART_INPUT_FREQ 100000000
+
+#define TH1520_DMAC0_IRQ 27
+#define TH1520_DMAC_INPUT_FREQ 125000000
+#define TH1520_DMAC_CHANNELS 4
+#define TH1520_DMAC_BLOCK_SIZE 65536
+#define TH1520_DMAC_DATA_WIDTH 4
 
 #define TH1520_GMAC0_IRQ 66
 #define TH1520_GMAC1_IRQ 67

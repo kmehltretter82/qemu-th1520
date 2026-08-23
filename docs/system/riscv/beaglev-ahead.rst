@@ -36,7 +36,14 @@ The machine currently provides:
   (on-board Wi-Fi/SDIO1), connected to PLIC sources 62, 64, and 71.  The
   SDHCI v4.20 register interface, TH1520 vendor/PHY registers, programmed I/O,
   SDMA, ADMA2 including v4 64-bit descriptors, Auto CMD23, reset, interrupts,
-  and migration are modeled.
+  and migration are modeled;
+* two DesignWare GMAC 3.x cores at ``0xffe7070000`` and ``0xffe7060000``
+  with TH1520 APB glue, descriptor DMA, normal/enhanced descriptors, FCS,
+  checksum status, Clause 22 MDIO/PHY state, PLIC sources 66/67 and migration.
+  Board GMAC0 can use a QEMU network backend; GMAC1 is board-disabled; and
+* a four-channel DesignWare AXI DMAC 1.01a at ``0xffefc00000`` on PLIC source
+  27, with direct and linked-list memory-to-memory copies, 64-bit addresses,
+  descriptor writeback, errors, interrupt aggregation, reset and migration.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, storage,
 memory, and cache topology bindings as upstream Linux's BeagleV Ahead device
@@ -162,6 +169,28 @@ details, and the CYW43012 SDIO function are not implemented.  Synthesis version
 IDs default to zero and can be overridden for testing; capability voltage bits
 and several reset values remain hardware-validation items.
 
+Both GMAC cores use a reusable DWMAC 3.x functional model.  GMAC0 has the
+board's RGMII/RTL8211F-facing DT connection and accepts a normal QEMU network
+backend; GMAC1 is present at the SoC level but disabled in the board DT because
+the board routes no second PHY.  Mainline Linux binds GMAC0 as DWMAC1000 and
+observes the same user/version identity and advertised checksum/extended-
+descriptor features as a public physical boot capture.  Programmable
+MAC/VLAN/hash filtering, complete checksum corner cases, PTP/MMC/WOL/EEE,
+flow-control timing and RTL8211F vendor pages, delays, GPIO reset and interrupt
+behavior remain incomplete.
+
+The general AXI DMAC implements the four-channel software path used by the
+mainline ``dw-axi-dmac`` driver.  Direct and 64-byte-LLI memory-to-memory
+transfers support 64-bit addresses, programmable widths and increment/fixed
+addresses, valid/last writeback, channel status, combined interrupts, reset
+and migration.  A pinned mainline kernel probes all four channels; Linux
+``dmatest`` completed 20 randomized copies up to 1 MiB on every channel with
+zero failures.  Transfers complete synchronously in QEMU.  Peripheral
+request/handshake wiring, the secure/TEE controller, contiguous/reload/shadow/
+cyclic modes, dynamic LLI extension, detailed bus errors, mid-transfer timing,
+arbitration/QoS and observable noncoherent-cache effects are not modeled.
+Identification/version reset values are provisional pending owner-board reads.
+
 An upstream Linux image built from commit
 ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` has been exercised with both
 the full and dependency-minimal QEMU builds.  OpenSBI passes the C910 identity
@@ -178,9 +207,10 @@ the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
-CLINT, PLIC and UART state in one stream.  Together with the focused device
-tests, the complete 35-test board gate runs in the full, dependency-minimal and
-ASan/UBSan builds.  The
+CLINT, PLIC, UART, storage and GMAC state in one stream.  A focused migration
+test additionally preserves completed AXI-DMAC data/register/interrupt state.
+Together with the focused device tests, the complete 43-test board gate runs
+in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
@@ -188,11 +218,11 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-Ethernet, general DMA, GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe,
-display, audio, camera, video codecs, GPU, NPU, the C906 and E902 auxiliary
-cores, DSPs, security blocks, and board Wi-Fi/Bluetooth are not modeled yet.
-The remaining storage gaps are listed above.  The development plan and the
-hardware differential-validation ledger are in
+GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera,
+video codecs, GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security
+blocks, the secure DMA controller, and board Wi-Fi/Bluetooth are not modeled
+yet.  The remaining storage, Ethernet and general-DMA gaps are listed above.
+The development plan and the hardware differential-validation ledger are in
 ``docs/devel/beaglev-ahead-emulation-plan.md`` and
 ``docs/devel/beaglev-ahead-hardware-validation.md``.
 

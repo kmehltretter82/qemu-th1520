@@ -45,6 +45,7 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
+    [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
     [TH1520_DEV_GMAC0_APB] = { 0xffec003000, 0x00001000 },
@@ -159,6 +160,13 @@ static void th1520_soc_init(Object *obj)
     object_initialize_child(obj, "plic", &s->plic,
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "uart0", &s->uart0, TYPE_DW_APB_UART);
+    object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
+    qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
+                         TH1520_DMAC_CHANNELS);
+    qdev_prop_set_uint32(DEVICE(&s->dmac0), "block-size",
+                         TH1520_DMAC_BLOCK_SIZE);
+    qdev_prop_set_uint32(DEVICE(&s->dmac0), "data-width",
+                         TH1520_DMAC_DATA_WIDTH);
     for (int i = 0; i < TH1520_GMAC_COUNT; i++) {
         object_initialize_child(obj, gmac_names[i], &s->gmac[i],
                                 TYPE_DW_GMAC);
@@ -269,6 +277,15 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                        qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                               TH1520_UART0_IRQ));
 
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dmac0), 0,
+                    th1520_memmap[TH1520_DEV_DMAC0].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dmac0), 0,
+                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                              TH1520_DMAC0_IRQ));
+
     for (int i = 0; i < TH1520_GMAC_COUNT; i++) {
         SysBusDevice *gmac = SYS_BUS_DEVICE(&s->gmac[i]);
         SysBusDevice *apb = SYS_BUS_DEVICE(&s->gmac_apb[i]);
@@ -330,6 +347,9 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const uart_clock_names[] = {
         "baudclk", "apb_pclk"
     };
+    static const char *const dmac_clock_names[] = {
+        "core-clk", "cfgr-clk"
+    };
     static const char *const gmac_compat[] = {
         "thead,th1520-gmac", "snps,dwmac-3.70a"
     };
@@ -346,6 +366,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t l2_phandle;
     uint32_t plic_phandle;
     uint32_t uart_clock_phandle;
+    uint32_t dmac_clock_phandle;
     uint32_t mshc_clock_phandle;
     uint32_t gmac_axi_clock_phandle;
     uint32_t gmac_pclk_phandle;
@@ -355,6 +376,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     g_autofree char *plic_name = NULL;
     g_autofree char *clint_name = NULL;
     g_autofree char *uart_name = NULL;
+    g_autofree char *dmac_name = NULL;
     int fdt_size;
 
     ms->fdt = create_board_device_tree("BeagleV Ahead",
@@ -482,6 +504,46 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_string(ms->fdt, "/aliases", "serial0", uart_name);
     qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path",
                             "serial0:115200n8");
+
+    dmac_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/dmac-clock");
+    qemu_fdt_setprop_string(ms->fdt, "/dmac-clock", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/dmac-clock", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/dmac-clock", "clock-frequency",
+                          TH1520_DMAC_INPUT_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/dmac-clock", "clock-output-names",
+                            "perisys-apb-pclk");
+    qemu_fdt_setprop_cell(ms->fdt, "/dmac-clock", "phandle",
+                          dmac_clock_phandle);
+
+    dmac_name = g_strdup_printf("/soc/dma-controller@%" HWADDR_PRIx,
+                                th1520_memmap[TH1520_DEV_DMAC0].base);
+    qemu_fdt_add_subnode(ms->fdt, dmac_name);
+    qemu_fdt_setprop_string(ms->fdt, dmac_name, "compatible",
+                            "snps,axi-dma-1.01a");
+    qemu_fdt_setprop_sized_cells(ms->fdt, dmac_name, "reg", 2,
+                                 th1520_memmap[TH1520_DEV_DMAC0].base, 2,
+                                 th1520_memmap[TH1520_DEV_DMAC0].size);
+    qemu_fdt_setprop_cells(ms->fdt, dmac_name, "interrupts",
+                           TH1520_DMAC0_IRQ, 4);
+    qemu_fdt_setprop_cells(ms->fdt, dmac_name, "clocks",
+                           dmac_clock_phandle, dmac_clock_phandle);
+    qemu_fdt_setprop_string_array(ms->fdt, dmac_name, "clock-names",
+                                  (char **)&dmac_clock_names,
+                                  ARRAY_SIZE(dmac_clock_names));
+    qemu_fdt_setprop_cell(ms->fdt, dmac_name, "#dma-cells", 1);
+    qemu_fdt_setprop_cell(ms->fdt, dmac_name, "dma-channels",
+                          TH1520_DMAC_CHANNELS);
+    qemu_fdt_setprop_cells(ms->fdt, dmac_name, "snps,block-size",
+                           TH1520_DMAC_BLOCK_SIZE, TH1520_DMAC_BLOCK_SIZE,
+                           TH1520_DMAC_BLOCK_SIZE, TH1520_DMAC_BLOCK_SIZE);
+    qemu_fdt_setprop_cells(ms->fdt, dmac_name, "snps,priority", 0, 1, 2, 3);
+    qemu_fdt_setprop_cell(ms->fdt, dmac_name, "snps,dma-masters", 1);
+    qemu_fdt_setprop_cell(ms->fdt, dmac_name, "snps,data-width",
+                          TH1520_DMAC_DATA_WIDTH);
+    qemu_fdt_setprop_cell(ms->fdt, dmac_name, "snps,axi-max-burst-len", 16);
+    qemu_fdt_setprop_string(ms->fdt, dmac_name, "status", "okay");
 
     mshc_clock_phandle = phandle++;
     qemu_fdt_add_subnode(ms->fdt, "/mshc-clock");

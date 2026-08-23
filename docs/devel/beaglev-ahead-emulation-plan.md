@@ -141,13 +141,13 @@ validation.
 | SPI/QSPI | Generic SSI/flash infrastructure exists | New DW APB SSI and TH1520 QSPI/XIP integration |
 | GPIO/pinctrl/PWM | No matching DW APB GPIO or TH1520 pinctrl/PWM | New reusable IP and TH1520 glue |
 | APB timers/RTC/watchdog | Timer framework exists; no matching TH1520 set | New register models and clock/reset behavior |
-| AXI DMAC | No matching Synopsys AXI DMAC model | New descriptor engine, channels, IRQs and noncoherent DMA behavior |
+| AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT wiring and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential validation |
 | Mailbox/system control | Missing | New C910/C906/E902/DSP handoff and control-plane models |
 | GPU/DPU/HDMI/DSI | Matching models missing | New software-visible register/queue/display pipelines |
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, UART, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend |
+| Migration | Current C910, CLINT, PLIC, UART, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
 
 ## Workspace implementation status
 
@@ -197,6 +197,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   physical core/APB addresses and PLIC sources, with the nine-register APB
   reset/mask contract, separate 500 MHz AXI, 1 GHz peripheral and 500 MHz APB
   clocks, board GMAC0/RTL8211F-facing DT wiring, and disabled board GMAC1; and
+* a reusable Synopsys DesignWare AXI DMAC 1.01a model with four channels,
+  direct and 64-byte-LLI memory-to-memory transfers, 64-bit addresses,
+  transfer-width and increment behavior, descriptor valid/last/writeback,
+  block/transfer/error status, interrupt masking and aggregation, reset and
+  VMState.  The TH1520 general controller is mapped at ``0xffefc00000`` on
+  PLIC source 27 with the exact four-channel Linux binding and a measured
+  125 MHz input-clock contract; and
 * a deterministic direct-boot contract that selects hart 0 for both the
   FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
   four-hart M-mode payload whose ordered UART transcript proves that harts
@@ -237,14 +244,18 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 39 board qtests in the normal,
+The focused gate currently comprises 43 board qtests in the normal,
 dependency-minimal and ASan/UBSan builds.  These include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
 with a 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
-preservation, and a socket-backed packet path.  The complete gate includes
+preservation, and a socket-backed packet path.  Four DMAC tests cover
+reset/masks, a direct copy and PLIC route, a two-item LLI chain above 4 GiB,
+invalid-descriptor failure and completed-state/IRQ migration; the direct-boot
+test also checks the complete generated binding and 125 MHz clock.  The
+complete gate includes
 whole-machine migration; C910 CSR identity tests; XTheadVector, PMU, CLINT,
 PLIC, UART and four-hart
 guest payloads; and an S-mode SBI identity probe.  The instrumented Linux run
@@ -271,6 +282,15 @@ enhanced/extended descriptors and ring mode.  This establishes the mainline
 driver/register contract only.  It does not establish a working physical link,
 full packet-offload correctness, the provisional hardware-feature aggregate,
 RTL8211F vendor behavior, or any of the traffic/stress requirements in P5.
+
+The pinned Linux source, with ``CONFIG_DMATEST=y``, also binds the general
+controller as ``dw_axi_dmac_platform`` with four channels.  A tiny initramfs
+configured one thread on each of ``dma0chan0`` through ``dma0chan3`` and ran
+20 randomized memory copies per channel with buffers up to 1 MiB.  All 80
+transfers completed with zero verification failures.  This exercises the
+mainline driver, linked descriptors, shared interrupt and data path, but it
+does not prove peripheral handshakes, cache incoherency failures or physical
+timing.
 
 ## Intended source architecture
 
@@ -444,10 +464,15 @@ probe coverage.  The initial Ethernet submilestone integrates both GMAC cores,
 their APB glue, IRQs, generated DT, GMAC0's backend and generic Clause 22 PHY;
 it has reset/mask/MDIO/IRQ/enhanced-descriptor/socket/migration qtests and a
 successful mainline ``dwmac-thead`` probe.  CQE/ADMA3, eMMC 5.1/HS400 and
-boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring, error
-injection, the general/secure DMACs, complete filtering/PTP/MMC/WOL/EEE and PHY
-behavior, block/network stress, stock-image boot, and every remaining P5
-acceptance item are still open.  P5 is therefore not closed.
+boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring and error
+injection remain open.  The initial general-DMAC submilestone implements the
+four-channel controller's direct/linked memory-copy, descriptor writeback,
+IRQ/reset/migration and exact DT contracts; its qtests and all-channel Linux
+``dmatest`` pass.  Peripheral handshakes/request routing, dynamic and other
+multi-block modes, detailed errors/timing, the secure/TEE DMAC, complete
+filtering/PTP/MMC/WOL/EEE and PHY behavior, block/network stress, stock-image
+boot, and every remaining P5 acceptance item are still open.  P5 is therefore
+not closed.
 
 ### Phase 6 — clocks, reset, power and control I/O
 
