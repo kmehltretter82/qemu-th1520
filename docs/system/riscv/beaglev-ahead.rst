@@ -37,6 +37,9 @@ The machine currently provides:
   ``0xfff7f2c000``, connected to PLIC sources 44 through 49.  I2C0 is enabled
   for the board's 4 KiB FT24C32A-compatible EEPROM at address ``0x50``; I2C1
   through I2C5 are present but board-disabled;
+* one DesignWare APB SSI controller at ``0xffe700c000``, connected to PLIC
+  source 54.  The ``spi0`` node is disabled to match upstream Linux and no
+  flash or other board peripheral is attached;
 * two four-counter DesignWare APB timer components at ``0xffefc32000`` and
   ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
   sources 16 through 23.  All eight individual timer nodes remain disabled in
@@ -66,7 +69,7 @@ The machine currently provides:
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
-APB timer, GPIO, pinctrl, storage, memory, and cache topology bindings as
+SPI0, APB timer, GPIO, pinctrl, storage, memory, and cache topology bindings as
 upstream Linux's TH1520 device tree, augmented with the
 schematic-established board EEPROM.  It advertises ``xtheadvector`` and
 ``thead,vlenb = <16>`` for every C910 hart.
@@ -219,6 +222,24 @@ Factory contents and layout, the fitted board revision and the schematic's
 GPIO2_22-related write-protect network must be checked on the owner's board
 before those behaviors are modeled.
 
+SPI0 uses a reusable DesignWare APB SSI master model.  Its address, level-high
+PLIC source 54, AP clock ID 54, ``spi0`` alias and disabled
+``thead,th1520-spi``/``snps,dw-apb-ssi`` device-tree node match the pinned
+upstream Linux description.  The model supports aligned 32-bit FIFO access,
+standard, transmit-only, receive-only and EEPROM-read transfers, interrupt
+thresholds and sticky overrun/underrun status, serial-loopback mode, reset and
+migration.  A board model may attach an SSI peripheral to its ``spi`` bus and
+native active-low ``cs`` outputs; the BeagleV Ahead machine deliberately does
+not attach one.
+
+The generic model defaults to a 16-frame FIFO and one native chip select and
+reports zero component ID/version, because the TH1520 synthesis values have
+not been measured.  Transfers are synchronous rather than clock accurate.
+DMA, enhanced/dual/quad framing, clock-gate/reset coupling, pinmux/electrical
+routing, board SPI peripherals, QSPI0/1, XIP and boot-flash behavior are not
+modeled.  The disabled device-tree status means this model is not yet evidence
+that an unmodified mainline Linux SPI driver binds on this board.
+
 The two APB timer components use a reusable four-counter DesignWare model.
 Each counter has load, current-value, control, EOI and interrupt-status
 registers at the 0x14-byte hardware stride.  Periodic and free-running
@@ -334,12 +355,12 @@ the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
-CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, both APB
-timer components, all six GPIO controllers, all three pad controllers, storage
-and GMAC state in one stream.  Focused migration tests additionally preserve
+CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
+APB timer components, all six GPIO controllers, all three pad controllers,
+storage and GMAC state in one stream.  Focused migration tests additionally preserve
 an in-flight I2C read and EEPROM address pointer, a running APB timer with a
 latched interrupt, plus completed AXI-DMAC data/register/interrupt state.
-Together with the focused device tests, the complete 62-test board gate runs
+Together with the focused device tests, the complete 66-test board gate runs
 in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
@@ -348,9 +369,9 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-SPI and timer PWM outputs, RTC/watchdog, USB, PCIe, display, audio, camera,
-video codecs, GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security
-blocks, the secure DMA
+QSPI/XIP, board SPI peripherals and timer PWM outputs, RTC/watchdog, USB,
+PCIe, display, audio, camera, video codecs, GPU, NPU, the C906 and E902
+auxiliary cores, DSPs, security blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
 Electrical pad routing and GPIO-connected PHY/Wi-Fi/card-detect signals are
 not wired yet.  The remaining storage, Ethernet and general-DMA gaps are
