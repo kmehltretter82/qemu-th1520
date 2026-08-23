@@ -263,4 +263,7 @@ config AXIADO_CLK
 config TH1520_CPR
     bool
 
+config TH1520_PINCTRL
+    bool
+
 source macio/Kconfig
