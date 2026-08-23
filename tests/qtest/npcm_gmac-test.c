@@ -18,7 +18,12 @@
  */
 
 #include "qemu/osdep.h"
+
 #include "libqos/libqos.h"
+#include "hw/net/mii.h"
+#include "qemu/bitops.h"
+#include "qemu/bswap.h"
+#include "qemu/iov.h"
 
 /* Name of the GMAC Device */
 #define TYPE_NPCM_GMAC "npcm-gmac"
@@ -66,7 +71,7 @@ static int gmac_module_index(const GMACModule *mod)
     return diff;
 }
 
-/* 32-bit register indices. Taken from npcm_gmac.c */
+/* 32-bit register offsets. Taken from dw_gmac.c. */
 typedef enum NPCMRegister {
     /* DMA Registers */
     NPCM_DMA_BUS_MODE = 0x1000,
@@ -182,6 +187,12 @@ static uint32_t gmac_read(QTestState *qts, const GMACModule *mod,
     return qtest_readl(qts, mod->base_addr + regno);
 }
 
+static void gmac_write(QTestState *qts, const GMACModule *mod,
+                       NPCMRegister regno, uint32_t value)
+{
+    qtest_writel(qts, mod->base_addr + regno, value);
+}
+
 static uint16_t pcs_read(QTestState *qts, const GMACModule *mod,
                           NPCMRegister regno)
 {
@@ -257,6 +268,14 @@ static void test_init(gconstpointer test_data)
     CHECK_REG32(NPCM_GMAC_PTP_TAR, 0);
     CHECK_REG32(NPCM_GMAC_PTP_TTSR, 0);
 
+    /* The compatibility type retains its PHY at address 0. */
+    gmac_write(qts, mod, NPCM_GMAC_MII_ADDR,
+               BIT(0) | (MII_PHYID1 << 6));
+    CHECK_REG32(NPCM_GMAC_MII_DATA, 0x0362);
+    gmac_write(qts, mod, NPCM_GMAC_MII_ADDR,
+               BIT(0) | (1 << 11) | (MII_PHYID1 << 6));
+    CHECK_REG32(NPCM_GMAC_MII_DATA, 0xffff);
+
     if (mod->base_addr == 0xf0802000) {
         CHECK_REG_PCS(NPCM_PCS_SR_CTL_ID1, 0x699e);
         CHECK_REG_PCS(NPCM_PCS_SR_CTL_ID2, 0);
@@ -317,6 +336,185 @@ static void test_init(gconstpointer test_data)
     qtest_quit(qts);
 }
 
+#ifndef _WIN32
+
+#define GMAC_TEST_DESC_ADDR 0x00100000
+#define GMAC_TEST_DATA_ADDR 0x00110000
+#define GMAC_TEST_TIMEOUT_S 5
+
+typedef struct GMACDesc {
+    uint32_t des0;
+    uint32_t des1;
+    uint32_t des2;
+    uint32_t des3;
+} GMACDesc;
+
+static void gmac_write_desc(QTestState *qts, uint32_t addr,
+                            const GMACDesc *desc)
+{
+    GMACDesc le_desc = {
+        .des0 = cpu_to_le32(desc->des0),
+        .des1 = cpu_to_le32(desc->des1),
+        .des2 = cpu_to_le32(desc->des2),
+        .des3 = cpu_to_le32(desc->des3),
+    };
+
+    qtest_memwrite(qts, addr, &le_desc, sizeof(le_desc));
+}
+
+static void gmac_read_desc(QTestState *qts, uint32_t addr, GMACDesc *desc)
+{
+    qtest_memread(qts, addr, desc, sizeof(*desc));
+    desc->des0 = le32_to_cpu(desc->des0);
+    desc->des1 = le32_to_cpu(desc->des1);
+    desc->des2 = le32_to_cpu(desc->des2);
+    desc->des3 = le32_to_cpu(desc->des3);
+}
+
+static bool gmac_wait_socket_readable(int fd)
+{
+    fd_set read_fds;
+    struct timeval tv = { .tv_sec = GMAC_TEST_TIMEOUT_S };
+
+    FD_ZERO(&read_fds);
+    FD_SET(fd, &read_fds);
+    return select(fd + 1, &read_fds, NULL, NULL, &tv) == 1;
+}
+
+static bool gmac_wait_status(QTestState *qts, const GMACModule *mod,
+                             uint32_t mask)
+{
+    gint64 deadline = g_get_monotonic_time() +
+                      GMAC_TEST_TIMEOUT_S * G_TIME_SPAN_SECOND;
+
+    do {
+        if (gmac_read(qts, mod, NPCM_DMA_STATUS) & mask) {
+            return true;
+        }
+        qtest_clock_step(qts, 1000);
+    } while (g_get_monotonic_time() < deadline);
+
+    return false;
+}
+
+static uint32_t gmac_test_crc32(const uint8_t *buf, size_t len)
+{
+    uint32_t crc = UINT32_MAX;
+
+    for (size_t i = 0; i < len; i++) {
+        crc ^= buf[i];
+        for (unsigned bit = 0; bit < 8; bit++) {
+            crc = (crc >> 1) ^ (0xedb88320 & -(crc & 1));
+        }
+    }
+    return ~crc;
+}
+
+static QTestState *gmac_packet_test_init(int sockets[2])
+{
+    QTestState *qts;
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, sockets), ==, 0);
+    qts = qtest_initf("-machine npcm845-evb "
+                      "-nic socket,fd=%d,model=npcm-gmac",
+                      sockets[1]);
+    close(sockets[1]);
+    return qts;
+}
+
+static void test_normal_descriptors(gconstpointer test_data)
+{
+    const TestData *td = test_data;
+    const GMACModule *mod = td->module;
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    GMACDesc desc;
+    QTestState *qts;
+    int sockets[2];
+    uint32_t wire_len;
+    uint8_t received[sizeof(packet)];
+
+    qts = gmac_packet_test_init(sockets);
+
+    qtest_memwrite(qts, GMAC_TEST_DATA_ADDR, packet, sizeof(packet));
+    desc = (GMACDesc) {
+        .des0 = BIT(31),
+        .des1 = BIT(31) | BIT(30) | BIT(29) | sizeof(packet),
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), &desc);
+
+    gmac_write(qts, mod, NPCM_DMA_TX_BASE_ADDR, GMAC_TEST_DESC_ADDR);
+    gmac_write(qts, mod, NPCM_DMA_INTR_ENA, BIT(16) | BIT(0));
+    gmac_write(qts, mod, NPCM_GMAC_MAC_CONFIG, BIT(3));
+    gmac_write(qts, mod, NPCM_DMA_CONTROL, BIT(13));
+
+    g_assert_true(gmac_wait_socket_readable(sockets[0]));
+    g_assert_cmpint(recv(sockets[0], &wire_len, sizeof(wire_len), MSG_WAITALL),
+                    ==, sizeof(wire_len));
+    g_assert_cmpuint(ntohl(wire_len), ==, sizeof(packet));
+    g_assert_cmpint(recv(sockets[0], received, sizeof(received), MSG_WAITALL),
+                    ==, sizeof(received));
+    g_assert_cmpmem(received, sizeof(received), packet, sizeof(packet));
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_true(gmac_wait_status(qts, mod, BIT(0)));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+
+    qts = gmac_packet_test_init(sockets);
+    desc = (GMACDesc) {
+        .des0 = BIT(31),
+        .des1 = 2047,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), &desc);
+
+    gmac_write(qts, mod, NPCM_DMA_RCV_BASE_ADDR, GMAC_TEST_DESC_ADDR);
+    gmac_write(qts, mod, NPCM_DMA_INTR_ENA, BIT(16) | BIT(6));
+    gmac_write(qts, mod, NPCM_GMAC_MAC_CONFIG, BIT(2));
+    gmac_write(qts, mod, NPCM_DMA_CONTROL, BIT(1));
+
+    wire_len = htonl(sizeof(packet));
+    const struct iovec iov[] = {
+        { .iov_base = &wire_len, .iov_len = sizeof(wire_len) },
+        { .iov_base = (void *)packet, .iov_len = sizeof(packet) },
+    };
+    g_assert_cmpint(iov_send(sockets[0], iov, ARRAY_SIZE(iov), 0,
+                             sizeof(wire_len) + sizeof(packet)),
+                    ==, sizeof(wire_len) + sizeof(packet));
+    g_assert_true(gmac_wait_status(qts, mod, BIT(6)));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_cmphex(desc.des0 & (BIT(9) | BIT(8)), ==, BIT(9) | BIT(8));
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==,
+                     sizeof(packet) + sizeof(uint32_t));
+    g_assert_cmphex(gmac_read(qts, mod, NPCM_DMA_HOST_RX_DESC), ==,
+                    GMAC_TEST_DESC_ADDR + sizeof(desc));
+
+    uint8_t frame[sizeof(packet) + sizeof(uint32_t)];
+    uint32_t expected_fcs = cpu_to_le32(gmac_test_crc32(packet,
+                                                        sizeof(packet)));
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, frame, sizeof(frame));
+    g_assert_cmpmem(frame, sizeof(packet), packet, sizeof(packet));
+    g_assert_cmpmem(frame + sizeof(packet), sizeof(expected_fcs),
+                    &expected_fcs, sizeof(expected_fcs));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+#endif /* _WIN32 */
+
 static void gmac_add_test(const char *name, const TestData* td,
                           GTestDataFunc fn)
 {
@@ -338,6 +536,11 @@ int main(int argc, char **argv)
 
         gmac_add_test("init", td, test_init);
     }
+
+#ifndef _WIN32
+    gmac_add_test("normal-descriptors", &test_data_list[0],
+                  test_normal_descriptors);
+#endif
 
     return g_test_run();
 }

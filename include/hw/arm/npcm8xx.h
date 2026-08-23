@@ -29,7 +29,7 @@
 #include "hw/misc/npcm7xx_mft.h"
 #include "hw/misc/npcm7xx_pwm.h"
 #include "hw/misc/npcm7xx_rng.h"
-#include "hw/net/npcm_gmac.h"
+#include "hw/net/dw_gmac.h"
 #include "hw/net/npcm_pcs.h"
 #include "hw/nvram/npcm7xx_otp.h"
 #include "hw/sd/npcm7xx_sdhci.h"

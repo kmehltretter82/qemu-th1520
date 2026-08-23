@@ -1011,8 +1011,10 @@ M: Hao Wu <wuhaotsh@google.com>
 L: qemu-arm@nongnu.org
 S: Supported
 F: hw/*/npcm*
+F: hw/net/dw_gmac.c
 F: hw/sensor/adm1266.c
 F: include/hw/*/npcm*
+F: include/hw/net/dw_gmac.h
 F: tests/qtest/npcm*
 F: tests/qtest/adm1266-test.c
 F: pc-bios/npcm7xx_bootrom.bin
