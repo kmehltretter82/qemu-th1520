@@ -47,6 +47,7 @@
 #define TH1520_I2C4_BASE           0xffe7f28000ULL
 #define TH1520_I2C5_BASE           0xfff7f2c000ULL
 #define TH1520_SPI0_BASE           0xffe700c000ULL
+#define TH1520_PWM_BASE            0xffec01c000ULL
 #define TH1520_TIMER0_3_BASE       0xffefc32000ULL
 #define TH1520_TIMER4_7_BASE       0xffffc33000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
@@ -198,6 +199,17 @@
 #define DW_SSI_INT_RXOI            BIT(3)
 #define DW_SSI_INT_RXFI            BIT(4)
 
+#define TH1520_PWM_STRIDE          0x20
+#define TH1520_PWM_CTRL(channel)   \
+    (TH1520_PWM_BASE + TH1520_PWM_STRIDE * (channel))
+#define TH1520_PWM_PERIOD(channel) (TH1520_PWM_CTRL(channel) + 0x08)
+#define TH1520_PWM_FP(channel)     (TH1520_PWM_CTRL(channel) + 0x0c)
+
+#define TH1520_PWM_START            BIT(0)
+#define TH1520_PWM_CFG_UPDATE       BIT(2)
+#define TH1520_PWM_CONTINUOUS       BIT(5)
+#define TH1520_PWM_FPOUT            BIT(8)
+
 #define CSR_TIME                   0xc01
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
@@ -210,6 +222,7 @@
 #define C900_CLINT_QOM_PATH        "/machine/soc/clint"
 #define C900_PLIC_QOM_PATH         "/machine/soc/plic"
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
+#define TH1520_PWM_QOM_PATH        "/machine/soc/pwm"
 
 #define TH1520_UART0_IRQ           36
 #define TH1520_UART1_IRQ           37
@@ -247,6 +260,7 @@
 #define TH1520_CLK_GMAC_AXI        48
 #define TH1520_CLK_GPIO3           49
 #define TH1520_CLK_GMAC0           50
+#define TH1520_CLK_PWM             51
 #define TH1520_CLK_SPI             54
 #define TH1520_CLK_UART0_PCLK      55
 #define TH1520_CLK_UART1_PCLK      56
@@ -273,6 +287,7 @@
 #define BEAGLEV_AHEAD_EEPROM_ADDR  0x50
 #define TH1520_TIMER_COMP_VERSION  0x3231322a
 #define TH1520_TIMER_TICK_NS       8
+#define TH1520_PWM_TICK_NS         8
 
 #define TH1520_PLL_STS             0x080
 #define TH1520_C910_CLK_CFG        0x100
@@ -1344,6 +1359,32 @@ static void assert_spi_fdt(const void *fdt,
     g_assert_cmpstr(fdt_get_alias(fdt, "spi0"), ==, path);
 }
 
+static void assert_pwm_fdt(const void *fdt, uint32_t clock_phandle)
+{
+    const fdt32_t *cells;
+    const char *text;
+    const char *const path = "/soc/pwm@ffec01c000";
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "thead,th1520-pwm");
+    assert_fdt_mmio(fdt, node, TH1520_PWM_BASE, 0x4000);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#pwm-cells"), ==, 3);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, TH1520_CLK_PWM);
+
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_null(text);
+    g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1590,6 +1631,7 @@ static void test_direct_boot_contract(void)
     }
 
     assert_spi_fdt(fdt, &th1520_spi0, ap_clock_phandle);
+    assert_pwm_fdt(fdt, ap_clock_phandle);
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
         assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
@@ -4247,6 +4289,164 @@ static void test_dw_timer_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void assert_th1520_pwm_reset_state(QTestState *qts)
+{
+    for (unsigned int i = 0; i < 6; i++) {
+        g_assert_cmphex(qtest_readl(qts, TH1520_PWM_CTRL(i)), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_PWM_PERIOD(i)), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_PWM_FP(i)), ==, 0);
+        g_assert_false(qtest_get_irq(qts, i));
+    }
+}
+
+static void th1520_pwm_stage(QTestState *qts, unsigned int channel,
+                              uint32_t ctrl, uint32_t period, uint32_t fp)
+{
+    qtest_writel(qts, TH1520_PWM_CTRL(channel), ctrl);
+    qtest_writel(qts, TH1520_PWM_PERIOD(channel), period);
+    qtest_writel(qts, TH1520_PWM_FP(channel), fp);
+    qtest_writel(qts, TH1520_PWM_CTRL(channel),
+                  ctrl | TH1520_PWM_CFG_UPDATE);
+}
+
+static void th1520_pwm_start(QTestState *qts, unsigned int channel,
+                              uint32_t ctrl)
+{
+    qtest_writel(qts, TH1520_PWM_CTRL(channel), ctrl | TH1520_PWM_START);
+}
+
+static void test_th1520_pwm_registers(void)
+{
+    const uint32_t ctrl = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_PWM_QOM_PATH, "pwm");
+    assert_th1520_pwm_reset_state(qts);
+
+    for (unsigned int i = 0; i < 6; i++) {
+        th1520_pwm_stage(qts, i, ctrl, 0x100 + i, 0x80 + i);
+        g_assert_cmphex(qtest_readl(qts, TH1520_PWM_CTRL(i)), ==, ctrl);
+        g_assert_cmphex(qtest_readl(qts, TH1520_PWM_PERIOD(i)), ==,
+                        0x100 + i);
+        g_assert_cmphex(qtest_readl(qts, TH1520_PWM_FP(i)), ==, 0x80 + i);
+        g_assert_false(qtest_get_irq(qts, i));
+    }
+
+    qtest_system_reset(qts);
+    assert_th1520_pwm_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_pwm_waveform(void)
+{
+    const uint32_t normal = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
+    const uint32_t inverse = TH1520_PWM_CONTINUOUS;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_PWM_QOM_PATH, "pwm");
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+
+    /* A normal waveform is high for FP cycles, then low to period end. */
+    th1520_pwm_stage(qts, 0, normal, 10, 3);
+    th1520_pwm_start(qts, 0, normal);
+    g_assert_true(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, 3 * TH1520_PWM_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, 1);
+    g_assert_false(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, 7 * TH1520_PWM_TICK_NS);
+    g_assert_true(qtest_get_irq(qts, 0));
+
+    /* FPOUT clear reverses the phase: low for FP cycles, then high. */
+    th1520_pwm_stage(qts, 1, inverse, 10, 4);
+    th1520_pwm_start(qts, 1, inverse);
+    g_assert_false(qtest_get_irq(qts, 1));
+    qtest_clock_step(qts, 4 * TH1520_PWM_TICK_NS - 1);
+    g_assert_false(qtest_get_irq(qts, 1));
+    qtest_clock_step(qts, 1);
+    g_assert_true(qtest_get_irq(qts, 1));
+
+    /* CFG_UPDATE changes a running waveform only at its next boundary. */
+    th1520_pwm_stage(qts, 2, normal, 8, 2);
+    th1520_pwm_start(qts, 2, normal);
+    g_assert_true(qtest_get_irq(qts, 2));
+    qtest_clock_step(qts, 2 * TH1520_PWM_TICK_NS);
+    g_assert_false(qtest_get_irq(qts, 2));
+    th1520_pwm_stage(qts, 2, normal, 10, 6);
+    qtest_clock_step(qts, 6 * TH1520_PWM_TICK_NS - 1);
+    g_assert_false(qtest_get_irq(qts, 2));
+    qtest_clock_step(qts, 1);
+    g_assert_true(qtest_get_irq(qts, 2));
+    qtest_clock_step(qts, 6 * TH1520_PWM_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(qts, 2));
+    qtest_clock_step(qts, 1);
+    g_assert_false(qtest_get_irq(qts, 2));
+
+    qtest_system_reset(qts);
+    assert_th1520_pwm_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_pwm_migration(void)
+{
+    const uint32_t ctrl = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-pwm-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(dst, TH1520_PWM_QOM_PATH, "pwm");
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    th1520_pwm_stage(src, 0, ctrl, 10, 3);
+    th1520_pwm_start(src, 0, ctrl);
+    qtest_clock_step(src, TH1520_PWM_TICK_NS);
+    th1520_pwm_stage(src, 0, ctrl, 12, 5);
+
+    /* QEMUTimer migration preserves absolute virtual deadlines. */
+    g_assert_cmpint(qtest_clock_set(dst, TH1520_PWM_TICK_NS), ==,
+                    TH1520_PWM_TICK_NS);
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_PWM_CTRL(0)), ==, ctrl);
+    g_assert_cmphex(qtest_readl(dst, TH1520_PWM_PERIOD(0)), ==, 12);
+    g_assert_cmphex(qtest_readl(dst, TH1520_PWM_FP(0)), ==, 5);
+    g_assert_true(qtest_get_irq(dst, 0));
+
+    qtest_clock_step(dst, 2 * TH1520_PWM_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 1);
+    g_assert_false(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 7 * TH1520_PWM_TICK_NS - 1);
+    g_assert_false(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 1);
+    g_assert_true(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 5 * TH1520_PWM_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 1);
+    g_assert_false(qtest_get_irq(dst, 0));
+
+    qtest_system_reset(dst);
+    assert_th1520_pwm_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_dw_i2c_migration(void)
 {
     static const uint8_t contents[] = { 0xa5, 0x5a };
@@ -5133,6 +5333,12 @@ int main(int argc, char **argv)
                        test_dw_spi_error_status);
         qtest_add_func("/beaglev-ahead/dw-spi/migration",
                        test_dw_spi_migration);
+        qtest_add_func("/beaglev-ahead/th1520-pwm/registers",
+                       test_th1520_pwm_registers);
+        qtest_add_func("/beaglev-ahead/th1520-pwm/waveform",
+                       test_th1520_pwm_waveform);
+        qtest_add_func("/beaglev-ahead/th1520-pwm/migration",
+                       test_th1520_pwm_migration);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
