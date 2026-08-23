@@ -1,0 +1,540 @@
+/*
+ * T-Head TH1520 application-domain clock and reset controllers
+ *
+ * The two blocks have separate physical apertures and device-tree bindings.
+ * This model implements the REE register banks visible through those
+ * apertures.  Clock programming changes the guest-visible clock tree exposed
+ * by Linux; it deliberately does not scale TCG execution throughput.
+ *
+ * PLL lock is deterministic virtual time.  The public system manual quotes a
+ * maximum lock time of about 21.25 us for the default configurations.  The
+ * exact distribution, calibration state machine, invalid configurations and
+ * voltage/frequency coupling still require physical differential tests.
+ *
+ * Reset registers preserve the silicon defaults and active-low programming
+ * convention.  Their outputs are not yet coupled to child QEMU devices: the
+ * silicon default releases only C910 core 0, whereas the current direct-boot
+ * machine deliberately starts all four harts.  That boot/reset discrepancy is
+ * tracked in the BeagleV Ahead hardware-validation ledger.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#include "qemu/osdep.h"
+
+#include "hw/misc/th1520_cpr.h"
+#include "migration/vmstate.h"
+#include "qemu/bitops.h"
+#include "qemu/log.h"
+#include "qemu/module.h"
+
+#define TH1520_PLL_STS 0x080
+#define TH1520_PLL_VCO_RST BIT(29)
+#define TH1520_PLL_LOCK_TIME_NS 21250
+
+#define TH1520_PLL_CFG0_MASK 0x077fff3f
+#define TH1520_PLL_CFG1_MASK 0x7bffffff
+#define TH1520_PLL_CFG2_MASK 0x3ffff000
+#define TH1520_PLL_CFG3_MASK 0xfffff700
+
+typedef struct TH1520RegInfo {
+    uint16_t offset;
+    uint32_t reset;
+    uint32_t write_mask;
+} TH1520RegInfo;
+
+#define PLL_CFG0(base, value) \
+    { (base) + 0x0, (value), TH1520_PLL_CFG0_MASK }
+#define PLL_CFG1(base, value) \
+    { (base) + 0x4, (value), TH1520_PLL_CFG1_MASK }
+#define PLL_CFG2(base, value) \
+    { (base) + 0x8, (value), TH1520_PLL_CFG2_MASK }
+#define PLL_CFG3(base, value) \
+    { (base) + 0xc, (value), TH1520_PLL_CFG3_MASK }
+
+static const TH1520RegInfo th1520_ap_clock_reginfo[] = {
+    PLL_CFG0(0x000, 0x02507d01),
+    PLL_CFG1(0x000, 0x03000000),
+    PLL_CFG2(0x000, 0x02000000),
+    PLL_CFG3(0x000, 0x07fff400),
+    PLL_CFG0(0x010, 0x02507d01),
+    PLL_CFG1(0x010, 0x03000000),
+    PLL_CFG2(0x010, 0x02000000),
+    PLL_CFG3(0x010, 0x07fff400),
+    PLL_CFG0(0x020, 0x01307d01),
+    PLL_CFG1(0x020, 0x03000000),
+    PLL_CFG2(0x020, 0x02000000),
+    PLL_CFG3(0x020, 0x07fff400),
+    PLL_CFG0(0x030, 0x01306301),
+    PLL_CFG1(0x030, 0x03000000),
+    PLL_CFG2(0x030, 0x02000000),
+    PLL_CFG3(0x030, 0x07fff400),
+    PLL_CFG0(0x040, 0x01206301),
+    PLL_CFG1(0x040, 0x03000000),
+    PLL_CFG2(0x040, 0x02000000),
+    PLL_CFG3(0x040, 0x07fff400),
+    PLL_CFG0(0x050, 0x01206301),
+    PLL_CFG1(0x050, 0x03000000),
+    PLL_CFG2(0x050, 0x02000000),
+    PLL_CFG3(0x050, 0x07fff400),
+    PLL_CFG0(0x060, 0x01306301),
+    PLL_CFG1(0x060, 0x63000000),
+    PLL_CFG2(0x060, 0x02000000),
+    PLL_CFG3(0x060, 0x07fff500),
+    { TH1520_PLL_STS, 0x00000000, 0x00000000 },
+    { 0x100, 0x000009f0, 0x00000ff3 },
+    { 0x104, 0x30303030, 0x3f3f3f3f },
+    { 0x120, 0x000000d4, 0x00000037 },
+    { 0x130, 0x00000018, 0x0000000f },
+    { 0x134, 0x000001b2, 0x00000197 },
+    { 0x138, 0x00000112, 0x0000013f },
+    { 0x140, 0x00000258, 0x0000027f },
+    { 0x150, 0x00001f28, 0x00001f7f },
+    { 0x1b4, 0x0000002a, 0x0000003f },
+    { 0x1b8, 0x0000002a, 0x0000003f },
+    { 0x1bc, 0x0000002a, 0x0000003f },
+    { 0x1c0, 0x0000002a, 0x0000003f },
+    { 0x1c4, 0x00000034, 0x000000bf },
+    { 0x1c8, 0x0000000b, 0x0000007f },
+    { 0x1d0, 0x00330016, 0x003f003f },
+    { 0x1d8, 0x00000016, 0x0000003f },
+    { 0x1dc, 0x00000033, 0x0000003f },
+    { 0x1e0, 0x0000b312, 0x0000ffff },
+    { 0x1e4, 0x00000032, 0x0000003f },
+    { 0x1e8, 0x00000102, 0x000001ff },
+    { 0x1ec, 0x00000102, 0x000001ff },
+    { 0x1f0, 0x00000002, 0x00000003 },
+    { 0x204, 0x55ffffff, 0x55ffffff },
+    { 0x208, 0x000007ff, 0x000007ff },
+    { 0x20c, 0x0000001e, 0x0000001e },
+    { 0x210, 0x00000000, 0x00000001 },
+    { 0x220, 0x00000000, 0x00000007 },
+};
+
+static const uint32_t th1520_pll_lock_mask[TH1520_AP_PLL_COUNT] = {
+    BIT(1), BIT(4), BIT(3), BIT(7), BIT(8), BIT(9), BIT(10),
+};
+
+static const TH1520RegInfo *th1520_reginfo_find(const TH1520RegInfo *info,
+                                                size_t count,
+                                                hwaddr offset)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (info[i].offset == offset) {
+            return &info[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void th1520_ap_clock_schedule_next(TH1520APClockState *s)
+{
+    int64_t next = INT64_MAX;
+
+    timer_del(&s->pll_lock_timer);
+    for (unsigned int i = 0; i < TH1520_AP_PLL_COUNT; i++) {
+        if (s->pll_pending & BIT(i)) {
+            next = MIN(next, s->pll_deadline[i]);
+        }
+    }
+
+    if (next != INT64_MAX) {
+        timer_mod_ns(&s->pll_lock_timer, next);
+    }
+}
+
+static void th1520_ap_clock_cancel_pll(TH1520APClockState *s,
+                                       unsigned int pll)
+{
+    s->pll_pending &= ~BIT(pll);
+    s->regs[TH1520_PLL_STS / 4] &= ~th1520_pll_lock_mask[pll];
+    th1520_ap_clock_schedule_next(s);
+}
+
+static void th1520_ap_clock_restart_pll(TH1520APClockState *s,
+                                        unsigned int pll)
+{
+    s->regs[TH1520_PLL_STS / 4] &= ~th1520_pll_lock_mask[pll];
+    s->pll_pending |= BIT(pll);
+    s->pll_deadline[pll] = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                           TH1520_PLL_LOCK_TIME_NS;
+    th1520_ap_clock_schedule_next(s);
+}
+
+static void th1520_ap_clock_lock(void *opaque)
+{
+    TH1520APClockState *s = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    for (unsigned int i = 0; i < TH1520_AP_PLL_COUNT; i++) {
+        if ((s->pll_pending & BIT(i)) && s->pll_deadline[i] <= now) {
+            s->pll_pending &= ~BIT(i);
+            s->regs[TH1520_PLL_STS / 4] |= th1520_pll_lock_mask[i];
+        }
+    }
+
+    th1520_ap_clock_schedule_next(s);
+}
+
+static uint64_t th1520_ap_clock_read(void *opaque, hwaddr offset,
+                                     unsigned int size)
+{
+    TH1520APClockState *s = opaque;
+    const TH1520RegInfo *info =
+        th1520_reginfo_find(th1520_ap_clock_reginfo,
+                            ARRAY_SIZE(th1520_ap_clock_reginfo), offset);
+
+    if (!info) {
+        qemu_log_mask(LOG_UNIMP,
+                      "%s: unimplemented register at 0x%03" HWADDR_PRIx
+                      "\n", TYPE_TH1520_AP_CLOCK, offset);
+        return 0;
+    }
+
+    return s->regs[offset / 4];
+}
+
+static void th1520_ap_clock_write(void *opaque, hwaddr offset,
+                                  uint64_t value, unsigned int size)
+{
+    TH1520APClockState *s = opaque;
+    const TH1520RegInfo *info =
+        th1520_reginfo_find(th1520_ap_clock_reginfo,
+                            ARRAY_SIZE(th1520_ap_clock_reginfo), offset);
+    uint32_t old;
+    uint32_t next;
+    unsigned int pll;
+    unsigned int pll_reg;
+
+    if (!info) {
+        qemu_log_mask(LOG_UNIMP,
+                      "%s: unimplemented register at 0x%03" HWADDR_PRIx
+                      "\n", TYPE_TH1520_AP_CLOCK, offset);
+        return;
+    }
+
+    if (!info->write_mask) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: write to read-only register at 0x%03"
+                      HWADDR_PRIx "\n", TYPE_TH1520_AP_CLOCK, offset);
+        return;
+    }
+
+    old = s->regs[offset / 4];
+    next = (old & ~info->write_mask) | ((uint32_t)value & info->write_mask);
+
+    /* PLL calibration pulse is write-one/self-clearing on the hardware. */
+    if (offset <= 0x06c && (offset & 0xf) == 0xc) {
+        next &= ~BIT(9);
+    }
+
+    s->regs[offset / 4] = next;
+    if (old == next || offset > 0x064) {
+        return;
+    }
+
+    pll = offset / 0x10;
+    pll_reg = offset & 0xf;
+    if (pll_reg != 0 && pll_reg != 4) {
+        return;
+    }
+
+    if (s->regs[(pll * 0x10 + 4) / 4] & TH1520_PLL_VCO_RST) {
+        th1520_ap_clock_cancel_pll(s, pll);
+    } else {
+        th1520_ap_clock_restart_pll(s, pll);
+    }
+}
+
+static const MemoryRegionOps th1520_ap_clock_ops = {
+    .read = th1520_ap_clock_read,
+    .write = th1520_ap_clock_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+        .unaligned = false,
+    },
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+        .unaligned = false,
+    },
+};
+
+static void th1520_ap_clock_reset(DeviceState *dev)
+{
+    TH1520APClockState *s = TH1520_AP_CLOCK(dev);
+
+    timer_del(&s->pll_lock_timer);
+    memset(s->regs, 0, sizeof(s->regs));
+    memset(s->pll_deadline, 0, sizeof(s->pll_deadline));
+    memset(s->pll_remaining, 0, sizeof(s->pll_remaining));
+    s->pll_pending = 0;
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_ap_clock_reginfo); i++) {
+        const TH1520RegInfo *info = &th1520_ap_clock_reginfo[i];
+
+        s->regs[info->offset / 4] = info->reset;
+    }
+
+    for (unsigned int pll = 0; pll < TH1520_AP_PLL_COUNT; pll++) {
+        if (!(s->regs[(pll * 0x10 + 4) / 4] & TH1520_PLL_VCO_RST)) {
+            th1520_ap_clock_restart_pll(s, pll);
+        }
+    }
+}
+
+static int th1520_ap_clock_pre_save(void *opaque)
+{
+    TH1520APClockState *s = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    for (unsigned int i = 0; i < TH1520_AP_PLL_COUNT; i++) {
+        s->pll_remaining[i] = s->pll_pending & BIT(i) ?
+                              MAX(s->pll_deadline[i] - now, 0) : 0;
+    }
+
+    return 0;
+}
+
+static int th1520_ap_clock_post_load(void *opaque, int version_id)
+{
+    TH1520APClockState *s = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    for (unsigned int i = 0; i < TH1520_AP_PLL_COUNT; i++) {
+        if (s->pll_pending & BIT(i)) {
+            s->pll_deadline[i] = now + s->pll_remaining[i];
+        }
+    }
+
+    th1520_ap_clock_schedule_next(s);
+    return 0;
+}
+
+static const VMStateDescription vmstate_th1520_ap_clock = {
+    .name = TYPE_TH1520_AP_CLOCK,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = th1520_ap_clock_pre_save,
+    .post_load = th1520_ap_clock_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(regs, TH1520APClockState,
+                             TH1520_AP_CLOCK_REGS),
+        VMSTATE_UINT32(pll_pending, TH1520APClockState),
+        VMSTATE_INT64_ARRAY(pll_remaining, TH1520APClockState,
+                            TH1520_AP_PLL_COUNT),
+        VMSTATE_END_OF_LIST(),
+    },
+};
+
+static void th1520_ap_clock_init(Object *obj)
+{
+    TH1520APClockState *s = TH1520_AP_CLOCK(obj);
+
+    timer_init_ns(&s->pll_lock_timer, QEMU_CLOCK_VIRTUAL,
+                  th1520_ap_clock_lock, s);
+    memory_region_init_io(&s->iomem, obj, &th1520_ap_clock_ops, s,
+                          TYPE_TH1520_AP_CLOCK,
+                          TH1520_AP_CLOCK_MMIO_SIZE);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+}
+
+static void th1520_ap_clock_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->desc = "T-Head TH1520 application clock controller";
+    dc->vmsd = &vmstate_th1520_ap_clock;
+    device_class_set_legacy_reset(dc, th1520_ap_clock_reset);
+}
+
+#define RESET_REG(offset, reset, mask) { (offset), (reset), (mask) }
+
+static const TH1520RegInfo th1520_ap_reset_reginfo[] = {
+    RESET_REG(0x000, 0x1, 0x1),
+    RESET_REG(0x004, 0x3, 0x1f),
+    RESET_REG(0x00c, 0x3, 0x3),
+    RESET_REG(0x010, 0x3, 0x3),
+    RESET_REG(0x014, 0x1, 0x1),
+    RESET_REG(0x018, 0x1, 0x1),
+    RESET_REG(0x01c, 0x1, 0x1),
+    RESET_REG(0x020, 0x1, 0x1),
+    RESET_REG(0x024, 0x1, 0x1),
+    RESET_REG(0x028, 0x1, 0x1),
+    RESET_REG(0x02c, 0x1, 0x1),
+    RESET_REG(0x030, 0x1, 0x1),
+    RESET_REG(0x034, 0x1, 0x1),
+    RESET_REG(0x038, 0x1, 0x1),
+    RESET_REG(0x03c, 0x3, 0x3),
+    RESET_REG(0x040, 0x3, 0x3),
+    RESET_REG(0x044, 0x1, 0x1),
+    RESET_REG(0x048, 0x1, 0x1),
+    RESET_REG(0x04c, 0x1, 0x1),
+    RESET_REG(0x068, 0xf, 0xf),
+    RESET_REG(0x070, 0x3, 0x3),
+    RESET_REG(0x074, 0x3, 0x3),
+    RESET_REG(0x078, 0x3, 0x3),
+    RESET_REG(0x07c, 0x3, 0x3),
+    RESET_REG(0x080, 0x3, 0x3),
+    RESET_REG(0x084, 0x3, 0x3),
+    RESET_REG(0x08c, 0x3, 0x3),
+    RESET_REG(0x090, 0x3, 0x3),
+    RESET_REG(0x094, 0x3, 0x3),
+    RESET_REG(0x098, 0x3, 0x3),
+    RESET_REG(0x09c, 0x3, 0x3),
+    RESET_REG(0x0a0, 0x3, 0x3),
+    RESET_REG(0x0a4, 0x3, 0x3),
+    RESET_REG(0x0a8, 0x3, 0x3),
+    RESET_REG(0x0ac, 0x3, 0x3),
+    RESET_REG(0x0b0, 0x3, 0x3),
+    RESET_REG(0x0b4, 0x3, 0x3),
+    RESET_REG(0x0b8, 0x3, 0x3),
+    RESET_REG(0x0c0, 0x3, 0x3),
+    RESET_REG(0x0c4, 0x1, 0x1),
+    RESET_REG(0x0cc, 0x2, 0x2),
+    RESET_REG(0x0d4, 0x1, 0x1),
+    RESET_REG(0x0d8, 0x3, 0x3),
+    RESET_REG(0x0dc, 0x1, 0x1),
+    RESET_REG(0x0e4, 0x1, 0x1),
+    RESET_REG(0x0f8, 0x3, 0x3),
+    RESET_REG(0x0fc, 0x1, 0x1),
+    RESET_REG(0x128, 0x3, 0x3),
+    RESET_REG(0x12c, 0x1, 0x1),
+    RESET_REG(0x138, 0x1, 0x1),
+    RESET_REG(0x148, 0x3, 0x3),
+    RESET_REG(0x14c, 0x3, 0x3),
+    RESET_REG(0x178, 0x1, 0x1),
+    RESET_REG(0x188, 0x1, 0x1),
+    RESET_REG(0x18c, 0x1, 0x1),
+    RESET_REG(0x1a8, 0x3, 0x3),
+    RESET_REG(0x1ac, 0x1, 0x1),
+    RESET_REG(0x1b0, 0x0, 0x1),
+    RESET_REG(0x1dc, 0x3, 0x3),
+    RESET_REG(0x1ec, 0x1, 0x1),
+    RESET_REG(0x1f8, 0x1, 0x1),
+    RESET_REG(0x204, 0xf, 0xf),
+    RESET_REG(0x208, 0x3, 0x3),
+    RESET_REG(0x20c, 0x1, 0x1),
+    RESET_REG(0x210, 0x3, 0x3),
+    RESET_REG(0x214, 0x1, 0x1),
+    RESET_REG(0x218, 0x1, 0x1),
+    RESET_REG(0x220, 0x8, 0xf),
+};
+
+static uint64_t th1520_ap_reset_read(void *opaque, hwaddr offset,
+                                     unsigned int size)
+{
+    TH1520APResetState *s = opaque;
+    const TH1520RegInfo *info =
+        th1520_reginfo_find(th1520_ap_reset_reginfo,
+                            ARRAY_SIZE(th1520_ap_reset_reginfo), offset);
+
+    if (!info) {
+        qemu_log_mask(LOG_UNIMP,
+                      "%s: unimplemented register at 0x%03" HWADDR_PRIx
+                      "\n", TYPE_TH1520_AP_RESET, offset);
+        return 0;
+    }
+
+    return s->regs[offset / 4];
+}
+
+static void th1520_ap_reset_write(void *opaque, hwaddr offset,
+                                  uint64_t value, unsigned int size)
+{
+    TH1520APResetState *s = opaque;
+    const TH1520RegInfo *info =
+        th1520_reginfo_find(th1520_ap_reset_reginfo,
+                            ARRAY_SIZE(th1520_ap_reset_reginfo), offset);
+    uint32_t old;
+
+    if (!info) {
+        qemu_log_mask(LOG_UNIMP,
+                      "%s: unimplemented register at 0x%03" HWADDR_PRIx
+                      "\n", TYPE_TH1520_AP_RESET, offset);
+        return;
+    }
+
+    old = s->regs[offset / 4];
+    s->regs[offset / 4] = (old & ~info->write_mask) |
+                          ((uint32_t)value & info->write_mask);
+}
+
+static const MemoryRegionOps th1520_ap_reset_ops = {
+    .read = th1520_ap_reset_read,
+    .write = th1520_ap_reset_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+        .unaligned = false,
+    },
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+        .unaligned = false,
+    },
+};
+
+static void th1520_ap_reset_reset(DeviceState *dev)
+{
+    TH1520APResetState *s = TH1520_AP_RESET(dev);
+
+    memset(s->regs, 0, sizeof(s->regs));
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_ap_reset_reginfo); i++) {
+        const TH1520RegInfo *info = &th1520_ap_reset_reginfo[i];
+
+        s->regs[info->offset / 4] = info->reset;
+    }
+}
+
+static const VMStateDescription vmstate_th1520_ap_reset = {
+    .name = TYPE_TH1520_AP_RESET,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(regs, TH1520APResetState,
+                             TH1520_AP_RESET_REGS),
+        VMSTATE_END_OF_LIST(),
+    },
+};
+
+static void th1520_ap_reset_init(Object *obj)
+{
+    TH1520APResetState *s = TH1520_AP_RESET(obj);
+
+    memory_region_init_io(&s->iomem, obj, &th1520_ap_reset_ops, s,
+                          TYPE_TH1520_AP_RESET,
+                          TH1520_AP_RESET_MMIO_SIZE);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+}
+
+static void th1520_ap_reset_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->desc = "T-Head TH1520 application reset controller";
+    dc->vmsd = &vmstate_th1520_ap_reset;
+    device_class_set_legacy_reset(dc, th1520_ap_reset_reset);
+}
+
+static const TypeInfo th1520_cpr_types[] = {
+    {
+        .name = TYPE_TH1520_AP_CLOCK,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(TH1520APClockState),
+        .instance_init = th1520_ap_clock_init,
+        .class_init = th1520_ap_clock_class_init,
+    }, {
+        .name = TYPE_TH1520_AP_RESET,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(TH1520APResetState),
+        .instance_init = th1520_ap_reset_init,
+        .class_init = th1520_ap_reset_class_init,
+    },
+};
+
+DEFINE_TYPES(th1520_cpr_types)

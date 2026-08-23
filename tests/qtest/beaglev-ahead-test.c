@@ -23,6 +23,8 @@
 #define TH1520_CLINT_BASE          0xffdc000000ULL
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
+#define TH1520_AP_CLOCK_BASE       0xffef010000ULL
+#define TH1520_AP_RESET_BASE       0xffef014000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
@@ -82,6 +84,27 @@
 #define TH1520_GMAC0_IRQ           66
 #define TH1520_GMAC1_IRQ           67
 #define TH1520_SDIO1_IRQ           71
+
+#define TH1520_CLK_PERI_APB_PCLK   20
+#define TH1520_CLK_PERISYS_APB4    25
+#define TH1520_CLK_EMMC_SDIO       43
+#define TH1520_CLK_GMAC1           44
+#define TH1520_CLK_GMAC_AXI        48
+#define TH1520_CLK_GMAC0           50
+#define TH1520_CLK_UART0_PCLK      55
+#define TH1520_CLK_UART_SCLK       85
+
+#define TH1520_PLL_STS             0x080
+#define TH1520_C910_CLK_CFG        0x100
+#define TH1520_AHB2_CLK_CFG        0x120
+#define TH1520_PERISYS_AHB_CFG     0x140
+#define TH1520_PERISYS_APB_CFG     0x150
+#define TH1520_PERI_CLK_CFG        0x204
+#define TH1520_CTRL_CLK_CFG        0x208
+#define TH1520_UART_SCLK_CFG       0x210
+#define TH1520_PLL_VCO_RST         BIT(29)
+#define TH1520_PLL_LOCK_TIME_NS    21250
+#define TH1520_PLL_RESET_LOCKS     0x0000039a
 
 #define DWMAC_MAC_CONFIG           0x0000
 #define DWMAC_FRAME_FILTER         0x0004
@@ -371,6 +394,21 @@ static uint32_t fdt_prop_u32(const void *fdt, int node, const char *name)
     return fdt32_to_cpu(*prop);
 }
 
+static void assert_fdt_mmio(const void *fdt, int node, uint64_t base,
+                            uint32_t size)
+{
+    const fdt32_t *cells;
+    int len;
+
+    cells = fdt_getprop(fdt, node, "reg", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, base >> 32);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, (uint32_t)base);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, 0);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, size);
+}
+
 static void assert_fdt_bool(const void *fdt, int node, const char *name,
                             bool present)
 {
@@ -404,9 +442,7 @@ static void assert_fdt_stringlist(const void *fdt, int node, const char *name,
 
 static void assert_gmac_fdt(const void *fdt,
                             const TH1520GMACController *controller,
-                            uint32_t axi_clock_phandle,
-                            uint32_t pclk_phandle,
-                            uint32_t apb_clock_phandle,
+                            uint32_t clock_phandle,
                             uint32_t axi_phandle)
 {
     static const char *const compat[] = {
@@ -457,10 +493,15 @@ static void assert_gmac_fdt(const void *fdt,
 
     cells = fdt_getprop(fdt, node, "clocks", &len);
     g_assert_nonnull(cells);
-    g_assert_cmpint(len, ==, 3 * sizeof(*cells));
-    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, axi_clock_phandle);
-    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, pclk_phandle);
-    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, apb_clock_phandle);
+    g_assert_cmpint(len, ==, 6 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, TH1520_CLK_GMAC_AXI);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==,
+                    controller->base == TH1520_GMAC0_BASE ?
+                    TH1520_CLK_GMAC0 : TH1520_CLK_GMAC1);
+    g_assert_cmphex(fdt32_to_cpu(cells[4]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[5]), ==, TH1520_CLK_PERISYS_APB4);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,pbl"), ==, 32);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "snps,multicast-filter-bins"),
                     ==, 64);
@@ -546,8 +587,11 @@ static void assert_dwcmshc_fdt(const void *fdt,
     g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
     g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
 
-    g_assert_cmphex(fdt_prop_u32(fdt, node, "clocks"), ==,
-                    clock_phandle);
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, TH1520_CLK_EMMC_SDIO);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "max-frequency"), ==,
                     198000000);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "bus-width"), ==,
@@ -601,9 +645,11 @@ static void assert_dmac_fdt(const void *fdt, uint32_t clock_phandle)
 
     cells = fdt_getprop(fdt, node, "clocks", &len);
     g_assert_nonnull(cells);
-    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmpint(len, ==, 4 * sizeof(*cells));
     g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
-    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, TH1520_CLK_PERI_APB_PCLK);
+    g_assert_cmphex(fdt32_to_cpu(cells[2]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[3]), ==, TH1520_CLK_PERI_APB_PCLK);
 
     g_assert_cmphex(fdt_prop_u32(fdt, node, "#dma-cells"), ==, 1);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "dma-channels"), ==, 4);
@@ -636,11 +682,8 @@ static void test_direct_boot_contract(void)
     g_autofree uint8_t *fdt = NULL;
     uint64_t fdt_addr;
     uint32_t cpu0_phandle;
-    uint32_t dmac_clock_phandle;
-    uint32_t mshc_clock_phandle;
-    uint32_t gmac_axi_clock_phandle;
-    uint32_t gmac_pclk_phandle;
-    uint32_t gmac_apb_clock_phandle;
+    uint32_t osc_phandle;
+    uint32_t ap_clock_phandle;
     uint32_t stmmac_axi_phandle;
     int clock_offset;
     int config_offset;
@@ -682,50 +725,67 @@ static void test_direct_boot_contract(void)
     g_assert_cmpint(len, ==, sizeof(*cold_boot_harts));
     g_assert_cmphex(fdt32_to_cpu(*cold_boot_harts), ==, cpu0_phandle);
 
-    clock_offset = fdt_path_offset(fdt, "/dmac-clock");
+    clock_offset = fdt_path_offset(fdt, "/oscillator");
     g_assert_cmpint(clock_offset, >=, 0);
     g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
-                    125000000);
-    dmac_clock_phandle = fdt_get_phandle(fdt, clock_offset);
-    g_assert_cmphex(dmac_clock_phandle, !=, 0);
-    assert_dmac_fdt(fdt, dmac_clock_phandle);
+                    24000000);
+    osc_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(osc_phandle, !=, 0);
 
-    clock_offset = fdt_path_offset(fdt, "/mshc-clock");
+    clock_offset = fdt_path_offset(fdt,
+                                   "/soc/clock-controller@ffef010000");
     g_assert_cmpint(clock_offset, >=, 0);
     compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
     g_assert_nonnull(compatible);
-    g_assert_cmpstr(compatible, ==, "fixed-clock");
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==, 0);
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
-                    198000000);
-    mshc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
-    g_assert_cmphex(mshc_clock_phandle, !=, 0);
+    g_assert_cmpstr(compatible, ==, "thead,th1520-clk-ap");
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clocks"), ==,
+                    osc_phandle);
+    assert_fdt_mmio(fdt, clock_offset, TH1520_AP_CLOCK_BASE, 0x1000);
+    ap_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(ap_clock_phandle, !=, 0);
+
+    clock_offset = fdt_path_offset(fdt,
+                                   "/soc/reset-controller@ffef014000");
+    g_assert_cmpint(clock_offset, >=, 0);
+    compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "thead,th1520-reset-ap");
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#reset-cells"), ==, 1);
+    assert_fdt_mmio(fdt, clock_offset, TH1520_AP_RESET_BASE, 0x1000);
+    g_assert_cmphex(fdt_get_phandle(fdt, clock_offset), !=, 0);
+
+    assert_dmac_fdt(fdt, ap_clock_phandle);
 
     for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
         assert_dwcmshc_fdt(fdt, &dwcmshc_controllers[i],
-                           mshc_clock_phandle);
+                           ap_clock_phandle);
     }
 
-    clock_offset = fdt_path_offset(fdt, "/gmac-axi-clock");
+    clock_offset = fdt_path_offset(fdt, "/soc/serial@ffe7014000");
     g_assert_cmpint(clock_offset, >=, 0);
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
-                    500000000);
-    gmac_axi_clock_phandle = fdt_get_phandle(fdt, clock_offset);
-    g_assert_cmphex(gmac_axi_clock_phandle, !=, 0);
+    cold_boot_harts = fdt_getprop(fdt, clock_offset, "clocks", &len);
+    g_assert_nonnull(cold_boot_harts);
+    g_assert_cmpint(len, ==, 4 * sizeof(*cold_boot_harts));
+    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[0]), ==,
+                    ap_clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[1]), ==,
+                    TH1520_CLK_UART_SCLK);
+    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[2]), ==,
+                    ap_clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cold_boot_harts[3]), ==,
+                    TH1520_CLK_UART0_PCLK);
 
-    clock_offset = fdt_path_offset(fdt, "/gmac-pclk");
-    g_assert_cmpint(clock_offset, >=, 0);
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
-                    1000000000);
-    gmac_pclk_phandle = fdt_get_phandle(fdt, clock_offset);
-    g_assert_cmphex(gmac_pclk_phandle, !=, 0);
-
-    clock_offset = fdt_path_offset(fdt, "/gmac-apb-clock");
-    g_assert_cmpint(clock_offset, >=, 0);
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
-                    500000000);
-    gmac_apb_clock_phandle = fdt_get_phandle(fdt, clock_offset);
-    g_assert_cmphex(gmac_apb_clock_phandle, !=, 0);
+    g_assert_cmpint(fdt_path_offset(fdt, "/dmac-clock"), ==,
+                    -FDT_ERR_NOTFOUND);
+    g_assert_cmpint(fdt_path_offset(fdt, "/mshc-clock"), ==,
+                    -FDT_ERR_NOTFOUND);
+    g_assert_cmpint(fdt_path_offset(fdt, "/gmac-axi-clock"), ==,
+                    -FDT_ERR_NOTFOUND);
+    g_assert_cmpint(fdt_path_offset(fdt, "/gmac-pclk"), ==,
+                    -FDT_ERR_NOTFOUND);
+    g_assert_cmpint(fdt_path_offset(fdt, "/gmac-apb-clock"), ==,
+                    -FDT_ERR_NOTFOUND);
 
     config_offset = fdt_path_offset(fdt, "/stmmac-axi-config");
     g_assert_cmpint(config_offset, >=, 0);
@@ -738,11 +798,133 @@ static void test_direct_boot_contract(void)
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
         assert_gmac_fdt(fdt, &th1520_gmac_controllers[i],
-                        gmac_axi_clock_phandle, gmac_pclk_phandle,
-                        gmac_apb_clock_phandle,
-                        stmmac_axi_phandle);
+                        ap_clock_phandle, stmmac_axi_phandle);
     }
 
+    qtest_quit(qts);
+}
+
+static void test_ap_clock_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x000), ==,
+                    0x02507d01);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x020), ==,
+                    0x01307d01);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x060), ==,
+                    0x01306301);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x064), ==,
+                    0x63000000);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_C910_CLK_CFG),
+                    ==, 0x000009f0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_AHB2_CLK_CFG),
+                    ==, 0x000000d4);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE +
+                                TH1520_PERISYS_AHB_CFG), ==, 0x00000258);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE +
+                                TH1520_PERISYS_APB_CFG), ==, 0x00001f28);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG),
+                    ==, 0x55ffffff);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_CTRL_CLK_CFG),
+                    ==, 0x000007ff);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_UART_SCLK_CFG),
+                    ==, 0);
+
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==, 0);
+    qtest_clock_step(qts, TH1520_PLL_LOCK_TIME_NS - 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    TH1520_PLL_RESET_LOCKS);
+
+    /* TEE PLL is bypassed and held in VCO reset at silicon reset. */
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + 0x064, 0x43000000);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS) &
+                    BIT(10), ==, 0);
+    qtest_clock_step(qts, TH1520_PLL_LOCK_TIME_NS);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    TH1520_PLL_RESET_LOCKS | BIT(10));
+
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + 0x000, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x000), ==,
+                    0x077fff3f);
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + 0x00c,
+                  0x07fff400 | BIT(9));
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x00c), ==,
+                    0x07fff400);
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + TH1520_AHB2_CLK_CFG,
+                  UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_AHB2_CLK_CFG),
+                    ==, 0x000000f7);
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG),
+                    ==, 0);
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG,
+                  UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG),
+                    ==, 0x55ffffff);
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + TH1520_PLL_STS, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    (TH1520_PLL_RESET_LOCKS & ~BIT(1)) | BIT(10));
+    qtest_clock_step(qts, TH1520_PLL_LOCK_TIME_NS);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    TH1520_PLL_RESET_LOCKS | BIT(10));
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x000), ==,
+                    0x02507d01);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_CLOCK_BASE + 0x064), ==,
+                    0x63000000);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==, 0);
+    qtest_quit(qts);
+}
+
+static void test_ap_reset_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    /* C910 reset releases top/core0; cores 1..3 remain asserted. */
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x004), ==, 0x3);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x068), ==, 0xf);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x070), ==, 0x3);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x14c), ==, 0x3);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x1b0), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x204), ==, 0xf);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0x8);
+
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x004, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x004), ==, 0x1f);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x004, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x004), ==, 0);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0cc, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x0cc), ==, 0x2);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x220, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0xf);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x004), ==, 0x3);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x0cc), ==, 0x2);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0x8);
     qtest_quit(qts);
 }
 
@@ -2218,6 +2400,72 @@ static void wait_for_migration_complete(QTestState *qts)
     g_error("migration did not complete within 30 seconds");
 }
 
+static void test_ap_cpr_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    uint32_t unlocked = TH1520_PLL_RESET_LOCKS & ~BIT(1);
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-cpr-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+    qtest_clock_step(src, TH1520_PLL_LOCK_TIME_NS);
+    g_assert_cmphex(qtest_readl(src,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    TH1520_PLL_RESET_LOCKS);
+
+    qtest_writel(src, TH1520_AP_CLOCK_BASE + 0x004,
+                  0x03000000 | TH1520_PLL_VCO_RST);
+    qtest_writel(src, TH1520_AP_CLOCK_BASE + 0x004, 0x03000000);
+    qtest_clock_step(src, 10000);
+    g_assert_cmphex(qtest_readl(src,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    unlocked);
+    qtest_writel(src, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG, 0);
+    qtest_writel(src, TH1520_AP_RESET_BASE + 0x004, 0x1f);
+    qtest_writel(src, TH1520_AP_RESET_BASE + 0x1b0, 1);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    unlocked);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x004), ==,
+                    0x1f);
+    g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x1b0), ==, 1);
+
+    qtest_clock_step(dst, TH1520_PLL_LOCK_TIME_NS - 10000 - 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    unlocked);
+    qtest_clock_step(dst, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
+                    TH1520_PLL_RESET_LOCKS);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_dmac_migration(void)
 {
     static const uint8_t source[64] = {
@@ -2634,6 +2882,8 @@ static void test_whole_machine_migration(void)
     set_csr(src, 3, CSR_MSCRATCH, 0x8877665544332211ULL);
 
     g_assert_cmpint(qtest_clock_set(src, 1000), ==, 1000);
+    qtest_writel(src, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG, 0);
+    qtest_writel(src, TH1520_AP_RESET_BASE + 0x1b0, 1);
     qtest_writel(src, C900_MSIP(3), 1);
     qtest_writel(src, C900_SSIP(2), 1);
     write_compare(src, C900_MTIMECMP(1), 30);
@@ -2673,6 +2923,11 @@ static void test_whole_machine_migration(void)
                     0x8877665544332211ULL);
     g_assert_cmphex(get_csr(dst, 0, CSR_TIME), ==, 3);
 
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_AP_CLOCK_BASE +
+                                TH1520_PERI_CLK_CFG), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x1b0), ==, 1);
+
     g_assert_cmphex(qtest_readl(dst, C900_MSIP(3)), ==, 1);
     g_assert_cmphex(qtest_readl(dst, C900_SSIP(2)), ==, 1);
     g_assert_cmphex(qtest_readl(dst, C900_MTIMECMP(1)), ==, 30);
@@ -2706,6 +2961,12 @@ int main(int argc, char **argv)
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/beaglev-ahead/boot/direct-contract",
                        test_direct_boot_contract);
+        qtest_add_func("/beaglev-ahead/cpr/clock-registers",
+                       test_ap_clock_registers);
+        qtest_add_func("/beaglev-ahead/cpr/reset-registers",
+                       test_ap_reset_registers);
+        qtest_add_func("/beaglev-ahead/cpr/migration",
+                       test_ap_cpr_migration);
         qtest_add_func("/beaglev-ahead/dmac/registers",
                        test_dmac_registers);
         qtest_add_func("/beaglev-ahead/dmac/direct-transfer",

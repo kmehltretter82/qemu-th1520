@@ -133,6 +133,7 @@ validation.
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
+| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, documented reset values/write masks, deterministic PLL locking and VMState; the generated DT uses the upstream Linux providers | Couple gates/resets to child devices, model remaining AO/video/DSP/misc domains and power transitions, and validate every default/timing distinction on hardware |
 | UART0-5 | Generic 16550 support exists; this workspace adds a reusable DW APB wrapper and integrates UART0 | Verify TH1520 synthesis values and bus behavior, complete optional shadow/DMA/RS-485 behavior, clocks/resets, and integrate UART1-5 |
 | I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
 | USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
@@ -147,7 +148,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, UART, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
 
 ## Workspace implementation status
 
@@ -195,23 +196,31 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   DMA, FCS handling, bus errors, interrupt recomputation, configurable version/
   feature/PHY identity and VMState.  Both TH1520 GMACs are mapped at their
   physical core/APB addresses and PLIC sources, with the nine-register APB
-  reset/mask contract, separate 500 MHz AXI, 1 GHz peripheral and 500 MHz APB
-  clocks, board GMAC0/RTL8211F-facing DT wiring, and disabled board GMAC1; and
+  reset/mask contract, separate 500 MHz AXI, 1 GHz peripheral and 125 MHz APB
+  clocks from the AP clock provider, board GMAC0/RTL8211F-facing DT wiring,
+  and disabled board GMAC1; and
 * a reusable Synopsys DesignWare AXI DMAC 1.01a model with four channels,
   direct and 64-byte-LLI memory-to-memory transfers, 64-bit addresses,
   transfer-width and increment behavior, descriptor valid/last/writeback,
   block/transfer/error status, interrupt masking and aggregation, reset and
   VMState.  The TH1520 general controller is mapped at ``0xffefc00000`` on
   PLIC source 27 with the exact four-channel Linux binding and a measured
-  125 MHz input-clock contract; and
+  125 MHz APB clock-provider contract; and
+* TH1520 AP clock and reset controllers at ``0xffef010000`` and
+  ``0xffef014000`` with the documented REE register banks, seven PLL groups,
+  reset values and writable masks, deterministic 21.25 microsecond PLL-lock
+  delay, self-clearing calibration pulses, system reset and VMState.  The
+  generated DT now exposes the upstream Linux bindings and uses their real
+  clock IDs for UART0, the general DMAC, all three storage controllers and
+  both GMACs instead of temporary fixed-clock nodes; and
 * a deterministic direct-boot contract that selects hart 0 for both the
   FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
   four-hart M-mode payload whose ordered UART transcript proves that harts
   0 through 3 all entered the common reset path; and
 * a whole-machine migration test that moves DRAM, SRAM, per-hart base and
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
-  CLINT, PLIC, UART, all three storage controllers, both GMAC cores, PHY banks
-  and both GMAC APB-glue instances together; and
+  CLINT, PLIC, AP clock/reset state, UART, all three storage controllers, both
+  GMAC cores, PHY banks and both GMAC APB-glue instances together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -244,7 +253,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 43 board qtests in the normal,
+The focused gate currently comprises 46 board qtests in the normal,
 dependency-minimal and ASan/UBSan builds.  These include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
@@ -254,7 +263,10 @@ both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
 preservation, and a socket-backed packet path.  Four DMAC tests cover
 reset/masks, a direct copy and PLIC route, a two-item LLI chain above 4 GiB,
 invalid-descriptor failure and completed-state/IRQ migration; the direct-boot
-test also checks the complete generated binding and 125 MHz clock.  The
+test also checks the complete generated binding and AP clock-provider IDs.
+Three AP clock/reset tests cover reset values, writable masks, PLL restart and
+lock delay, calibration self-clear, system reset, reset-bank behavior and
+migration while a PLL lock is pending.  The
 complete gate includes
 whole-machine migration; C910 CSR identity tests; XTheadVector, PMU, CLINT,
 PLIC, UART and four-hart
@@ -291,6 +303,15 @@ transfers completed with zero verification failures.  This exercises the
 mainline driver, linked descriptors, shared interrupt and data path, but it
 does not prove peripheral handshakes, cache incoherency failures or physical
 timing.
+
+The pinned Linux kernel also binds the generated ``thead,th1520-clk-ap``
+provider and reports the modeled reset tree: 300 MHz CPU PLLs, a 1 GHz GMAC
+PLL, 500 MHz CPU-system AXI, 125 MHz peripheral APB, 100/125 MHz UART baud/APB
+inputs and 198 MHz eMMC/SDIO.  A second build with ``CONFIG_RESET_TH1520=y``
+binds ``ffef014000.reset-controller`` to the upstream ``th1520-reset`` driver.
+This validates the software-visible provider contracts and digital reset
+state; it does not prove physical cold-reset defaults, analog PLL behavior or
+that clock gates and reset outputs affect child devices correctly.
 
 ## Intended source architecture
 
@@ -492,6 +513,19 @@ Gate P6:
 * register, IRQ, clock/reset, power-cycle and migration qtests exist per block;
 * header loopback, LED, button, PWM, I2C/SPI peripheral and watchdog tests pass;
 * clock-gated/reset devices stop and resume exactly as hardware observations.
+
+Status: in progress.  The first AP clock/reset submilestone implements the two
+REE banks, documented digital defaults and masks, seven PLL groups with a
+deterministic maximum-default lock delay, reset/migration behavior and the
+upstream Linux DT providers.  Three focused qtests and the complete 46-test
+board gate pass; pinned Linux binds both providers and reports the expected
+software-visible consumer rates.  Clock and reset outputs are not yet coupled
+to UART, DMA, storage, GMAC or the harts, so guest gate/reset writes currently
+change controller state without stopping those child models.  Direct boot
+also releases all four harts even though the modeled C910 reset-register
+default releases only the top and core 0.  Remaining AP behavior, all other
+clock/reset and power domains, control I/O and every other P6 gate stay open
+until implemented and, where necessary, compared with the physical board.
 
 ### Phase 7 — USB and board radios
 

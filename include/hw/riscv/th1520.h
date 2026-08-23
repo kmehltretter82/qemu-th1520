@@ -12,6 +12,7 @@
 #include "hw/dma/dw_axi_dmac.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
+#include "hw/misc/th1520_cpr.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
 #include "hw/riscv/riscv_hart.h"
@@ -31,6 +32,8 @@ struct TH1520SoCState {
     MemoryRegion brom;
     THeadC900CLINTState clint;
     THeadC900PLICState plic;
+    TH1520APClockState ap_clock;
+    TH1520APResetState ap_reset;
     DWAPBUARTState uart0;
     DWAxiDMACState dmac0;
     DWGMACState gmac[TH1520_GMAC_COUNT];
@@ -53,6 +56,8 @@ enum {
     TH1520_DEV_PLIC,
     TH1520_DEV_CLINT,
     TH1520_DEV_SRAM,
+    TH1520_DEV_AP_CLOCK,
+    TH1520_DEV_AP_RESET,
     TH1520_DEV_UART0,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
@@ -68,6 +73,17 @@ enum {
 #define TH1520_C910_HARTS 4
 #define TH1520_C910_VLENB 16
 #define TH1520_TIMEBASE_FREQ 3000000
+#define TH1520_OSC_FREQ 24000000
+
+/* IDs from the thead,th1520-clk-ap binding used by modeled peripherals. */
+#define TH1520_CLK_PERI_APB_PCLK 20
+#define TH1520_CLK_PERISYS_APB4_HCLK 25
+#define TH1520_CLK_EMMC_SDIO 43
+#define TH1520_CLK_GMAC1 44
+#define TH1520_CLK_GMAC_AXI 48
+#define TH1520_CLK_GMAC0 50
+#define TH1520_CLK_UART0_PCLK 55
+#define TH1520_CLK_UART_SCLK 85
 
 /* riscv,ndev describes IDs 1..240; QEMU's PLIC count includes ID zero. */
 #define TH1520_PLIC_NDEV 240
@@ -77,16 +93,12 @@ enum {
 #define TH1520_UART_INPUT_FREQ 100000000
 
 #define TH1520_DMAC0_IRQ 27
-#define TH1520_DMAC_INPUT_FREQ 125000000
 #define TH1520_DMAC_CHANNELS 4
 #define TH1520_DMAC_BLOCK_SIZE 65536
 #define TH1520_DMAC_DATA_WIDTH 4
 
 #define TH1520_GMAC0_IRQ 66
 #define TH1520_GMAC1_IRQ 67
-#define TH1520_GMAC_AXI_FREQ 500000000
-#define TH1520_GMAC_PCLK_FREQ 1000000000
-#define TH1520_GMAC_APB_FREQ 500000000
 #define TH1520_GMAC_VERSION 0x00001037
 #define TH1520_GMAC_HW_FEATURE 0x110d0107
 #define TH1520_GMAC_PHY_ADDR 1

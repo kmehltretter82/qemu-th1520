@@ -1795,12 +1795,14 @@ F: hw/char/dw_apb_uart.c
 F: hw/dma/dw_axi_dmac.c
 F: hw/intc/thead_c900_clint.c
 F: hw/intc/thead_c900_plic.c
+F: hw/misc/th1520_cpr.c
 F: hw/net/th1520_gmac.c
 F: hw/riscv/th1520.c
 F: include/hw/char/dw_apb_uart.h
 F: include/hw/dma/dw_axi_dmac.h
 F: include/hw/intc/thead_c900_clint.h
 F: include/hw/intc/thead_c900_plic.h
+F: include/hw/misc/th1520_cpr.h
 F: include/hw/net/th1520_gmac.h
 F: include/hw/riscv/th1520.h
 F: target/riscv/*theadvector*

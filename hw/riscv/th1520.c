@@ -44,6 +44,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_PLIC]  = { 0xffd8000000, 0x01000000 },
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
+    [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
+    [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
@@ -159,6 +161,10 @@ static void th1520_soc_init(Object *obj)
                             TYPE_THEAD_C900_CLINT);
     object_initialize_child(obj, "plic", &s->plic,
                             TYPE_THEAD_C900_PLIC);
+    object_initialize_child(obj, "ap-clock", &s->ap_clock,
+                            TYPE_TH1520_AP_CLOCK);
+    object_initialize_child(obj, "ap-reset", &s->ap_reset,
+                            TYPE_TH1520_AP_RESET);
     object_initialize_child(obj, "uart0", &s->uart0, TYPE_DW_APB_UART);
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
@@ -248,6 +254,18 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         qdev_connect_gpio_out_named(DEVICE(&s->plic), "sext", i,
                                     qdev_get_gpio_in(cpu, IRQ_S_EXT));
     }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ap_clock), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_clock), 0,
+                    th1520_memmap[TH1520_DEV_AP_CLOCK].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ap_reset), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_reset), 0,
+                    th1520_memmap[TH1520_DEV_AP_RESET].base);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->clint), errp)) {
         return;
@@ -365,12 +383,9 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t phandle = 1;
     uint32_t l2_phandle;
     uint32_t plic_phandle;
-    uint32_t uart_clock_phandle;
-    uint32_t dmac_clock_phandle;
-    uint32_t mshc_clock_phandle;
-    uint32_t gmac_axi_clock_phandle;
-    uint32_t gmac_pclk_phandle;
-    uint32_t gmac_apb_clock_phandle;
+    uint32_t osc_phandle;
+    uint32_t ap_clock_phandle;
+    uint32_t ap_reset_phandle;
     uint32_t stmmac_axi_phandle;
     uint32_t phy_phandle;
     g_autofree char *plic_name = NULL;
@@ -471,17 +486,53 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                   (char **)&clint_compat,
                                   ARRAY_SIZE(clint_compat));
 
-    uart_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/uart-clock");
-    qemu_fdt_setprop_string(ms->fdt, "/uart-clock", "compatible",
+    osc_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/oscillator");
+    qemu_fdt_setprop_string(ms->fdt, "/oscillator", "compatible",
                             "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/uart-clock", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/uart-clock", "clock-frequency",
-                          TH1520_UART_INPUT_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/uart-clock", "clock-output-names",
-                            "uart-sclk");
-    qemu_fdt_setprop_cell(ms->fdt, "/uart-clock", "phandle",
-                          uart_clock_phandle);
+    qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "clock-frequency",
+                          TH1520_OSC_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/oscillator", "clock-output-names",
+                            "osc_24m");
+    qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "phandle", osc_phandle);
+
+    ap_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt,
+                         "/soc/clock-controller@ffef010000");
+    qemu_fdt_setprop_string(ms->fdt,
+                            "/soc/clock-controller@ffef010000", "compatible",
+                            "thead,th1520-clk-ap");
+    qemu_fdt_setprop_sized_cells(ms->fdt,
+                                 "/soc/clock-controller@ffef010000", "reg",
+                                 2, th1520_memmap[TH1520_DEV_AP_CLOCK].base,
+                                 2, th1520_memmap[TH1520_DEV_AP_CLOCK].size);
+    qemu_fdt_setprop_cell(ms->fdt,
+                          "/soc/clock-controller@ffef010000", "clocks",
+                          osc_phandle);
+    qemu_fdt_setprop_cell(ms->fdt,
+                          "/soc/clock-controller@ffef010000", "#clock-cells",
+                          1);
+    qemu_fdt_setprop_cell(ms->fdt,
+                          "/soc/clock-controller@ffef010000", "phandle",
+                          ap_clock_phandle);
+
+    ap_reset_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt,
+                         "/soc/reset-controller@ffef014000");
+    qemu_fdt_setprop_string(ms->fdt,
+                            "/soc/reset-controller@ffef014000", "compatible",
+                            "thead,th1520-reset-ap");
+    qemu_fdt_setprop_sized_cells(ms->fdt,
+                                 "/soc/reset-controller@ffef014000", "reg",
+                                 2, th1520_memmap[TH1520_DEV_AP_RESET].base,
+                                 2, th1520_memmap[TH1520_DEV_AP_RESET].size);
+    qemu_fdt_setprop_cell(ms->fdt,
+                          "/soc/reset-controller@ffef014000", "#reset-cells",
+                          1);
+    qemu_fdt_setprop_cell(ms->fdt,
+                          "/soc/reset-controller@ffef014000", "phandle",
+                          ap_reset_phandle);
 
     uart_name = g_strdup_printf("/soc/serial@%" HWADDR_PRIx,
                                 th1520_memmap[TH1520_DEV_UART0].base);
@@ -494,7 +545,8 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_cells(ms->fdt, uart_name, "interrupts",
                            TH1520_UART0_IRQ, 4);
     qemu_fdt_setprop_cells(ms->fdt, uart_name, "clocks",
-                           uart_clock_phandle, uart_clock_phandle);
+                           ap_clock_phandle, TH1520_CLK_UART_SCLK,
+                           ap_clock_phandle, TH1520_CLK_UART0_PCLK);
     qemu_fdt_setprop_string_array(ms->fdt, uart_name, "clock-names",
                                   (char **)&uart_clock_names,
                                   ARRAY_SIZE(uart_clock_names));
@@ -504,18 +556,6 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_string(ms->fdt, "/aliases", "serial0", uart_name);
     qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path",
                             "serial0:115200n8");
-
-    dmac_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/dmac-clock");
-    qemu_fdt_setprop_string(ms->fdt, "/dmac-clock", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/dmac-clock", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/dmac-clock", "clock-frequency",
-                          TH1520_DMAC_INPUT_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/dmac-clock", "clock-output-names",
-                            "perisys-apb-pclk");
-    qemu_fdt_setprop_cell(ms->fdt, "/dmac-clock", "phandle",
-                          dmac_clock_phandle);
 
     dmac_name = g_strdup_printf("/soc/dma-controller@%" HWADDR_PRIx,
                                 th1520_memmap[TH1520_DEV_DMAC0].base);
@@ -528,7 +568,8 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_cells(ms->fdt, dmac_name, "interrupts",
                            TH1520_DMAC0_IRQ, 4);
     qemu_fdt_setprop_cells(ms->fdt, dmac_name, "clocks",
-                           dmac_clock_phandle, dmac_clock_phandle);
+                           ap_clock_phandle, TH1520_CLK_PERI_APB_PCLK,
+                           ap_clock_phandle, TH1520_CLK_PERI_APB_PCLK);
     qemu_fdt_setprop_string_array(ms->fdt, dmac_name, "clock-names",
                                   (char **)&dmac_clock_names,
                                   ARRAY_SIZE(dmac_clock_names));
@@ -545,18 +586,6 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_cell(ms->fdt, dmac_name, "snps,axi-max-burst-len", 16);
     qemu_fdt_setprop_string(ms->fdt, dmac_name, "status", "okay");
 
-    mshc_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/mshc-clock");
-    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "clock-frequency",
-                          TH1520_MSHC_INPUT_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "clock-output-names",
-                            "emmc-sdio");
-    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "phandle",
-                          mshc_clock_phandle);
-
     for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
         const MemMapEntry *map = &th1520_memmap[th1520_mshc_memmap[i]];
         g_autofree char *name =
@@ -569,8 +598,8 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                      2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
                                th1520_mshc_irqs[i], 4);
-        qemu_fdt_setprop_cell(ms->fdt, name, "clocks",
-                              mshc_clock_phandle);
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                               ap_clock_phandle, TH1520_CLK_EMMC_SDIO);
         qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "core");
         qemu_fdt_setprop_cell(ms->fdt, name, "max-frequency",
                               TH1520_MSHC_INPUT_FREQ);
@@ -589,49 +618,6 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                              NULL, 0);
         }
     }
-
-    /*
-     * The TH1520 clock tree feeds GMAC's AXI interface at 500 MHz, its
-     * peripheral clock directly from the 1 GHz GMAC PLL, and its APB glue at
-     * 500 MHz.  Physical divider/phase behavior still needs board
-     * measurements; these fixed clocks expose the software-visible rates
-     * while the APB model retains all programmed digital state (GMAC-001).
-     */
-    gmac_axi_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/gmac-axi-clock");
-    qemu_fdt_setprop_string(ms->fdt, "/gmac-axi-clock", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-axi-clock", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-axi-clock", "clock-frequency",
-                          TH1520_GMAC_AXI_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/gmac-axi-clock",
-                            "clock-output-names", "gmac-axi");
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-axi-clock", "phandle",
-                          gmac_axi_clock_phandle);
-
-    gmac_pclk_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/gmac-pclk");
-    qemu_fdt_setprop_string(ms->fdt, "/gmac-pclk", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-pclk", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-pclk", "clock-frequency",
-                          TH1520_GMAC_PCLK_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/gmac-pclk", "clock-output-names",
-                            "gmac-pll");
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-pclk", "phandle",
-                          gmac_pclk_phandle);
-
-    gmac_apb_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/gmac-apb-clock");
-    qemu_fdt_setprop_string(ms->fdt, "/gmac-apb-clock", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-apb-clock", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-apb-clock", "clock-frequency",
-                          TH1520_GMAC_APB_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/gmac-apb-clock",
-                            "clock-output-names", "gmac-apb");
-    qemu_fdt_setprop_cell(ms->fdt, "/gmac-apb-clock", "phandle",
-                          gmac_apb_clock_phandle);
 
     stmmac_axi_phandle = phandle++;
     qemu_fdt_add_subnode(ms->fdt, "/stmmac-axi-config");
@@ -666,8 +652,11 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                th1520_gmac_irqs[i], 4);
         qemu_fdt_setprop_string(ms->fdt, name, "interrupt-names", "macirq");
         qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
-                               gmac_axi_clock_phandle, gmac_pclk_phandle,
-                               gmac_apb_clock_phandle);
+                               ap_clock_phandle, TH1520_CLK_GMAC_AXI,
+                               ap_clock_phandle,
+                               i ? TH1520_CLK_GMAC1 : TH1520_CLK_GMAC0,
+                               ap_clock_phandle,
+                               TH1520_CLK_PERISYS_APB4_HCLK);
         qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
                                       (char **)&gmac_clock_names,
                                       ARRAY_SIZE(gmac_clock_names));
