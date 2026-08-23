@@ -18,6 +18,7 @@ config BEAGLEV_AHEAD
     select DW_APB_GPIO
     select DW_APB_SSI
     select DW_APB_TIMER
+    select TH1520_PWM
     select DW_APB_UART
     select DW_AXI_DMAC
     select DWCMSHC

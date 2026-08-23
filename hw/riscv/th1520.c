@@ -70,6 +70,7 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_I2C4]  = { 0xffe7f28000, 0x00004000 },
     [TH1520_DEV_I2C5]  = { 0xfff7f2c000, 0x00004000 },
     [TH1520_DEV_SPI0]  = { 0xffe700c000, 0x00001000 },
+    [TH1520_DEV_PWM]   = { 0xffec01c000, 0x00004000 },
     [TH1520_DEV_TIMER0_3] = { 0xffefc32000, 0x00001000 },
     [TH1520_DEV_TIMER4_7] = { 0xffffc33000, 0x00001000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
@@ -349,6 +350,10 @@ static void th1520_soc_init(Object *obj)
         object_initialize_child(obj, th1520_spi_info[i].name, &s->spi[i],
                                 TYPE_DW_APB_SSI);
     }
+    object_initialize_child(obj, "pwm", &s->pwm, TYPE_TH1520_PWM);
+    s->pwm_clk = clock_new(obj, "pwm-clock");
+    clock_set_hz(s->pwm_clk, TH1520_PWM_INPUT_FREQ);
+    qdev_connect_clock_in(DEVICE(&s->pwm), "pwm", s->pwm_clk);
     s->timer_clk = clock_new(obj, "timer-clock");
     clock_set_hz(s->timer_clk, TH1520_TIMER_INPUT_FREQ);
     for (int i = 0; i < TH1520_TIMER_GROUP_COUNT; i++) {
@@ -543,6 +548,13 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   info->irq));
     }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pwm), errp)) {
+        return;
+    }
+    /* The DTS aperture is 0x4000 bytes; the Linux driver uses only 0xb0. */
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pwm), 0,
+                    th1520_memmap[TH1520_DEV_PWM].base);
 
     for (int i = 0; i < TH1520_TIMER_GROUP_COUNT; i++) {
         const TH1520TimerInfo *info = &th1520_timer_info[i];
@@ -1227,6 +1239,16 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         snprintf(alias, sizeof(alias), "spi%d", i);
         qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, name);
     }
+
+    qemu_fdt_add_subnode(ms->fdt, "/soc/pwm@ffec01c000");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/pwm@ffec01c000", "compatible",
+                            "thead,th1520-pwm");
+    qemu_fdt_setprop_sized_cells(ms->fdt, "/soc/pwm@ffec01c000", "reg",
+                                 2, th1520_memmap[TH1520_DEV_PWM].base, 2,
+                                 th1520_memmap[TH1520_DEV_PWM].size);
+    qemu_fdt_setprop_cells(ms->fdt, "/soc/pwm@ffec01c000", "clocks",
+                           ap_clock_phandle, TH1520_PWM_CLOCK_ID);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pwm@ffec01c000", "#pwm-cells", 3);
 
     for (int group = 0; group < TH1520_TIMER_GROUP_COUNT; group++) {
         const TH1520TimerInfo *info = &th1520_timer_info[group];

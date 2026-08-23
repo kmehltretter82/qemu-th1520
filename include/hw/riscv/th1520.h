@@ -22,6 +22,7 @@
 #include "hw/sd/dwcmshc.h"
 #include "hw/ssi/dw_apb_ssi.h"
 #include "hw/timer/dw_apb_timer.h"
+#include "hw/timer/th1520_pwm.h"
 
 #define TH1520_MSHC_COUNT 3
 #define TH1520_GMAC_COUNT 2
@@ -52,6 +53,8 @@ struct TH1520SoCState {
     DWAPBSSIState spi[TH1520_SPI_COUNT];
     DWAPBTimerState timer[TH1520_TIMER_GROUP_COUNT];
     Clock *timer_clk;
+    TH1520PWMState pwm;
+    Clock *pwm_clk;
     DWAxiDMACState dmac0;
     DWGMACState gmac[TH1520_GMAC_COUNT];
     TH1520GMACAPBState gmac_apb[TH1520_GMAC_COUNT];
@@ -97,6 +100,7 @@ enum {
     TH1520_DEV_I2C4,
     TH1520_DEV_I2C5,
     TH1520_DEV_SPI0,
+    TH1520_DEV_PWM,
     TH1520_DEV_TIMER0_3,
     TH1520_DEV_TIMER4_7,
     TH1520_DEV_DMAC0,
@@ -175,6 +179,9 @@ enum {
 #define TH1520_I2C_INTR_MASK_VALID 0x00004fff
 
 #define TH1520_SPI0_IRQ 54
+
+#define TH1520_PWM_CLOCK_ID 51
+#define TH1520_PWM_INPUT_FREQ 125000000
 
 #define TH1520_TIMER0_IRQ 16
 #define TH1520_TIMER4_IRQ 20
