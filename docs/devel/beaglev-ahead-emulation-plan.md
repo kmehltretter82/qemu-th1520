@@ -78,6 +78,9 @@ The implementation must cite and pin the evidence used for each block:
 * Official openC910 RTL at commit
   b91c90914c19f114d35c8f6b73408eb241ed847c:
   https://github.com/XUANTIE-RV/openc910
+* OpenSBI at commit 4e79fd7de59f1b2899092c1a84ce68c8ebc68f93,
+  including its ``thead,c900-clint`` and ``thead,c900-plic`` integration
+  quirks: https://github.com/riscv-software-src/opensbi
 * Alibaba/XuanTie QEMU's XTheadVector implementation at commit
   3287d345c7f5d60d5c8774d90752f5f710744f85, reconciled with the older
   upstream RVV 0.7.1 implementation at
@@ -129,7 +132,7 @@ validation.
 | C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | Configurable SiFive PLIC exists | Verify or derive a C900/TH1520 wrapper, 240 sources and eight contexts |
-| CLINT/timer | Generic ACLINT SWI/MTIMER exists | Verify C900 layout, 3 MHz timebase, reset and access-size behavior |
+| CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | UART0-5 | Generic 16550 serial-mm exists | Add DW APB wrapper/probe registers, reg-shift 2, 32-bit accesses and clocks |
 | I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
 | USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
@@ -164,12 +167,18 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
   and CSR behavior, debugger/migration integration, and focused qtest/TCG
   smoke coverage; and
+* a reusable C900 CLINT derived from pinned openC910 RTL and OpenSBI behavior,
+  with exact M/S software and timer banks, four-hart wiring, a 3 MHz time CSR,
+  reset and migration state, qtests for every output, and a TCG privilege/CSR
+  delivery test; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
-This does not close Phases 1 through 3: their exhaustive, sanitizer,
-migration, Linux, and physical-differential gates still apply.  All provisional
-behavior is linked to an open item in the companion ledger.
+The CLINT portion of the Phase 1 interrupt gate is implemented, but Phase 1 is
+not closed: the C900 PLIC, UART, SMP payload, Linux, sanitizer, and migration
+gates remain.  Phases 2 and 3 likewise retain their exhaustive and physical-
+differential gates.  All provisional behavior is linked to an open item in the
+companion ledger.
 
 ## Intended source architecture
 

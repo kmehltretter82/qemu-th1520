@@ -8,6 +8,7 @@
 #define HW_RISCV_TH1520_H
 
 #include "hw/core/boards.h"
+#include "hw/intc/thead_c900_clint.h"
 #include "hw/riscv/riscv_hart.h"
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
@@ -19,6 +20,7 @@ struct TH1520SoCState {
     RISCVHartArrayState c910_cpus;
     MemoryRegion sram;
     MemoryRegion brom;
+    THeadC900CLINTState clint;
     DeviceState *plic;
 };
 

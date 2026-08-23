@@ -1783,6 +1783,22 @@ F: tests/functional/ppc64/test_fadump.py
 
 RISC-V Machines
 ---------------
+BeagleV Ahead
+L: qemu-riscv@nongnu.org
+S: Orphan
+F: configs/devices/riscv64-softmmu/beaglev-ahead.mak
+F: docs/devel/beaglev-ahead-*.md
+F: docs/system/riscv/beaglev-ahead.rst
+F: hw/intc/thead_c900_clint.c
+F: hw/riscv/th1520.c
+F: include/hw/intc/thead_c900_clint.h
+F: include/hw/riscv/th1520.h
+F: target/riscv/*theadvector*
+F: target/riscv/tcg/*theadvector*
+F: target/riscv/tcg/th_csr.c
+F: tests/qtest/beaglev-ahead-test.c
+F: tests/tcg/riscv64/test-thead-*
+
 OpenTitan
 M: Alistair Francis <Alistair.Francis@wdc.com>
 L: qemu-riscv@nongnu.org

@@ -23,8 +23,8 @@
 #include "hw/char/serial-mm.h"
 #include "hw/core/loader.h"
 #include "hw/core/sysbus.h"
-#include "hw/intc/riscv_aclint.h"
 #include "hw/intc/sifive_plic.h"
+#include "hw/intc/thead_c900_clint.h"
 #include "hw/misc/unimp.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
@@ -123,6 +123,8 @@ static void th1520_soc_init(Object *obj)
 
     object_initialize_child(obj, "c910-cpus", &s->c910_cpus,
                             TYPE_RISCV_HART_ARRAY);
+    object_initialize_child(obj, "clint", &s->clint,
+                            TYPE_THEAD_C900_CLINT);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "hartid-base", 0);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "num-harts",
                          TH1520_C910_HARTS);
@@ -130,6 +132,11 @@ static void th1520_soc_init(Object *obj)
                          TYPE_RISCV_CPU_THEAD_C910);
     qdev_prop_set_uint64(DEVICE(&s->c910_cpus), "resetvec",
                          th1520_memmap[TH1520_DEV_BROM].base);
+    qdev_prop_set_uint32(DEVICE(&s->clint), "hartid-base", 0);
+    qdev_prop_set_uint32(DEVICE(&s->clint), "num-harts",
+                         TH1520_C910_HARTS);
+    qdev_prop_set_uint32(DEVICE(&s->clint), "timebase-freq",
+                         TH1520_TIMEBASE_FREQ);
 }
 
 static void th1520_soc_realize(DeviceState *dev, Error **errp)
@@ -161,13 +168,23 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
 
     s->plic = th1520_create_plic();
 
-    riscv_aclint_swi_create(th1520_memmap[TH1520_DEV_CLINT].base,
-                            0, TH1520_C910_HARTS, false);
-    riscv_aclint_mtimer_create(
-        th1520_memmap[TH1520_DEV_CLINT].base + RISCV_ACLINT_SWI_SIZE,
-        RISCV_ACLINT_DEFAULT_MTIMER_SIZE, 0, TH1520_C910_HARTS,
-        RISCV_ACLINT_DEFAULT_MTIMECMP, RISCV_ACLINT_DEFAULT_MTIME,
-        TH1520_TIMEBASE_FREQ, true);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->clint), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->clint), 0,
+                    th1520_memmap[TH1520_DEV_CLINT].base);
+    for (int i = 0; i < TH1520_C910_HARTS; i++) {
+        DeviceState *cpu = DEVICE(qemu_get_cpu(i));
+
+        qdev_connect_gpio_out_named(DEVICE(&s->clint), "msip", i,
+                                    qdev_get_gpio_in(cpu, IRQ_M_SOFT));
+        qdev_connect_gpio_out_named(DEVICE(&s->clint), "mtimer", i,
+                                    qdev_get_gpio_in(cpu, IRQ_M_TIMER));
+        qdev_connect_gpio_out_named(DEVICE(&s->clint), "ssip", i,
+                                    qdev_get_gpio_in(cpu, IRQ_S_SOFT));
+        qdev_connect_gpio_out_named(DEVICE(&s->clint), "stimer", i,
+                                    qdev_get_gpio_in(cpu, IRQ_S_TIMER));
+    }
 
     /*
      * TH1520 uses a DesignWare APB UART.  serial-mm implements its 16550

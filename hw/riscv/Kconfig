@@ -14,9 +14,9 @@ config BEAGLEV_AHEAD
     default y
     depends on RISCV64
     select DEVICE_TREE
-    select RISCV_ACLINT
     select SERIAL_MM
     select SIFIVE_PLIC
+    select THEAD_C900_CLINT
     select UNIMP
 
 config MICROCHIP_PFSOC

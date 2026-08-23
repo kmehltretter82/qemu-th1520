@@ -23,7 +23,8 @@ The machine currently provides:
 * 1.5 MiB SRAM at ``0xffe0000000``;
 * the 1 MiB mask-ROM aperture at ``0xffffd00000``;
 * a 240-source PLIC at ``0xffd8000000``;
-* CLINT software interrupts and a 3 MHz timer at ``0xffdc000000``; and
+* a C900 CLINT at ``0xffdc000000``, with four-hart MSIP, MTIMECMP,
+  SSIP, and STIMECMP banks and a 3 MHz architectural timer; and
 * the UART0 16550 register subset at ``0xffe7014000`` and PLIC interrupt 36.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, memory,
@@ -78,6 +79,15 @@ are itemized in the hardware validation ledger.
 
 Peripheral limitations
 ----------------------
+
+The CLINT follows the public openC910 register layout: it has separate
+machine and supervisor software/compare banks, 32-bit registers, and no
+memory-mapped ``mtime`` register.  Machine banks reject supervisor accesses,
+and supervisor banks are accessible from M- and S-mode.  Reset, all four
+interrupt outputs, timer frequency, privilege faults, and migration state are
+modeled.  Physical-board validation is still needed for timer rollover and
+latching, system-bus handling of wider CPU accesses, oscillator stability,
+and reset-domain behavior.
 
 UART0 currently uses QEMU's generic ``serial-mm`` 16550 subset.  Reads and
 writes to DesignWare-specific registers are accepted by a low-priority

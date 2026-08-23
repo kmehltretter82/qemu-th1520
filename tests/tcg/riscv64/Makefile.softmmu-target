@@ -51,5 +51,11 @@ test-thead-c910-pmu: test-thead-c910-pmu.o
 run-test-thead-c910-pmu: test-thead-c910-pmu
 	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
 
+EXTRA_RUNS += run-test-thead-c900-clint
+test-thead-c900-clint: test-thead-c900-clint.o
+run-test-thead-c900-clint: test-thead-c900-clint
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 # We don't currently support the multiarch system tests
 undefine MULTIARCH_TESTS
