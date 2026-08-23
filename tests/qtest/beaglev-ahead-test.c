@@ -46,6 +46,7 @@
 #define TH1520_I2C3_BASE           0xffec014000ULL
 #define TH1520_I2C4_BASE           0xffe7f28000ULL
 #define TH1520_I2C5_BASE           0xfff7f2c000ULL
+#define TH1520_SPI0_BASE           0xffe700c000ULL
 #define TH1520_TIMER0_3_BASE       0xffefc32000ULL
 #define TH1520_TIMER4_7_BASE       0xffffc33000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
@@ -162,6 +163,41 @@
 #define DW_TIMER_INT_MASK          BIT(2)
 #define DW_TIMER_PWM               BIT(3)
 
+#define DW_SSI_CTRLR0              0x00
+#define DW_SSI_CTRLR1              0x04
+#define DW_SSI_SSIENR              0x08
+#define DW_SSI_SER                 0x10
+#define DW_SSI_BAUDR               0x14
+#define DW_SSI_TXFTLR              0x18
+#define DW_SSI_RXFTLR              0x1c
+#define DW_SSI_TXFLR               0x20
+#define DW_SSI_RXFLR               0x24
+#define DW_SSI_SR                  0x28
+#define DW_SSI_IMR                 0x2c
+#define DW_SSI_ISR                 0x30
+#define DW_SSI_RISR                0x34
+#define DW_SSI_TXOICR              0x38
+#define DW_SSI_RXOICR              0x3c
+#define DW_SSI_RXUICR              0x40
+#define DW_SSI_ICR                 0x48
+#define DW_SSI_IDR                 0x58
+#define DW_SSI_VERSION             0x5c
+#define DW_SSI_DR                  0x60
+
+#define DW_SSI_CTRLR0_DFS_8        7
+#define DW_SSI_CTRLR0_TMOD_RO      (2 << 8)
+#define DW_SSI_CTRLR0_SRL          BIT(11)
+
+#define DW_SSI_SR_TF_NOT_FULL      BIT(1)
+#define DW_SSI_SR_TF_EMPTY         BIT(2)
+#define DW_SSI_SR_RF_NOT_EMPTY     BIT(3)
+
+#define DW_SSI_INT_TXEI            BIT(0)
+#define DW_SSI_INT_TXOI            BIT(1)
+#define DW_SSI_INT_RXUI            BIT(2)
+#define DW_SSI_INT_RXOI            BIT(3)
+#define DW_SSI_INT_RXFI            BIT(4)
+
 #define CSR_TIME                   0xc01
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
@@ -193,6 +229,7 @@
 #define TH1520_I2C3_IRQ            47
 #define TH1520_I2C4_IRQ            48
 #define TH1520_I2C5_IRQ            49
+#define TH1520_SPI0_IRQ            54
 #define TH1520_TIMER0_IRQ          16
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
@@ -210,6 +247,7 @@
 #define TH1520_CLK_GMAC_AXI        48
 #define TH1520_CLK_GPIO3           49
 #define TH1520_CLK_GMAC0           50
+#define TH1520_CLK_SPI             54
 #define TH1520_CLK_UART0_PCLK      55
 #define TH1520_CLK_UART1_PCLK      56
 #define TH1520_CLK_UART2_PCLK      57
@@ -470,6 +508,12 @@ typedef struct TH1520Timer {
     uint32_t irq;
 } TH1520Timer;
 
+typedef struct TH1520SPIController {
+    uint64_t base;
+    uint32_t irq;
+    uint32_t clock_id;
+} TH1520SPIController;
+
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
     { "sdio0", TH1520_SDIO0_BASE, TH1520_SDIO0_IRQ, 4 },
@@ -528,6 +572,10 @@ static const TH1520I2CController th1520_i2c_controllers[] = {
     { "i2c3", TH1520_I2C3_BASE, TH1520_I2C3_IRQ, TH1520_CLK_I2C3, false },
     { "i2c4", TH1520_I2C4_BASE, TH1520_I2C4_IRQ, TH1520_CLK_I2C4, false },
     { "i2c5", TH1520_I2C5_BASE, TH1520_I2C5_IRQ, TH1520_CLK_I2C5, false },
+};
+
+static const TH1520SPIController th1520_spi0 = {
+    TH1520_SPI0_BASE, TH1520_SPI0_IRQ, TH1520_CLK_SPI,
 };
 
 static const TH1520Timer th1520_timers[] = {
@@ -1258,6 +1306,44 @@ static void assert_timer_fdt(const void *fdt, const TH1520Timer *timer,
     g_assert_cmpstr(text, ==, "disabled");
 }
 
+static void assert_spi_fdt(const void *fdt,
+                           const TH1520SPIController *controller,
+                           uint32_t clock_phandle)
+{
+    static const char *const compatibles[] = {
+        "thead,th1520-spi", "snps,dw-apb-ssi"
+    };
+    const fdt32_t *cells;
+    const char *text;
+    const char *const path = "/soc/spi@ffe700c000";
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    assert_fdt_stringlist(fdt, node, "compatible", compatibles,
+                          ARRAY_SIZE(compatibles));
+    assert_fdt_mmio(fdt, node, controller->base, 0x1000);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#address-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#size-cells"), ==, 0);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, controller->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, controller->clock_id);
+
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "disabled");
+    g_assert_cmpstr(fdt_get_alias(fdt, "spi0"), ==, path);
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1502,6 +1588,8 @@ static void test_direct_boot_contract(void)
         assert_i2c_fdt(fdt, &th1520_i2c_controllers[i],
                        ap_clock_phandle);
     }
+
+    assert_spi_fdt(fdt, &th1520_spi0, ap_clock_phandle);
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
         assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
@@ -3177,6 +3265,122 @@ static void test_dw_i2c_interrupts(void)
     qtest_quit(qts);
 }
 
+static void assert_dw_spi_reset_state(QTestState *qts)
+{
+    uint64_t base = th1520_spi0.base;
+
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_CTRLR0), ==,
+                    DW_SSI_CTRLR0_DFS_8);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_CTRLR1), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_SSIENR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_SER), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_TXFTLR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_RXFTLR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_TXFLR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_RXFLR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_SR), ==,
+                    DW_SSI_SR_TF_NOT_FULL | DW_SSI_SR_TF_EMPTY);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_IMR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_IDR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_VERSION), ==, 0);
+}
+
+static void test_dw_spi_registers(void)
+{
+    uint64_t base = th1520_spi0.base;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_dw_spi_reset_state(qts);
+
+    /* The generic controller exposes a 16-entry FIFO to the Linux probe. */
+    qtest_writel(qts, base + DW_SSI_TXFTLR, 15);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_TXFTLR), ==, 15);
+    qtest_writel(qts, base + DW_SSI_TXFTLR, 16);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_TXFTLR), ==, 15);
+    qtest_writel(qts, base + DW_SSI_RXFTLR, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_RXFTLR), ==, 15);
+    qtest_writel(qts, base + DW_SSI_BAUDR, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_BAUDR), ==, UINT16_MAX);
+
+    qtest_writel(qts, base + DW_SSI_CTRLR0,
+                  DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, base + DW_SSI_SSIENR, 1);
+    qtest_writel(qts, base + DW_SSI_CTRLR0, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_CTRLR0), ==,
+                    DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, base + DW_SSI_SSIENR, 0);
+
+    qtest_system_reset(qts);
+    assert_dw_spi_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_dw_spi_loopback_and_interrupt(void)
+{
+    uint64_t base = th1520_spi0.base;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(th1520_spi0.irq), 5);
+    c900_plic_set_enable(qts, 1, th1520_spi0.irq, true);
+    qtest_writel(qts, base + DW_SSI_CTRLR0,
+                  DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, base + DW_SSI_RXFTLR, 0);
+    qtest_writel(qts, base + DW_SSI_SSIENR, 1);
+    qtest_writel(qts, base + DW_SSI_SER, 1);
+    qtest_writel(qts, base + DW_SSI_IMR, DW_SSI_INT_RXFI);
+    qtest_writel(qts, base + DW_SSI_DR, 0xa5);
+
+    g_assert_true(qtest_readl(qts, base + DW_SSI_SR) &
+                  DW_SSI_SR_RF_NOT_EMPTY);
+    g_assert_true(qtest_readl(qts, base + DW_SSI_RISR) & DW_SSI_INT_RXFI);
+    g_assert_true(qtest_readl(qts, base + DW_SSI_ISR) & DW_SSI_INT_RXFI);
+    g_assert_true(c900_plic_pending(qts, th1520_spi0.irq));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    th1520_spi0.irq);
+    assert_no_irq(qts);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_DR), ==, 0xa5);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_RXFLR), ==, 0);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), th1520_spi0.irq);
+    c900_plic_set_enable(qts, 1, th1520_spi0.irq, false);
+
+    qtest_writel(qts, base + DW_SSI_SSIENR, 0);
+    qtest_writel(qts, base + DW_SSI_CTRLR0,
+                  DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_TMOD_RO |
+                  DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, base + DW_SSI_CTRLR1, 2);
+    qtest_writel(qts, base + DW_SSI_SSIENR, 1);
+    qtest_writel(qts, base + DW_SSI_SER, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_RXFLR), ==, 3);
+    for (unsigned int i = 0; i < 3; i++) {
+        g_assert_cmphex(qtest_readl(qts, base + DW_SSI_DR), ==, 0);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_dw_spi_error_status(void)
+{
+    uint64_t base = th1520_spi0.base;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (unsigned int i = 0; i < 17; i++) {
+        qtest_writel(qts, base + DW_SSI_DR, i);
+    }
+    g_assert_cmphex(qtest_readl(qts, base + DW_SSI_TXFLR), ==, 16);
+    g_assert_true(qtest_readl(qts, base + DW_SSI_RISR) & DW_SSI_INT_TXOI);
+    qtest_readl(qts, base + DW_SSI_TXOICR);
+    g_assert_false(qtest_readl(qts, base + DW_SSI_RISR) & DW_SSI_INT_TXOI);
+
+    qtest_readl(qts, base + DW_SSI_DR);
+    g_assert_true(qtest_readl(qts, base + DW_SSI_RISR) & DW_SSI_INT_RXUI);
+    qtest_readl(qts, base + DW_SSI_RXUICR);
+    g_assert_false(qtest_readl(qts, base + DW_SSI_RISR) & DW_SSI_INT_RXUI);
+    qtest_readl(qts, base + DW_SSI_ICR);
+    qtest_quit(qts);
+}
+
 static void assert_dw_timer_reset_state(QTestState *qts, uint64_t base)
 {
     for (unsigned int channel = 0; channel < 4; channel++) {
@@ -4096,6 +4300,57 @@ static void test_dw_i2c_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_dw_spi_migration(void)
+{
+    uint64_t base = th1520_spi0.base;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-spi-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    qtest_writel(src, C900_PLIC_PRIORITY(th1520_spi0.irq), 5);
+    c900_plic_set_enable(src, 1, th1520_spi0.irq, true);
+    qtest_writel(src, base + DW_SSI_CTRLR0,
+                  DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(src, base + DW_SSI_RXFTLR, 0);
+    qtest_writel(src, base + DW_SSI_SSIENR, 1);
+    qtest_writel(src, base + DW_SSI_SER, 1);
+    qtest_writel(src, base + DW_SSI_IMR, DW_SSI_INT_RXFI);
+    qtest_writel(src, base + DW_SSI_DR, 0x5a);
+    g_assert_true(c900_plic_pending(src, th1520_spi0.irq));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, base + DW_SSI_CTRLR0), ==,
+                    DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    g_assert_cmphex(qtest_readl(dst, base + DW_SSI_SSIENR), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, base + DW_SSI_SER), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, base + DW_SSI_IMR), ==,
+                    DW_SSI_INT_RXFI);
+    g_assert_cmphex(qtest_readl(dst, base + DW_SSI_RXFLR), ==, 1);
+    g_assert_true(c900_plic_pending(dst, th1520_spi0.irq));
+    g_assert_cmphex(qtest_readl(dst, base + DW_SSI_DR), ==, 0x5a);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_padctrl_migration(void)
 {
     static const struct {
@@ -4870,6 +5125,14 @@ int main(int argc, char **argv)
                        test_dw_i2c_interrupts);
         qtest_add_func("/beaglev-ahead/dw-i2c/migration",
                        test_dw_i2c_migration);
+        qtest_add_func("/beaglev-ahead/dw-spi/registers",
+                       test_dw_spi_registers);
+        qtest_add_func("/beaglev-ahead/dw-spi/loopback-interrupt",
+                       test_dw_spi_loopback_and_interrupt);
+        qtest_add_func("/beaglev-ahead/dw-spi/error-status",
+                       test_dw_spi_error_status);
+        qtest_add_func("/beaglev-ahead/dw-spi/migration",
+                       test_dw_spi_migration);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
