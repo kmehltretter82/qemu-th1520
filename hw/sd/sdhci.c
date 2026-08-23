@@ -340,9 +340,35 @@ static void sdhci_send_command(SDHCIState *s)
     uint8_t response[16];
     size_t rlen;
     bool timeout = false;
+    bool auto_response_valid = false;
+    uint32_t auto_response = 0;
 
     s->errintsts = 0;
     s->acmd12errsts = 0;
+
+    if ((s->trnmod & SDHC_TRNS_ACMD_MASK) == SDHC_TRNS_ACMD23 ||
+        ((s->trnmod & SDHC_TRNS_ACMD_MASK) == SDHC_TRNS_ACMD_AUTO &&
+         FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, CMD23_ENA))) {
+        SDRequest auto_request = {
+            .cmd = 23,
+            .arg = s->blkcnt,
+        };
+
+        trace_sdhci_send_command(auto_request.cmd, auto_request.arg);
+        rlen = sdbus_do_command(&s->sdbus, &auto_request, response,
+                                sizeof(response));
+        if (rlen == 4) {
+            auto_response = ldl_be_p(response);
+            auto_response_valid = true;
+        } else {
+            s->acmd12errsts |= R_SDHC_ACMD12ERRSTS_TIMEOUT_ERR_MASK;
+            if (s->errintstsen & SDHC_EISEN_CMD12ERR) {
+                s->errintsts |= SDHC_EIS_CMD12ERR;
+                s->norintsts |= SDHC_NIS_ERR;
+            }
+        }
+    }
+
     request.cmd = s->cmdreg >> 8;
     request.arg = s->argument;
 
@@ -378,6 +404,11 @@ static void sdhci_send_command(SDHCIState *s)
         }
     }
 
+    if (auto_response_valid) {
+        /* Auto-command responses occupy the upper response register. */
+        s->rspreg[3] = auto_response;
+    }
+
     if (s->norintstsen & SDHC_NISEN_CMDCMP) {
         s->norintsts |= SDHC_NIS_CMDCMP;
     }
@@ -393,8 +424,12 @@ static void sdhci_send_command(SDHCIState *s)
 
 static void sdhci_end_transfer(SDHCIState *s)
 {
-    /* Automatically send CMD12 to stop transfer if AutoCMD12 enabled */
-    if ((s->trnmod & SDHC_TRNS_ACMD12) != 0) {
+    uint16_t autocmd = s->trnmod & SDHC_TRNS_ACMD_MASK;
+
+    /* Auto Select issues CMD12 unless Host Control 2 selected CMD23. */
+    if (autocmd == SDHC_TRNS_ACMD12 ||
+        (autocmd == SDHC_TRNS_ACMD_AUTO &&
+         !FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, CMD23_ENA))) {
         SDRequest request;
         uint8_t response[16];
 
@@ -731,17 +766,32 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
     hwaddr entry_addr = (hwaddr)s->admasysaddr;
     switch (SDHC_DMA_TYPE(s->hostctl1)) {
     case SDHC_CTRL_ADMA2_32:
-        dma_memory_read(s->dma_as, entry_addr, &adma2, sizeof(adma2),
-                        MEMTXATTRS_UNSPECIFIED);
-        adma2 = le64_to_cpu(adma2);
-        /*
-         * The spec does not specify endianness of descriptor table.
-         * We currently assume that it is LE.
-         */
-        dscr->addr = (hwaddr)extract64(adma2, 32, 32) & ~0x3ull;
-        dscr->length = (uint16_t)extract64(adma2, 16, 16);
-        dscr->attr = (uint8_t)extract64(adma2, 0, 7);
-        dscr->incr = 8;
+        if (FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4) &&
+            FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, ADDRESSING)) {
+            /* Version 4 64-bit addressing uses a 128-bit descriptor. */
+            dma_memory_read(s->dma_as, entry_addr, &dscr->attr, 1,
+                            MEMTXATTRS_UNSPECIFIED);
+            dma_memory_read(s->dma_as, entry_addr + 2, &dscr->length, 2,
+                            MEMTXATTRS_UNSPECIFIED);
+            dscr->length = le16_to_cpu(dscr->length);
+            dma_memory_read(s->dma_as, entry_addr + 4, &dscr->addr, 8,
+                            MEMTXATTRS_UNSPECIFIED);
+            dscr->addr = le64_to_cpu(dscr->addr);
+            dscr->attr &= (uint8_t)~0xc0;
+            dscr->incr = 16;
+        } else {
+            dma_memory_read(s->dma_as, entry_addr, &adma2, sizeof(adma2),
+                            MEMTXATTRS_UNSPECIFIED);
+            adma2 = le64_to_cpu(adma2);
+            /*
+             * The spec does not specify endianness of descriptor table.
+             * We currently assume that it is LE.
+             */
+            dscr->addr = (hwaddr)extract64(adma2, 32, 32) & ~0x3ull;
+            dscr->length = (uint16_t)extract64(adma2, 16, 16);
+            dscr->attr = (uint8_t)extract64(adma2, 0, 7);
+            dscr->incr = 8;
+        }
         break;
     case SDHC_CTRL_ADMA1_32:
         dma_memory_read(s->dma_as, entry_addr, &adma1, sizeof(adma1),
@@ -961,6 +1011,13 @@ static void sdhci_data_transfer(void *opaque)
         case SDHC_CTRL_ADMA2_32:
             if (!(s->capareg & R_SDHC_CAPAB_ADMA2_MASK)) {
                 trace_sdhci_error("ADMA2 not supported");
+                break;
+            }
+
+            if (FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4) &&
+                FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, ADDRESSING) &&
+                !(s->capareg & R_SDHC_CAPAB_BUS64BIT_V4_MASK)) {
+                trace_sdhci_error("Version 4 64-bit ADMA not supported");
                 break;
             }
 
@@ -1391,10 +1448,10 @@ static void sdhci_init_readonly_registers(SDHCIState *s, Error **errp)
     ERRP_GUARD();
 
     switch (s->sd_spec_version) {
-    case 2 ... 3:
+    case 2 ... 4:
         break;
     default:
-        error_setg(errp, "Only Spec v2/v3 are supported");
+        error_setg(errp, "Only Spec v2/v3/v4 are supported");
         return;
     }
     s->version = (SDHC_HCVER_VENDOR << 8) | (s->sd_spec_version - 1);
@@ -1475,10 +1532,37 @@ static const VMStateDescription sdhci_pending_insert_vmstate = {
     },
 };
 
+static bool sdhci_hostctl2_vmstate_needed(void *opaque)
+{
+    SDHCIState *s = opaque;
+
+    return s->hostctl2 != 0;
+}
+
+static const VMStateDescription sdhci_hostctl2_vmstate = {
+    .name = "sdhci/host-control-2",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = sdhci_hostctl2_vmstate_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16(hostctl2, SDHCIState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
+static int sdhci_post_load(void *opaque, int version_id)
+{
+    SDHCIState *s = opaque;
+
+    sdhci_update_irq(s);
+    return 0;
+}
+
 const VMStateDescription sdhci_vmstate = {
     .name = "sdhci",
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = sdhci_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(sdmasysad, SDHCIState),
         VMSTATE_UINT16(blksize, SDHCIState),
@@ -1512,6 +1596,7 @@ const VMStateDescription sdhci_vmstate = {
     },
     .subsections = (const VMStateDescription * const []) {
         &sdhci_pending_insert_vmstate,
+        &sdhci_hostctl2_vmstate,
         NULL
     },
 };

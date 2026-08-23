@@ -44,9 +44,11 @@
 #define SDHC_TRNS_BLK_CNT_EN           0x0002
 #define SDHC_TRNS_ACMD12               0x0004
 #define SDHC_TRNS_ACMD23               0x0008 /* since v3 */
+#define SDHC_TRNS_ACMD_AUTO            0x000c /* since v4 */
+#define SDHC_TRNS_ACMD_MASK            0x000c
 #define SDHC_TRNS_READ                 0x0010
 #define SDHC_TRNS_MULTI                0x0020
-#define SDHC_TRNMOD_MASK               0x0037
+#define SDHC_TRNMOD_MASK               0x003f
 
 /* R/W Command Register 0x0 */
 #define SDHC_CMDREG                    0x0E
@@ -174,6 +176,7 @@ FIELD(SDHC_TIMEOUTCON, COUNTER,        0, 4);
 #define SDHC_EISEN_CMDTIMEOUT          0x0001
 #define SDHC_EISEN_BLKGAP              0x0004
 #define SDHC_EISEN_CMDIDX              0x0008
+#define SDHC_EISEN_CMD12ERR            0x0100
 #define SDHC_EISEN_ADMAERR             0x0200
 
 /* R/W Normal Interrupt Signal Enable Register 0x0 */
@@ -201,6 +204,7 @@ FIELD(SDHC_HOSTCTL2, UHS_II_ENA,       8, 1); /* since v4 */
 FIELD(SDHC_HOSTCTL2, ADMA2_LENGTH,    10, 1); /* since v4 */
 FIELD(SDHC_HOSTCTL2, CMD23_ENA,       11, 1); /* since v4 */
 FIELD(SDHC_HOSTCTL2, VERSION4,        12, 1); /* since v4 */
+FIELD(SDHC_HOSTCTL2, ADDRESSING,      13, 1); /* since v4.10 */
 FIELD(SDHC_HOSTCTL2, ASYNC_INT,       14, 1);
 FIELD(SDHC_HOSTCTL2, PRESET_ENA,      15, 1);
 
@@ -224,7 +228,7 @@ FIELD(SDHC_CAPAB, BUS64BIT,           28, 1); /* since v2 */
 FIELD(SDHC_CAPAB, ASYNC_INT,          29, 1); /* since v3 */
 FIELD(SDHC_CAPAB, SLOT_TYPE,          30, 2); /* since v3 */
 FIELD(SDHC_CAPAB, BUS_SPEED,          32, 3); /* since v3 */
-FIELD(SDHC_CAPAB, UHS_II,             35, 8); /* since v4.20 */
+FIELD(SDHC_CAPAB, UHS_II,             35, 1); /* since v4.20 */
 FIELD(SDHC_CAPAB, DRIVER_STRENGTH,    36, 3); /* since v3 */
 FIELD(SDHC_CAPAB, DRIVER_TYPE_A,      36, 1); /* since v3 */
 FIELD(SDHC_CAPAB, DRIVER_TYPE_C,      37, 1); /* since v3 */
