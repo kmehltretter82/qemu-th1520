@@ -24,6 +24,7 @@
 #include "target/riscv/cpu.h"
 #include "target/riscv/cpu_bits.h"
 #include "hw/char/dw_apb_uart.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
@@ -68,6 +69,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_I2C3]  = { 0xffec014000, 0x00004000 },
     [TH1520_DEV_I2C4]  = { 0xffe7f28000, 0x00004000 },
     [TH1520_DEV_I2C5]  = { 0xfff7f2c000, 0x00004000 },
+    [TH1520_DEV_TIMER0_3] = { 0xffefc32000, 0x00001000 },
+    [TH1520_DEV_TIMER4_7] = { 0xffffc33000, 0x00001000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -172,6 +175,18 @@ static const TH1520I2CInfo th1520_i2c_info[TH1520_I2C_COUNT] = {
     { "i2c3", TH1520_DEV_I2C3, TH1520_I2C3_IRQ, TH1520_CLK_I2C3 },
     { "i2c4", TH1520_DEV_I2C4, TH1520_I2C4_IRQ, TH1520_CLK_I2C4 },
     { "i2c5", TH1520_DEV_I2C5, TH1520_I2C5_IRQ, TH1520_CLK_I2C5 },
+};
+
+typedef struct TH1520TimerInfo {
+    const char *name;
+    int memmap;
+    uint32_t first_irq;
+} TH1520TimerInfo;
+
+static const TH1520TimerInfo
+th1520_timer_info[TH1520_TIMER_GROUP_COUNT] = {
+    { "timer0-3", TH1520_DEV_TIMER0_3, TH1520_TIMER0_IRQ },
+    { "timer4-7", TH1520_DEV_TIMER4_7, TH1520_TIMER4_IRQ },
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -317,6 +332,15 @@ static void th1520_soc_init(Object *obj)
         qdev_prop_set_uint32(i2c, "scl-stuck-timeout-reset", UINT32_MAX);
         qdev_prop_set_uint32(i2c, "sda-stuck-timeout-reset", UINT32_MAX);
         qdev_prop_set_uint32(i2c, "ack-general-call-reset", 1);
+    }
+    s->timer_clk = clock_new(obj, "timer-clock");
+    clock_set_hz(s->timer_clk, TH1520_TIMER_INPUT_FREQ);
+    for (int i = 0; i < TH1520_TIMER_GROUP_COUNT; i++) {
+        object_initialize_child(obj, th1520_timer_info[i].name,
+                                &s->timer[i], TYPE_DW_APB_TIMER);
+        qdev_prop_set_uint32(DEVICE(&s->timer[i]), "component-version",
+                             TH1520_TIMER_COMPONENT_VERSION);
+        qdev_connect_clock_in(DEVICE(&s->timer[i]), "timer", s->timer_clk);
     }
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
@@ -489,6 +513,22 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(i2c, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   info->irq));
+    }
+
+    for (int i = 0; i < TH1520_TIMER_GROUP_COUNT; i++) {
+        const TH1520TimerInfo *info = &th1520_timer_info[i];
+        SysBusDevice *timer = SYS_BUS_DEVICE(&s->timer[i]);
+
+        if (!sysbus_realize(timer, errp)) {
+            return;
+        }
+        sysbus_mmio_map(timer, 0, th1520_memmap[info->memmap].base);
+        for (int channel = 0; channel < DW_APB_TIMER_CHANNELS; channel++) {
+            sysbus_connect_irq(
+                timer, channel,
+                qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                       info->first_irq + channel));
+        }
     }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
@@ -1133,6 +1173,31 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         }
     }
 
+    for (int group = 0; group < TH1520_TIMER_GROUP_COUNT; group++) {
+        const TH1520TimerInfo *info = &th1520_timer_info[group];
+        const MemMapEntry *map = &th1520_memmap[info->memmap];
+
+        for (int channel = 0; channel < DW_APB_TIMER_CHANNELS; channel++) {
+            hwaddr base = map->base + channel * TH1520_TIMER_CHANNEL_STRIDE;
+            g_autofree char *name =
+                g_strdup_printf("/soc/timer@%" HWADDR_PRIx, base);
+
+            qemu_fdt_add_subnode(ms->fdt, name);
+            qemu_fdt_setprop_string(ms->fdt, name, "compatible",
+                                    "snps,dw-apb-timer");
+            qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg",
+                                         2, base, 2,
+                                         TH1520_TIMER_CHANNEL_STRIDE);
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle,
+                                   TH1520_CLK_PERI_APB_PCLK);
+            qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "timer");
+            qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
+                                   info->first_irq + channel, 4);
+            qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
+        }
+    }
+
     dmac_name = g_strdup_printf("/soc/dma-controller@%" HWADDR_PRIx,
                                 th1520_memmap[TH1520_DEV_DMAC0].base);
     qemu_fdt_add_subnode(ms->fdt, dmac_name);
@@ -1356,6 +1421,7 @@ static void beaglev_ahead_machine_init(MachineState *ms)
 {
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(ms);
+    int fdt_size;
 
     if (ms->ram_size != mc->default_ram_size) {
         g_autofree char *size = size_to_str(mc->default_ram_size);
@@ -1381,7 +1447,15 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     beaglev_ahead_attach_storage(s);
     beaglev_ahead_attach_eeprom(s);
 
-    beaglev_ahead_create_fdt(s);
+    if (ms->dtb) {
+        ms->fdt = load_device_tree(ms->dtb, &fdt_size);
+        if (!ms->fdt) {
+            error_report("load_device_tree() failed");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        beaglev_ahead_create_fdt(s);
+    }
 
     s->machine_done.notify = beaglev_ahead_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
