@@ -80,8 +80,8 @@ static bool thead_c910_csr_needed(void *opaque)
 {
     RISCVCPU *cpu = opaque;
 
-    return tcg_enabled() &&
-           object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
+    /* This is CPU model state, independent of the active accelerator. */
+    return object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
 }
 
 static int thead_c910_csr_post_load(void *opaque, int version_id)

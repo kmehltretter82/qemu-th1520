@@ -147,7 +147,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Not applicable until devices exist | VMState for every persistent/volatile modeled state item |
+| Migration | Current C910, CLINT, PLIC, UART, DRAM and SRAM state has VMState plus a whole-machine regression test | Extend the same state inventory and boundary testing to every new controller and backend |
 
 ## Workspace implementation status
 
@@ -187,16 +187,22 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
   four-hart M-mode payload whose ordered UART transcript proves that harts
   0 through 3 all entered the common reset path; and
+* a whole-machine migration test that moves DRAM, SRAM, per-hart base and
+  C910-specific CSR state, the rotating CPUID cursor, architectural time,
+  CLINT, PLIC and UART state together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
 The C900 PLIC, CLINT and boot-critical UART portions of the Phase 1 interrupt
 gate are implemented.  OpenSBI and Linux earlycon now pass with both the full
-and dependency-minimal builds, and the all-hart UART payload passes.  Phase 1
-is not closed: sanitizer and whole-machine migration gates remain, and exact
-UART synthesis values still require hardware.  Phases 2 and 3 likewise
-retain their exhaustive and physical-differential gates.  All provisional
-behavior is linked to an open item in the companion ledger.
+and dependency-minimal builds, and the all-hart UART payload passes.  The
+Phase 1 implementation gate is now closed: the full, dependency-minimal and
+ASan/UBSan builds pass the board qtests and whole-machine migration test, and
+the instrumented guest payloads pass without sanitizer findings.  The exact
+UART synthesis values and physical reset sequence remain hardware-validation
+items rather than Phase 1 assumptions.  Phases 2 and 3 likewise retain their
+exhaustive and physical-differential gates.  All provisional behavior is
+linked to an open item in the companion ledger.
 
 ### Current boot-validation snapshot
 
@@ -216,11 +222,16 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 26 board qtests in each build, C910 CSR
-identity tests, XTheadVector, UART/PLIC and four-hart guest payloads, and an
-S-mode SBI identity probe.  This snapshot proves the boot-critical interfaces
-exercised by those tests; it does not resolve any hardware-only ledger item or
-imply stock-image compatibility.
+The focused gate currently comprises 27 board qtests in each normal build and
+the ASan/UBSan dependency-minimal build, including whole-machine migration;
+C910 CSR identity tests; XTheadVector, PMU, CLINT, PLIC, UART and four-hart
+guest payloads; and an S-mode SBI identity probe.  The instrumented Linux run
+selects hart 0, brings up all four CPUs and probes the C900 PLIC before its
+bounded timeout.  Native DesignWare UART handoff and the expected missing-root
+panic are separately established by the normal full and minimal boots.  This
+snapshot proves only the boot-critical interfaces exercised by those tests;
+it does not resolve a hardware-only ledger item or imply stock-image
+compatibility.
 
 ## Intended source architecture
 
@@ -296,6 +307,11 @@ Gate P1:
 * a minimal M-mode payload prints on UART0 from all four harts;
 * OpenSBI reaches its console and an instrumented Linux reaches earlycon;
 * ASan/UBSan and migration-state tests show no new errors.
+
+Status: passed for the direct-boot skeleton.  The gate is covered in the full,
+dependency-minimal and ASan/UBSan builds.  The sanitizer reports its standard
+``makecontext``/``swapcontext`` support warning but no ASan or UBSan fault.
+Hardware-only reset, clock and synthesis questions remain open in the ledger.
 
 The temporary generic CPU is a bring-up device only; it is not evidence of C910
 compatibility.

@@ -147,6 +147,17 @@ selected OpenSBI boot hart 0 and brought up all four CPUs.  This validates the
 emulator's deterministic direct-boot convention only; it does not establish
 the silicon reset sequence.
 
+A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
+and C910-specific CSR state, the rotating CPUID cursor, architectural time,
+CLINT, PLIC and UART state in one stream.  Together with the focused device
+tests, it runs in the full, dependency-minimal and ASan/UBSan builds.  The
+instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
+without sanitizer findings.  A bounded instrumented Linux run reaches the
+C900 PLIC probe after bringing up all four CPUs; the normal builds separately
+cover the later native UART handoff and expected missing-root panic.  ASan's
+warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
+coroutines is expected and is not counted as a clean sanitizer finding.
+
 Storage, Ethernet, DMA, GPIO/pinctrl, I2C/SPI/PWM, RTC/watchdog, USB, PCIe,
 display, audio, camera, video codecs, GPU, NPU, the C906 and E902 auxiliary
 cores, DSPs, security blocks, and board Wi-Fi/Bluetooth are not modeled yet.

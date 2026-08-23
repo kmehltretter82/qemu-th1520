@@ -15,6 +15,7 @@
 #define TH1520_BROM_BASE           0xffffd00000ULL
 #define TH1520_CLINT_BASE          0xffdc000000ULL
 #define TH1520_PLIC_BASE           0xffd8000000ULL
+#define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
 #define C900_MSIP(hart)            (TH1520_CLINT_BASE + 0x0000 + 4 * (hart))
 #define C900_MTIMECMP(hart)        (TH1520_CLINT_BASE + 0x4000 + 8 * (hart))
@@ -47,6 +48,10 @@
 #define DW_UART_CTR                (TH1520_UART0_BASE + 0xfc)
 
 #define CSR_TIME                   0xc01
+#define CSR_MSCRATCH               0x340
+#define CSR_TH_MCOR                0x7c2
+#define CSR_TH_MCOUNTERWEN         0x7c9
+#define CSR_TH_CPUID               0xfc0
 
 #define C910_HARTS                 4
 #define C900_PLIC_CONTEXTS         (C910_HARTS * 2)
@@ -114,6 +119,13 @@ static uint64_t get_csr(QTestState *qts, uint32_t hart, uint32_t csr)
 
     g_assert_cmpint(qtest_csr_call(qts, "get_csr", hart, csr, &value), ==, 0);
     return value;
+}
+
+static void set_csr(QTestState *qts, uint32_t hart, uint32_t csr,
+                    uint64_t value)
+{
+    g_assert_cmpint(qtest_csr_call(qts, "set_csr", hart, csr, &value), ==,
+                    0);
 }
 
 static void write_compare(QTestState *qts, uint64_t addr, uint64_t value)
@@ -885,6 +897,106 @@ static void test_dw_uart_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_whole_machine_migration(void)
+{
+    const char *const properties =
+        "-global dw-apb-uart.dlf-width=4 "
+        "-global dw-apb-uart.component-parameters=0x10000";
+    const uint32_t plic_irq = 88;
+    const uint32_t plic_context = 5;
+    const uint64_t dram_addr = 0x01000000;
+    const uint64_t sram_addr = TH1520_SRAM_BASE + 0x12340;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-machine-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_initf("-machine beaglev-ahead -bios none %s", properties);
+    dst = qtest_initf("-machine beaglev-ahead -bios none -incoming defer %s",
+                      properties);
+
+    qtest_writeq(src, dram_addr, 0x0123456789abcdefULL);
+    qtest_writeq(src, sram_addr, 0xfedcba9876543210ULL);
+
+    set_csr(src, 0, CSR_MSCRATCH, 0x1122334455667788ULL);
+    set_csr(src, 1, CSR_TH_MCOR, 3);
+    set_csr(src, 2, CSR_TH_MCOUNTERWEN, BIT(3));
+    g_assert_cmphex(get_csr(src, 2, CSR_TH_CPUID), ==, 0x090c090d);
+    g_assert_cmphex(get_csr(src, 2, CSR_TH_CPUID), ==, 0x110c9000);
+    set_csr(src, 3, CSR_MSCRATCH, 0x8877665544332211ULL);
+
+    g_assert_cmpint(qtest_clock_set(src, 1000), ==, 1000);
+    qtest_writel(src, C900_MSIP(3), 1);
+    qtest_writel(src, C900_SSIP(2), 1);
+    write_compare(src, C900_MTIMECMP(1), 30);
+
+    qtest_writel(src, C900_PLIC_CONTROL, 1);
+    qtest_writel(src, C900_PLIC_PRIORITY(plic_irq), 9);
+    qtest_writel(src, C900_PLIC_THRESHOLD(plic_context), 3);
+    c900_plic_set_enable(src, plic_context, plic_irq, true);
+    c900_plic_set_pending(src, plic_irq, true);
+
+    qtest_writel(src, DW_UART_LCR, UART_LCR_DLAB | 3);
+    qtest_writel(src, DW_UART_RBR_THR_DLL, 0x34);
+    qtest_writel(src, DW_UART_IER_DLH, 0x12);
+    qtest_writel(src, DW_UART_DLF, 0xb);
+    qtest_writel(src, DW_UART_LCR, 3);
+    qtest_writel(src, DW_UART_SCR, 0x5a);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readq(dst, dram_addr), ==,
+                    0x0123456789abcdefULL);
+    g_assert_cmphex(qtest_readq(dst, sram_addr), ==,
+                    0xfedcba9876543210ULL);
+
+    g_assert_cmphex(get_csr(dst, 0, CSR_MSCRATCH), ==,
+                    0x1122334455667788ULL);
+    g_assert_cmphex(get_csr(dst, 1, CSR_TH_MCOR), ==, 3);
+    g_assert_cmphex(get_csr(dst, 2, CSR_TH_MCOUNTERWEN), ==, BIT(3));
+    g_assert_cmphex(get_csr(dst, 2, CSR_TH_CPUID), ==, 0x260c0001);
+    g_assert_cmphex(get_csr(dst, 3, CSR_MSCRATCH), ==,
+                    0x8877665544332211ULL);
+    g_assert_cmphex(get_csr(dst, 0, CSR_TIME), ==, 3);
+
+    g_assert_cmphex(qtest_readl(dst, C900_MSIP(3)), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, C900_SSIP(2)), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, C900_MTIMECMP(1)), ==, 30);
+    g_assert_cmphex(qtest_readl(dst, C900_MTIMECMP(1) + 4), ==, 0);
+
+    g_assert_cmphex(qtest_readl(dst, C900_PLIC_CONTROL), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, C900_PLIC_PRIORITY(plic_irq)), ==, 9);
+    g_assert_cmphex(qtest_readl(dst, C900_PLIC_THRESHOLD(plic_context)), ==,
+                    3);
+    g_assert_true(qtest_readl(dst,
+                  C900_PLIC_ENABLE(plic_context, plic_irq >> 5)) &
+                  BIT(plic_irq & 31));
+    g_assert_true(c900_plic_pending(dst, plic_irq));
+
+    g_assert_cmphex(qtest_readl(dst, DW_UART_LCR), ==, 3);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_DLF), ==, 0xb);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_SCR), ==, 0x5a);
+    qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -892,6 +1004,8 @@ int main(int argc, char **argv)
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/beaglev-ahead/boot/direct-contract",
                        test_direct_boot_contract);
+        qtest_add_func("/beaglev-ahead/migration/whole-machine",
+                       test_whole_machine_migration);
         qtest_add_func("/beaglev-ahead/c900-plic/reset",
                        test_c900_plic_reset);
         qtest_add_func("/beaglev-ahead/c900-plic/registers",
