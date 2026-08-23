@@ -18,6 +18,7 @@
 #include "libqtest.h"
 
 #define CSR_MVENDORID       0xf11
+#define CSR_MARCHID         0xf12
 #define CSR_MIMPID          0xf13
 #define CSR_MISELECT        0x350
 #define CSR_MSTATUS         0x300
@@ -107,6 +108,7 @@ static void run_test_thead_c910_csrs(void)
                              ((1ULL << 28) - 1);
 
     g_assert_cmphex(get_csr(qts, CSR_MVENDORID), ==, 0x5b7);
+    g_assert_cmphex(get_csr(qts, CSR_MARCHID), ==, 0);
     g_assert_cmphex(get_csr(qts, CSR_MIMPID), ==, 0);
     g_assert_cmphex(get_csr(qts, CSR_MISA) & (1ULL << 21), ==,
                     1ULL << 21);

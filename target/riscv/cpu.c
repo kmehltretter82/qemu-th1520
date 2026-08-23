@@ -1547,6 +1547,11 @@ static void riscv_cpu_init(Object *obj)
 
     env->misa_ext_mask = env->misa_ext = mcc->def->misa_ext;
     riscv_cpu_cfg_merge(&cpu->cfg, &mcc->def->cfg);
+    if (mcc->def->explicit_ids) {
+        cpu->cfg.mvendorid = mcc->def->cfg.mvendorid;
+        cpu->cfg.marchid = mcc->def->cfg.marchid;
+        cpu->cfg.mimpid = mcc->def->cfg.mimpid;
+    }
 
     if (mcc->def->priv_spec != RISCV_PROFILE_ATTR_UNUSED) {
         cpu->env.priv_ver = mcc->def->priv_spec;
@@ -3126,6 +3131,12 @@ static void riscv_cpu_class_base_init(ObjectClass *c, const void *data)
         mcc->def->misa_ext |= def->misa_ext;
 
         riscv_cpu_cfg_merge(&mcc->def->cfg, &def->cfg);
+        if (def->explicit_ids) {
+            mcc->def->cfg.mvendorid = def->cfg.mvendorid;
+            mcc->def->cfg.marchid = def->cfg.marchid;
+            mcc->def->cfg.mimpid = def->cfg.mimpid;
+            mcc->def->explicit_ids = true;
+        }
 
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
         if (def->custom_csrs) {
@@ -3584,6 +3595,9 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.elen = 64,
 
         .cfg.mvendorid = THEAD_VENDOR_ID,
+        .cfg.marchid = 0,
+        .cfg.mimpid = 0,
+        .explicit_ids = true,
         .cfg.max_satp_mode = VM_1_10_SV39,
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
         .custom_csrs = th_c910_csr_list,

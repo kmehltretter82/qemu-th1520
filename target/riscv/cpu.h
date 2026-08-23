@@ -602,6 +602,8 @@ typedef struct RISCVCPUDef {
     int priv_spec;
     int32_t vext_spec;
     RISCVCPUConfig cfg;
+    /* Preserve identity fields exactly, including architecturally valid 0. */
+    bool explicit_ids;
     bool bare;
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
     const RISCVCSR *custom_csrs;

@@ -26,6 +26,8 @@ _start:
     csrr    t0, mvendorid
     li      t1, 0x5b7
     bne     t0, t1, fail_1
+    csrr    t0, marchid
+    bnez    t0, fail_2
     csrr    t0, mimpid
     bnez    t0, fail_2
     csrr    t0, misa
