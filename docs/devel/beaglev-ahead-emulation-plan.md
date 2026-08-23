@@ -4,7 +4,7 @@ Status: active implementation plan, 2026-08-23
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
-QEMU baseline: eea8fe61b8be8f3016e522e6af24924a0266ca95
+QEMU baseline: bde2492aace2b5acb755a5b057013e915163a77f
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -135,7 +135,7 @@ validation.
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, documented reset values/write masks, deterministic PLL locking and VMState; the generated DT uses the upstream Linux providers | Couple gates/resets to child devices, model remaining AO/video/DSP/misc domains and power transitions, and validate every default/timing distinction on hardware |
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior and clock/reset coupling |
-| I2C0-5 | DesignWare I2C model exists | Add TH1520 integration, parameters, DMA/IRQ/reset behavior |
+| I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs and clocks; I2C0 carries the 4 KiB board EEPROM and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, clock/reset coupling, reserved-aperture behavior and physical differential validation |
 | USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
@@ -148,7 +148,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState plus focused and whole-machine regression tests | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
 
 ## Workspace implementation status
 
@@ -156,8 +156,8 @@ The branch is being advanced in reviewable milestones rather than treating
 the roadmap as a claim of completion.  At the current milestone it contains:
 
 * a dependency-minimal ``beaglev-ahead`` machine with four ``thead-c910``
-  harts, the physical RAM/SRAM/ROM map, PLIC, CLINT, all six UARTs, generated
-  DT, and direct OpenSBI/kernel boot;
+  harts, the physical RAM/SRAM/ROM map, PLIC, CLINT, all six UARTs and I2C
+  controllers, generated DT, and direct OpenSBI/kernel boot;
 * C910 scalar identity, including the T-Head vendor ID and exact zero
   architecture/implementation IDs, 40-bit physical-address constraints, the
   TH1520 no-PMP configuration, the initial custom CSR bank, migration state,
@@ -186,6 +186,18 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   and AP clock IDs; matching the board DT, only UART0 is enabled by default.
   Unproved shadow, DMA, and RS-485 blocks are deliberately omitted rather than
   exposed as partial features; and
+* an extended reusable DesignWare I2C master with configurable synthesis and
+  reset registers, exact interrupt-mask support, enabled-write restrictions,
+  NACK/abort-source clearing, system reset and validated in-flight VMState.
+  All six TH1520 instances are mapped at their Linux addresses on PLIC sources
+  44-49 and AP clock IDs 64-69.  I2C0 is board-enabled with the
+  schematic/BOM-established FT24C32A-compatible 4 KiB EEPROM at ``0x50``;
+  the other five remain board-disabled.  Synthetic contents default to erased
+  ``0xff``, while an exact-size raw image can provide private factory data and
+  persistent writes.  EEPROM memory and its current-address state migrate;
+  five focused tests cover DT/reset/identity, all PLIC routes, repeated-start
+  data access, backing persistence and in-flight migration.  A pinned Linux
+  build with AT24 enabled binds both drivers and reads all 4096 bytes; and
 * a reusable one-port DesignWare APB GPIO model with software data/direction,
   external pin sampling, edge/level interrupt control, polarity, masking, EOI,
   reset and VMState.  All six TH1520 banks are integrated at their upstream
@@ -238,9 +250,9 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * a whole-machine migration test that moves DRAM, SRAM, per-hart base and
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
   CLINT, PLIC, AP clock/reset state, distinct state in all six UARTs and all
-  six GPIO controllers and all three pad controllers, all three storage
-  controllers, both GMAC cores, PHY banks and both GMAC APB-glue instances
-  together; and
+  six I2C and GPIO controllers, the board EEPROM, all three pad controllers,
+  all three storage controllers, both GMAC cores, PHY banks and both GMAC
+  APB-glue instances together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -273,7 +285,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 52 board qtests in the normal,
+The focused gate currently comprises 57 board qtests in the normal,
 dependency-minimal and ASan/UBSan builds.  These include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
@@ -299,7 +311,12 @@ focused pad-controller tests and the direct-DT test verify all digital resets,
 representative writable and reserved masks, system reset, distinct
 three-instance migration state and the complete clock, GPIO-range and board
 pin-group DT contract.  The pinned kernel binds all six GPIO and all three
-pinctrl devices.  The
+pinctrl devices.  Five I2C tests verify all six exact DT/register/clock/PLIC
+instances, TH1520 synthesis-visible resets, enabled-write rules,
+repeated-start EEPROM access, NACK aborts, persistent raw-image backing, and
+migration of a queued receive byte plus EEPROM data/address state.  A pinned
+Linux kernel with the AT24 driver built in binds I2C0 and reads all 4096
+default-erased bytes.  The
 complete gate includes whole-machine migration; C910 CSR identity tests;
 XTheadVector, PMU, CLINT, PLIC, UART and four-hart guest payloads; and an
 S-mode SBI identity probe.  The instrumented Linux run
@@ -571,16 +588,25 @@ controllers with exact apertures and clocks, preserves digital PADCFG/MUXCFG
 reset words and masks, supplies exact GPIO ranges and board LED, GMAC0, UART0
 and Wi-Fi groups, and migrates distinct state.  Two focused tests cover its
 register, reset and migration contracts, while the direct-DT test covers its
-binding; pinned Linux binds all three padctrl devices.  The three focused
-clock/reset tests and complete 52-test board gate pass in the full,
+binding; pinned Linux binds all three padctrl devices.  The I2C submilestone
+maps all six controllers with their exact addresses, PLIC sources, AP clock
+IDs and synthesis-visible reset identity.  It enables board I2C0 for the
+schematic-established 4 KiB EEPROM at address 0x50, supports private raw-image
+backing, and migrates controller/FIFO/EEPROM state.  Five focused tests and a
+full 4096-byte Linux AT24 read pass.  The three focused clock/reset tests and
+complete 57-test board gate pass in the full,
 dependency-minimal and ASan/UBSan builds.  Clock
 and reset outputs are not yet coupled
-to UART, GPIO, DMA, storage, GMAC or the harts, so guest gate/reset writes
+to UART, I2C, GPIO, DMA, storage, GMAC or the harts, so guest gate/reset writes
 currently change controller state without stopping those child models.
 Direct boot also releases all four harts even though the modeled C910
 reset-register default releases only the top and core 0.  UART2/4/5 have 16
 KiB DT apertures but only the documented first 256-byte DW register block is
-mapped; reserved-aperture behavior remains a hardware question.  GPIO
+mapped; I2C0-5 likewise describe 16 KiB apertures while only the first 4 KiB
+is modeled.  Reserved-aperture behavior remains a hardware question.  I2C
+slave mode, arbitration/multi-master behavior, timed TX FIFO and bus clock,
+clock stretching/stuck recovery, DMA, SMBus, EEPROM page-wrap/write-cycle/
+write-protect behavior and factory contents remain open.  GPIO
 debounce timing and synthesis probes remain open.  Pad mux changes do not yet
 route signals, and physical pulls, voltage domains, drive/slew/Schmitt effects,
 tri-state/contention behavior, header conflicts and active-low board-consumer

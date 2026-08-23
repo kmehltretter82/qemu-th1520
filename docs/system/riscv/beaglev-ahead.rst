@@ -32,6 +32,11 @@ The machine currently provides:
   register banks, DesignWare status/reset/probe registers, busy detection,
   and PLIC interrupts 36 through 41.  UART0 at ``0xffe7014000`` is the board
   console and UART1 through UART5 are disabled in the board device tree;
+* six DesignWare I2C controllers at ``0xffe7f20000``, ``0xffe7f24000``,
+  ``0xffec00c000``, ``0xffec014000``, ``0xffe7f28000``, and
+  ``0xfff7f2c000``, connected to PLIC sources 44 through 49.  I2C0 is enabled
+  for the board's 4 KiB FT24C32A-compatible EEPROM at address ``0x50``; I2C1
+  through I2C5 are present but board-disabled;
 * six DesignWare APB GPIO controllers at ``0xffec005000``, ``0xffec006000``,
   ``0xffe7f34000``, ``0xffe7f38000``, ``0xfffff52000``, and
   ``0xfffff41000``.  Their 157 Linux-described GPIO lines support input,
@@ -56,10 +61,11 @@ The machine currently provides:
   27, with direct and linked-list memory-to-memory copies, 64-bit addresses,
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
-The generated device tree uses the same board, CPU, PLIC, CLINT, UART, GPIO,
-pinctrl, storage, memory, and cache topology bindings as upstream Linux's
-BeagleV Ahead device tree.  It advertises ``xtheadvector`` and
-``thead,vlenb = <16>`` for every C910 hart.
+The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
+GPIO, pinctrl, storage, memory, and cache topology bindings as upstream
+Linux's TH1520 device tree, augmented with the schematic-established board
+EEPROM.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every
+C910 hart.
 
 Boot options
 ------------
@@ -96,6 +102,18 @@ controller.  The physical initial hart states, Core0 TEE mode and secondary
 release sequence remain hardware-validation items.  Boot straps, the
 USB/UART downloader, and mask-ROM booting from eMMC, SD, or QSPI are later
 milestones.
+
+The board EEPROM defaults to 4096 bytes of ``0xff`` because its factory image
+can contain board-unique data that QEMU must not invent.  A captured 4096-byte
+image can instead be made writable and persistent with:
+
+.. code-block:: bash
+
+   -drive if=none,id=board-eeprom,format=raw,file=ahead-eeprom.bin \
+   -global at24c-eeprom.drive=board-eeprom
+
+Keep any factory dump private unless its contents have been reviewed and
+redacted.  The image must be exactly 4096 bytes.
 
 CPU limitation
 --------------
@@ -163,6 +181,34 @@ The architectural component-type register reports the DesignWare
 identification value.  Exact FIFO depth, optional-feature presence,
 version/parameter values, subword and wider system-bus behavior, and
 reset-domain details remain physical-hardware validation items.
+
+The six I2C instances use QEMU's reusable DesignWare master model.  Their
+addresses, 16 KiB device-tree apertures, PLIC sources 44-49 and AP clock IDs
+64-69 match pinned upstream Linux.  The TH1520 configuration reports component
+parameters ``0x000f0fee``, component version ``0x3230322a``, component type
+``0x44570140``, 16-entry RX/TX FIFOs, interrupt-mask reset ``0x48ff``, spike
+lengths of one clock, and all-ones SCL/SDA stuck-low timeout resets.  Polling
+and interrupt-driven master reads/writes, repeated starts, NACK aborts,
+register reset and migration are functional.  Focused tests cover all six
+register/PLIC instances and migrate an in-flight receive FIFO.
+
+This is not yet a cycle-accurate I2C implementation.  Commands execute as they
+are written rather than through a timed TX FIFO; slave mode, multi-master
+arbitration, bus clock timing, clock stretching, stuck-line detection and
+recovery, DMA handshakes, SMBus behavior and gate/reset coupling are absent.
+Only the first 4 KiB of each 16 KiB described aperture is modeled.  High-speed
+mode master-code/count defaults, the register-timeout value, reserved-aperture
+responses and instance differences remain owner-hardware validation items.
+
+I2C0 contains a 4 KiB ``atmel,24c32``-compatible device at address ``0x50``
+with a 32-byte page size in the generated device tree.  EEPROM data and its
+current-address pointer migrate, and an optional raw backing image persists
+writes.  The pinned Linux DesignWare and AT24 drivers bind and read the entire
+4096-byte erased image.  The EEPROM model does not yet reproduce page-wrap,
+write-cycle busy time, endurance, power-loss or write-protect behavior.
+Factory contents and layout, the fitted board revision and the schematic's
+GPIO2_22-related write-protect network must be checked on the owner's board
+before those behaviors are modeled.
 
 The six GPIO controllers use a reusable one-port DesignWare APB model.  The
 model implements software data and direction, external pin sampling, combined
@@ -239,7 +285,9 @@ An upstream Linux image built from commit
 the full and dependency-minimal QEMU builds.  OpenSBI passes the C910 identity
 to S-mode, Linux activates the T-Head noncoherent cache-maintenance path,
 brings up four harts, uses earlycon, and binds the DesignWare UART as
-``ttyS0``.  With no block device attached, the expected endpoint is a
+``ttyS0``.  A variant with ``CONFIG_EEPROM_AT24=y`` also binds I2C0 and reads
+all 4096 bytes of the synthetic erased board EEPROM.  With no block device
+attached, the expected endpoint is a
 missing-root-filesystem panic; this is a bring-up test, not a claim that a
 production image is supported.
 
@@ -250,10 +298,12 @@ the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
-CLINT, PLIC, all six UARTs, all six GPIO controllers, all three pad controllers,
-storage and GMAC state in one stream.  A focused migration test additionally
-preserves completed AXI-DMAC data/register/interrupt state.  Together with the
-focused device tests, the complete 52-test board gate runs in the full,
+CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, all six GPIO
+controllers, all three pad controllers, storage and GMAC state in one stream.
+Focused migration tests additionally preserve an in-flight I2C read and
+EEPROM address pointer plus completed AXI-DMAC data/register/interrupt state.
+Together with the focused device tests, the complete 57-test board gate runs
+in the full,
 dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
@@ -262,9 +312,9 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-I2C/SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera, video codecs,
-GPU, NPU, the C906 and E902 auxiliary cores, DSPs, security blocks, the secure
-DMA controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
+SPI/PWM, RTC/watchdog, USB, PCIe, display, audio, camera, video codecs, GPU,
+NPU, the C906 and E902 auxiliary cores, DSPs, security blocks, the secure DMA
+controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
 Electrical pad routing and GPIO-connected PHY/Wi-Fi/card-detect signals are
 not wired yet.  The remaining storage, Ethernet and general-DMA gaps are
 listed above.
