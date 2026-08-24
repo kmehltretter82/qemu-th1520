@@ -269,4 +269,7 @@ config TH1520_MBOX
 config TH1520_PINCTRL
     bool
 
+config TH1520_MISCSYS
+    bool
+
 source macio/Kconfig
