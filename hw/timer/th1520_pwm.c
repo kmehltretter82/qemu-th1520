@@ -8,9 +8,11 @@
  * separate transaction when it enables a previously inactive channel.
  *
  * The currently upstream Linux driver only uses continuous mode.  The
- * one-shot mode, inactive-output control, clock-rate changes, reset wiring,
- * and physical pin routing need hardware validation and are intentionally not
- * inferred here.
+ * one-shot mode, inactive-output control, clock-rate changes, and physical
+ * pin routing need hardware validation and are intentionally not inferred
+ * here.  The TH1520 board model wires the documented AP reset pair to an
+ * immediate model reset, but its hardware pulse/hold semantics remain
+ * unproved.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -252,6 +254,13 @@ static void th1520_pwm_reset(DeviceState *dev)
     }
 }
 
+static void th1520_pwm_reset_input(void *opaque, int n, int level)
+{
+    if (level) {
+        th1520_pwm_reset(DEVICE(opaque));
+    }
+}
+
 static int th1520_pwm_post_load(void *opaque, int version_id)
 {
     TH1520PWMState *s = opaque;
@@ -335,6 +344,7 @@ static void th1520_pwm_init(Object *obj)
                           TYPE_TH1520_PWM, TH1520_PWM_REG_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
     s->pwm_clk = qdev_init_clock_in(DEVICE(s), "pwm", NULL, NULL, 0);
+    qdev_init_gpio_in_named(DEVICE(s), th1520_pwm_reset_input, "reset", 1);
     qdev_init_gpio_out_named(DEVICE(s), s->output, "pwm",
                              TH1520_PWM_CHANNELS);
     for (unsigned int i = 0; i < TH1520_PWM_CHANNELS; i++) {

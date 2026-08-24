@@ -311,6 +311,13 @@ static void dw_apb_timer_reset(DeviceState *dev)
     dw_apb_timer_update_irqs(s);
 }
 
+static void dw_apb_timer_reset_input(void *opaque, int n, int level)
+{
+    if (level) {
+        dw_apb_timer_reset(DEVICE(opaque));
+    }
+}
+
 static int dw_apb_timer_post_load(void *opaque, int version_id)
 {
     DWAPBTimerState *s = opaque;
@@ -369,6 +376,7 @@ static void dw_apb_timer_init(Object *obj)
     s->timer_clk = qdev_init_clock_in(DEVICE(s), "timer",
                                       dw_apb_timer_clk_update, s,
                                       ClockUpdate);
+    qdev_init_gpio_in_named(DEVICE(s), dw_apb_timer_reset_input, "reset", 1);
 }
 
 static void dw_apb_timer_realize(DeviceState *dev, Error **errp)
