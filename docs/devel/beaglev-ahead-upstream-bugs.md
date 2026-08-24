@@ -9,18 +9,22 @@ The audit baseline is QEMU `staging` commit
 into this workspace by `2d7bb62c70`.  Recheck every item against current
 `master` immediately before reporting it.
 
-`UQ-002` and `UQ-012` were additionally rechecked against freshly fetched
-QEMU `master` commit
+`UQ-002`, `UQ-011` and `UQ-012` were additionally rechecked against freshly
+fetched QEMU `master` commit
 `bde2492aace2b5acb755a5b057013e915163a77f` on 2026-08-24.  Their generic
-reproducers fail there and pass on this branch; the remaining pre-filing step
-is a human duplicate review and report/patch preparation.
+defects remain in that source.  The UQ-002 and UQ-012 reproducers fail there
+and pass on this branch.  UQ-011 matches open GitLab issue
+[qemu-project/qemu#3969](https://gitlab.com/qemu-project/qemu/-/work_items/3969),
+so it needs patch coordination rather than another report.
 
 ## Snapshot and counting rules
 
 The current conservative tally is:
 
-* **12 proposed new upstream report units** (`UQ-001` through `UQ-012`);
-* **1 matching public upstream report** (`UQ-K001`), which is not new;
+* **11 proposed new upstream report units** (`UQ-001` through `UQ-010` and
+  `UQ-012`);
+* **2 matching public upstream reports** (`UQ-011` and `UQ-K001`), which are
+  not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
 * **5 defects confined to this not-yet-upstream board/CPU implementation**
@@ -43,9 +47,9 @@ A subsequent focused CSR audit on that merged baseline found `UQ-011`.  Two
 freestanding M-mode payloads independently prove both sides of the defect:
 with `Sscofpmf` enabled, a write/read of `mie.LCOFIE` returns zero; with the
 extension disabled, writes to `mideleg.LCOFI` and `mip.LCOFIP` incorrectly
-stick.  The current conservative tally is therefore 11.  The quick public
-tracker and mailing-list search on 2026-08-24 found no matching report, but the
-required current-`master` duplicate search remains outstanding.
+stick.  A direct GitLab API duplicate search later found open issue #3969,
+filed on 2026-07-09 for the same static-mask regression.  UQ-011 therefore
+does not add a proposed new report unit; the tally remained 10 at that point.
 
 The subsequent generic PMU migration audit adds `UQ-012`.  Architectural
 event selectors and counter bases were present in the stream, but the runtime
@@ -57,7 +61,7 @@ that configuration.  Deterministic migration guests now distinguish
 configuration loss, source-value loss, destination counter stoppage, missing
 overflow rearming, inhibited state and already-pending overflow state.  These
 are additional symptoms of the same migration defect, not a thirteenth report
-unit.  The current conservative tally is therefore 12.  A focused
+unit.  The current conservative tally is therefore 11.  A focused
 GitLab/qemu-devel search on 2026-08-24 found no match; a human duplicate search
 is still required.
 
@@ -115,10 +119,11 @@ patch-series defects (`UQ-L002` and `UQ-L003`) rather than bugs in released
 upstream QEMU.  The generic scalar Zicclsm implementation remains independent
 and passes its enabled/disabled tests.
 
-The guarded-page continuation of that milestone added `UQ-011` while making
+The guarded-page continuation of that milestone found `UQ-011` while making
 the C910 PMU test deterministic with instruction counting.  `UQ-011` is a
 generic upstream Sscofpmf CSR-mask defect exposed by an independent `rv64`
-payload, not a defect in the new C910 model.  The host-tick overflow scheduling
+payload, not a defect in the new C910 model.  It is now associated with public
+issue #3969 instead of the new-report tally.  The host-tick overflow scheduling
 observation remains candidate `UQ-C003`; it is not included in the tally.
 
 The following C910 MAEE milestone did not add an upstream report unit.  The
@@ -599,8 +604,8 @@ It is not a claim about the board's provisional DWC3 synthesis values.
 
 ### UQ-011: RISC-V Sscofpmf interrupt CSRs have contradictory WARL masks
 
-Status: **REPORTABLE; direct generic TCG reproducers; current-master and
-duplicate recheck required**
+Status: **KNOWN OPEN REPORT #3969; local fix and regressions complete; do not
+file a duplicate**
 
 Affected upstream code:
 
@@ -622,6 +627,11 @@ The baseline instead has two contradictory static masks:
   `rv64,sscofpmf=false` guest can set bit 13 in `mideleg` and `mip`, even though
   the extension requires those fields to be read-only zero.
 
+The enabled-path regression follows upstream commit `27f9566dcd98`
+(`target/riscv: Update the local interrupt mask`), which moved the start of
+`LOCAL_INTERRUPTS` from bit 13 to bit 16.  The unconditional disabled-path
+mask is an older half of the same contradictory implementation.
+
 Direct baseline evidence:
 
 * an extension-enabled payload writes `1 << 13` to `mie`, reads it back, and
@@ -640,12 +650,26 @@ qemu-system-riscv64 -M virt -cpu rv64,sscofpmf=false \
   -display none -semihosting -bios test-sscofpmf-warl-off
 ```
 
-The enabled test must also be extended past CSR readback to program a near-wrap
-counter, require an M-mode overflow interrupt, delegate it, and repeat through
-`sie`/`sip` in S-mode.  The disabled test must require bit 13 to remain zero in
-all four interrupt CSRs and in `mideleg`.
+Local commit `cbb5ba6998` implements extension-aware masks and completes that
+coverage.  Its freestanding guests:
 
-Likely fix direction:
+* program a near-wrap instruction counter and require cause 13 first in M-mode
+  and then through delegated `sie`/`sip` in S-mode;
+* require bit 13 to remain zero in `mideleg`, `mie`, `mip`, `sie` and `sip`
+  when Sscofpmf is disabled;
+* cover `mvien`/`mvip` and `hvien`/`hvip`/`vsie`/`vsip` with all prerequisites,
+  with Sscofpmf disabled, without Smcdeleg, and without Ssccfg; and
+* migrate an already-pending overflow together with `mie`, `mideleg`, `sie`
+  and `sip`, acknowledge it through `sip`, and observe a second overflow.
+
+The fixed-CPU qtest independently checks an enabled `veyron-v1` and an
+extension-disabled `sifive-u54`.  The normal CSR/migration binary passes 11
+subtests; the full RISC-V qtest gate passes 17 suites with one expected skip,
+including 98 BeagleV Ahead subtests, and the complete RISC-V TCG suite passes.
+Dependency-minimal and ASan/UBSan builds each pass their four available board
+CSR/migration subtests.
+
+Implemented fix direction:
 
 * derive the LCOFI implemented mask from `ext_sscofpmf` rather than placing bit
   13 unconditionally in one static mask and omitting it from the others;
@@ -658,8 +682,12 @@ The specification evidence is the ratified RISC-V Privileged Architecture,
 [Sscofpmf section 13.1.1](https://docs.riscv.org/reference/isa/v20260120/priv/sscofpmf.html)
 and the
 [machine interrupt-register description](https://docs.riscv.org/reference/isa/priv/machine.html).
-A 2026-08-24 search for `Sscofpmf`, `LCOFIE`, `LCOFIP`, bit 13 and counter
-overflow found no matching public QEMU GitLab issue or qemu-devel result.
+A direct GitLab API search on 2026-08-24 found open issue
+[qemu-project/qemu#3969, “sie.LCOFIE is not writable”](https://gitlab.com/qemu-project/qemu/-/work_items/3969),
+filed on 2026-07-09.  It identifies the same `LOCAL_INTERRUPTS` regression and
+the contradictory `delegable_ints` mask.  The issue has no linked merge
+request and is not labeled patch-available as of the recheck.  Coordinate the
+local fix there and search qemu-devel once more immediately before posting.
 
 ### UQ-012: RISC-V PMU state does not continue correctly after migration
 
@@ -745,7 +773,7 @@ HPM counters`) together:
   programmable HPM counters are implemented.
 
 The complete normal RISC-V qtest suite passes 17 test binaries with one skip,
-including 98 BeagleV Ahead and ten CSR/PMU subtests.  The dependency-minimal
+including 98 BeagleV Ahead and eleven CSR/PMU subtests.  The dependency-minimal
 and ASan/UBSan suites each pass ten binaries with three expected skips,
 including 97 board and four CSR/PMU subtests.  The complete normal RISC-V TCG
 guest suite also passes.
@@ -802,7 +830,7 @@ already uses a broader clear-and-reallocate fix.  Rebase onto that series when
 it lands, or coordinate with its author if a smaller backport is needed; do not
 file a duplicate report from this project.
 
-## Investigation candidates not included in the twelve-report tally
+## Investigation candidates not included in the eleven-report tally
 
 ### UQ-C001: `pmpaddr` retains bits above the implemented address width
 
@@ -1002,7 +1030,8 @@ The following are also not counted as upstream QEMU bugs at present:
    `UQ-001`.
 4. Migration fixes: `UQ-004` and `UQ-007`, plus the compatibility portions of
    `UQ-009` and `UQ-010`.
-5. Generic RISC-V PMU work: `UQ-011`, `UQ-012`, `UQ-002` and `UQ-003`.
+5. Generic RISC-V PMU work: coordinate the `UQ-011` fix on issue #3969, then
+   review `UQ-012`, `UQ-002` and `UQ-003` for new reports.
 6. Only then decide whether `UQ-C001` or `UQ-C003` has enough specification
    and test evidence to promote into the reportable list.
 

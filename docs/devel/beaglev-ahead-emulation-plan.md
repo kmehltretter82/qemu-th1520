@@ -271,7 +271,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   and already-pending overflow state, standard and vendor overflow bits,
   `mip.LCOFIP`, acknowledgement and rearming.  A separate
   `rv64,pmu-mask=0` case proves fixed counters are preserved even when no HPM
-  counters exist.
+  counters exist.  Generic Sscofpmf coverage additionally makes standard
+  local interrupt bit 13 extension-aware in `mideleg`, `mie`, `mip`, `sie`
+  and `sip`; proves M-mode and delegated S-mode delivery; checks AIA virtual
+  aliases with present and missing prerequisites; and preserves the enable,
+  delegation and pending aliases across migration.  This fixes the defect
+  already tracked by upstream issue #3969 and is distinct from the C910's
+  vendor cause-17 overflow interface.
   Microarchitectural event values remain an explicit hardware-differential
   task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
@@ -502,6 +508,15 @@ for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, all three misc-system reset outputs and isolated reset effects,
 configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23 with a
 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
+
+The generic RISC-V CSR/migration binary now passes eleven subtests, including
+fixed-only, active, inhibited and pending PMU migration plus Sscofpmf
+extension-on/off WARL and alias coverage.  Six freestanding Sscofpmf variants
+cover M/S interrupt delivery and AIA virtual aliases with complete, disabled
+and missing-prerequisite configurations.  The complete RISC-V qtest gate
+passes 17 suites with one expected skip, and the complete RISC-V TCG guest
+suite passes.  Dependency-minimal and ASan/UBSan configurations each pass
+their four available BeagleV Ahead CSR/migration subtests.
 
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
@@ -842,7 +857,11 @@ and already-pending states without guest reprogramming on the destination.
 They verify exact inhibited values, standard and vendor overflow state,
 `mip.LCOFIP`, acknowledgement and a second overflow after rearming.  A
 fixed-only `rv64,pmu-mask=0` payload uses privilege filtering to prove the
-callbacks run when no programmable counters exist.  The alignment tests are
+callbacks run when no programmable counters exist.  Standard Sscofpmf bit 13
+is now extension-aware across machine, supervisor and AIA virtual-interrupt
+CSRs; focused guests cover M/S delivery, acknowledgement, extension-disabled
+WARL behavior, missing AIA prerequisites and pending-state migration.  The
+alignment tests are
 grounded in pinned openC910 RTL and distinguish scalar, atomic and vector
 behavior across M/S/U privilege, delegated traps and a mapped/unmapped page
 boundary.  MAEE tests additionally distinguish normal, non-cacheable,
