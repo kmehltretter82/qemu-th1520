@@ -25,6 +25,7 @@
 #include "hw/ssi/dw_apb_ssi.h"
 #include "hw/timer/dw_apb_timer.h"
 #include "hw/timer/th1520_pwm.h"
+#include "hw/watchdog/dw_apb_wdt.h"
 
 #define TH1520_MSHC_COUNT 3
 #define TH1520_GMAC_COUNT 2
@@ -34,6 +35,7 @@
 #define TH1520_I2C_COUNT 6
 #define TH1520_SPI_COUNT 1
 #define TH1520_TIMER_GROUP_COUNT 2
+#define TH1520_WDT_COUNT 2
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
 OBJECT_DECLARE_SIMPLE_TYPE(TH1520SoCState, RISCV_TH1520_SOC)
@@ -58,6 +60,8 @@ struct TH1520SoCState {
     DWAPBSSIState spi[TH1520_SPI_COUNT];
     DWAPBTimerState timer[TH1520_TIMER_GROUP_COUNT];
     Clock *timer_clk;
+    DWAPBWDTState wdt[TH1520_WDT_COUNT];
+    Clock *wdt_clk;
     TH1520PWMState pwm;
     Clock *pwm_clk;
     DWAxiDMACState dmac0;
@@ -108,6 +112,8 @@ enum {
     TH1520_DEV_PWM,
     TH1520_DEV_TIMER0_3,
     TH1520_DEV_TIMER4_7,
+    TH1520_DEV_WDT0,
+    TH1520_DEV_WDT1,
     TH1520_DEV_MBOX_LOCAL,
     TH1520_DEV_MBOX_REMOTE0,
     TH1520_DEV_MBOX_REMOTE1,
@@ -201,6 +207,16 @@ enum {
 #define TH1520_TIMER_INPUT_FREQ 125000000
 #define TH1520_TIMER_CHANNEL_STRIDE 0x14
 #define TH1520_TIMER_COMPONENT_VERSION 0x3231322a
+
+#define TH1520_WDT0_IRQ 24
+#define TH1520_WDT1_IRQ 25
+#define TH1520_WDT_INPUT_FREQ 125000000
+#define TH1520_CLK_WDT0 76
+#define TH1520_CLK_WDT1 77
+#define TH1520_RESET_ID_WDT0 3
+#define TH1520_RESET_ID_WDT1 4
+#define TH1520_WDT_COMPONENT_PARAM_1 DW_APB_WDT_PARAM_1_USE_FIX_TOP
+#define TH1520_WDT_COUNTER_RESET 0x0000ffff
 
 #define TH1520_MBOX_IRQ 28
 #define TH1520_CLK_MBOX0 72

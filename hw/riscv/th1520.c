@@ -73,6 +73,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_PWM]   = { 0xffec01c000, 0x00004000 },
     [TH1520_DEV_TIMER0_3] = { 0xffefc32000, 0x00001000 },
     [TH1520_DEV_TIMER4_7] = { 0xffffc33000, 0x00001000 },
+    [TH1520_DEV_WDT0] = { 0xffefc30000, 0x00001000 },
+    [TH1520_DEV_WDT1] = { 0xffefc31000, 0x00001000 },
     [TH1520_DEV_MBOX_LOCAL] = { 0xffffc38000,
                                  TH1520_MBOX_LOCAL_MMIO_SIZE },
     [TH1520_DEV_MBOX_REMOTE0] = { 0xffffc40000,
@@ -197,6 +199,15 @@ typedef struct TH1520TimerInfo {
     uint32_t first_irq;
 } TH1520TimerInfo;
 
+typedef struct TH1520WDTInfo {
+    const char *name;
+    int memmap;
+    uint32_t irq;
+    uint32_t clock_id;
+    uint32_t reset_id;
+    unsigned int reset_output;
+} TH1520WDTInfo;
+
 typedef struct TH1520SPIInfo {
     const char *name;
     int memmap;
@@ -208,6 +219,13 @@ static const TH1520TimerInfo
 th1520_timer_info[TH1520_TIMER_GROUP_COUNT] = {
     { "timer0-3", TH1520_DEV_TIMER0_3, TH1520_TIMER0_IRQ },
     { "timer4-7", TH1520_DEV_TIMER4_7, TH1520_TIMER4_IRQ },
+};
+
+static const TH1520WDTInfo th1520_wdt_info[TH1520_WDT_COUNT] = {
+    { "wdt0", TH1520_DEV_WDT0, TH1520_WDT0_IRQ, TH1520_CLK_WDT0,
+      TH1520_RESET_ID_WDT0, TH1520_AP_RESET_WDT0 },
+    { "wdt1", TH1520_DEV_WDT1, TH1520_WDT1_IRQ, TH1520_CLK_WDT1,
+      TH1520_RESET_ID_WDT1, TH1520_AP_RESET_WDT1 },
 };
 
 static const TH1520SPIInfo th1520_spi_info[TH1520_SPI_COUNT] = {
@@ -374,6 +392,22 @@ static void th1520_soc_init(Object *obj)
         qdev_prop_set_uint32(DEVICE(&s->timer[i]), "component-version",
                              TH1520_TIMER_COMPONENT_VERSION);
         qdev_connect_clock_in(DEVICE(&s->timer[i]), "timer", s->timer_clk);
+    }
+    s->wdt_clk = clock_new(obj, "wdt-clock");
+    clock_set_hz(s->wdt_clk, TH1520_WDT_INPUT_FREQ);
+    for (int i = 0; i < TH1520_WDT_COUNT; i++) {
+        DeviceState *wdt;
+
+        object_initialize_child(obj, th1520_wdt_info[i].name, &s->wdt[i],
+                                TYPE_DW_APB_WDT);
+        wdt = DEVICE(&s->wdt[i]);
+        qdev_prop_set_uint32(wdt, "component-param1",
+                             TH1520_WDT_COMPONENT_PARAM_1);
+        qdev_prop_set_uint32(wdt, "component-type",
+                             DW_APB_WDT_COMP_TYPE_VALUE);
+        qdev_prop_set_uint32(wdt, "counter-reset-value",
+                             TH1520_WDT_COUNTER_RESET);
+        qdev_connect_clock_in(wdt, "pclk", s->wdt_clk);
     }
     object_initialize_child(obj, "mbox", &s->mbox, TYPE_TH1520_MBOX);
     object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
@@ -626,6 +660,22 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
             DEVICE(&s->ap_reset), "peripheral-reset",
             TH1520_AP_RESET_TIMER0_3 + i,
             qdev_get_gpio_in_named(DEVICE(timer), "reset", 0));
+    }
+
+    for (int i = 0; i < TH1520_WDT_COUNT; i++) {
+        const TH1520WDTInfo *info = &th1520_wdt_info[i];
+        SysBusDevice *wdt = SYS_BUS_DEVICE(&s->wdt[i]);
+
+        if (!sysbus_realize(wdt, errp)) {
+            return;
+        }
+        sysbus_mmio_map(wdt, 0, th1520_memmap[info->memmap].base);
+        sysbus_connect_irq(wdt, 0,
+                           qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                                  info->irq));
+        qdev_connect_gpio_out_named(
+            DEVICE(&s->ap_reset), "peripheral-reset", info->reset_output,
+            qdev_get_gpio_in_named(DEVICE(wdt), "reset", 0));
     }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->mbox), errp)) {
@@ -1396,6 +1446,32 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                    info->first_irq + channel, 4);
             qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
         }
+    }
+
+    /*
+     * These resources agree across the public vendor tree and the Linux
+     * reset-controller RFC, but no watchdog nodes have reached the current
+     * mainline TH1520 DTS.  Describe the modeled hardware without enabling
+     * a board policy that Linux upstream has not yet established.
+     */
+    for (int i = 0; i < TH1520_WDT_COUNT; i++) {
+        const TH1520WDTInfo *info = &th1520_wdt_info[i];
+        const MemMapEntry *map = &th1520_memmap[info->memmap];
+        g_autofree char *name =
+            g_strdup_printf("/soc/watchdog@%" HWADDR_PRIx, map->base);
+
+        qemu_fdt_add_subnode(ms->fdt, name);
+        qemu_fdt_setprop_string(ms->fdt, name, "compatible",
+                                "snps,dw-wdt");
+        qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg",
+                                     2, map->base, 2, map->size);
+        qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", info->irq, 4);
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                               info->clock_id);
+        qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "tclk");
+        qemu_fdt_setprop_cells(ms->fdt, name, "resets", ap_reset_phandle,
+                               info->reset_id);
+        qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
     }
 
     qemu_fdt_add_subnode(ms->fdt, "/soc/mailbox@ffffc38000");

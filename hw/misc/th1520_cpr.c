@@ -12,12 +12,12 @@
  * voltage/frequency coupling still require physical differential tests.
  *
  * Reset registers preserve the silicon defaults and active-low programming
- * convention.  The documented PWM and two DesignWare timer APB/core pairs
- * drive QEMU reset outputs.  An asserted output immediately resets its
- * consumer's modeled state; this is intentionally not a claim about silicon
- * pulse width, bus behavior while reset is held, retention, or the many
- * remaining reset domains.  In
- * particular, the silicon default releases only C910 core 0, whereas the
+ * convention.  The documented watchdog lines, PWM pair and two DesignWare
+ * timer APB/core pairs drive QEMU reset outputs.  An asserted output
+ * immediately resets its consumer's modeled state; this is intentionally not
+ * a claim about silicon pulse width, bus behavior while reset is held,
+ * retention, or the many remaining reset domains.  In particular, the
+ * silicon default releases only C910 core 0, whereas the
  * current direct-boot machine deliberately starts all four harts.  That
  * boot/reset discrepancy is tracked in the hardware-validation ledger.
  *
@@ -439,6 +439,8 @@ typedef struct TH1520ResetOutputInfo {
  * until hardware establishes a finer-grained distinction.
  */
 static const TH1520ResetOutputInfo th1520_ap_reset_output_info[] = {
+    [TH1520_AP_RESET_WDT0] = { 0x034, 0x1 },
+    [TH1520_AP_RESET_WDT1] = { 0x038, 0x1 },
     [TH1520_AP_RESET_PWM] = { 0x0c0, 0x3 },
     [TH1520_AP_RESET_TIMER0_3] = { 0x03c, 0x3 },
     [TH1520_AP_RESET_TIMER4_7] = { 0x040, 0x3 },
