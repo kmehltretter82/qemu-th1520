@@ -659,20 +659,20 @@ int riscv_pmu_post_load(CPURISCVState *env)
     RISCVCPU *cpu = env_archcpu(env);
     uint32_t counters = cpu->pmu_avail_ctrs | COUNTEREN_CY | COUNTEREN_IR;
 
-    if (!cpu->pmu_event_ctr_map) {
-        return 0;
-    }
-
     /* Reconstruct PMU state derived from the architectural CSR values. */
-    g_hash_table_remove_all(cpu->pmu_event_ctr_map);
-    for (uint32_t ctr_idx = 3; ctr_idx < RV_MAX_MHPMCOUNTERS; ctr_idx++) {
-        if (!(cpu->pmu_avail_ctrs & BIT(ctr_idx))) {
-            continue;
+    if (cpu->pmu_event_ctr_map) {
+        g_hash_table_remove_all(cpu->pmu_event_ctr_map);
+        for (uint32_t ctr_idx = 3; ctr_idx < RV_MAX_MHPMCOUNTERS; ctr_idx++) {
+            if (!(cpu->pmu_avail_ctrs & BIT(ctr_idx))) {
+                continue;
+            }
+            /* Unsupported raw selectors remain state, not a map entry. */
+            riscv_pmu_update_event_map(env, env->mhpmevent_val[ctr_idx],
+                                       ctr_idx);
         }
-        /* Unsupported raw selectors remain architectural state, not a map. */
-        riscv_pmu_update_event_map(env, env->mhpmevent_val[ctr_idx], ctr_idx);
     }
 
+    /* Fixed counters remain present when there is no programmable map. */
     riscv_pmu_rebase_fixed_counters(env);
     if (cpu->pmu_timer) {
         timer_del(cpu->pmu_timer);

@@ -25,7 +25,7 @@
     .equ TEST_FAIL_FIXED_COUNT,   0xdead0007
     .equ PMU_COUNTER3_BIT,        0x8
     .equ PMU_EVENT_INSTRUCTIONS,  PMU_EVENT_VALUE
-    .equ PMU_INITIAL_VALUE,       -0x100000
+    .equ PMU_INITIAL_VALUE,       -0x1000000
 
     .text
     .global _start
@@ -112,7 +112,7 @@ wait_for_go:
     sd      t1, TEST_DEST_COUNT - TEST_STATUS(s0)
 
     /* Cross the wrap point without reprogramming the migrated timer. */
-    li      t2, 0x100000
+    li      t2, 0x1000000
 2:
     addi    t2, t2, -1
     bnez    t2, 2b

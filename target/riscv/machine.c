@@ -355,7 +355,8 @@ static int riscv_cpu_pre_save(void *opaque)
 #ifdef CONFIG_TCG
     RISCVCPU *cpu = opaque;
 
-    if (tcg_enabled() && cpu->cfg.pmu_mask) {
+    /* mcycle and minstret need rebasing even without programmable counters. */
+    if (tcg_enabled()) {
         riscv_pmu_prepare_save(&cpu->env);
     }
 #endif
@@ -369,7 +370,8 @@ static int riscv_cpu_post_load(void *opaque, int version_id)
 
     env->xl = cpu_recompute_xl(env);
 #ifdef CONFIG_TCG
-    if (tcg_enabled() && cpu->cfg.pmu_mask) {
+    /* mcycle and minstret exist independently of the programmable PMU. */
+    if (tcg_enabled()) {
         return riscv_pmu_post_load(env);
     }
 #endif
