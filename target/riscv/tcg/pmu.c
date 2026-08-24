@@ -58,6 +58,21 @@ static bool riscv_pmu_counter_enabled(RISCVCPU *cpu, uint32_t ctr_idx)
     }
 }
 
+static bool riscv_pmu_counter_filtered(CPURISCVState *env, uint64_t cfg)
+{
+    bool virt_on = env->virt_enabled;
+
+    return (env->priv == PRV_M && (cfg & MHPMEVENT_BIT_MINH)) ||
+           (env->priv == PRV_S && virt_on &&
+            (cfg & MHPMEVENT_BIT_VSINH)) ||
+           (env->priv == PRV_U && virt_on &&
+            (cfg & MHPMEVENT_BIT_VUINH)) ||
+           (env->priv == PRV_S && !virt_on &&
+            (cfg & MHPMEVENT_BIT_SINH)) ||
+           (env->priv == PRV_U && !virt_on &&
+            (cfg & MHPMEVENT_BIT_UINH));
+}
+
 /*
  * Information needed to update counters:
  *  new_priv, new_virt: To correctly save starting snapshot for the newly
@@ -156,6 +171,22 @@ void riscv_pmu_update_fixed_ctrs(CPURISCVState *env,
     riscv_pmu_icount_update_priv(env, newpriv, new_virt);
 }
 
+void riscv_pmu_decr_instret(CPURISCVState *env)
+{
+    if (!icount_enabled() ||
+        (env->mcountinhibit & COUNTEREN_IR) ||
+        riscv_pmu_counter_filtered(env, env->minstretcfg)) {
+        return;
+    }
+
+    /*
+     * minstret is derived from icount, which includes the current
+     * instruction.  Move the baseline forward to exclude an instruction
+     * that raises an exception and therefore does not retire.
+     */
+    env->pmu_ctrs[2].mhpmcounter_prev++;
+}
+
 static uint32_t riscv_pmu_event_counter_mask(RISCVCPU *cpu,
                                              uint32_t event_idx)
 {
@@ -206,7 +237,6 @@ int riscv_pmu_incr_ctr(RISCVCPU *cpu, uint32_t event_idx)
 {
     uint32_t ctr_mask;
     CPURISCVState *env = &cpu->env;
-    bool virt_on = env->virt_enabled;
     bool updated = false;
 
     if (!cpu->cfg.pmu_mask) {
@@ -230,16 +260,8 @@ int riscv_pmu_incr_ctr(RISCVCPU *cpu, uint32_t event_idx)
         if ((cpu->cfg.thead_c9xx_pmu &&
              riscv_pmu_thead_c9xx_priv_disabled(env)) ||
             (!cpu->cfg.thead_c9xx_pmu &&
-             ((env->priv == PRV_M &&
-               (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_MINH)) ||
-              (env->priv == PRV_S && virt_on &&
-               (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_VSINH)) ||
-              (env->priv == PRV_U && virt_on &&
-               (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_VUINH)) ||
-              (env->priv == PRV_S && !virt_on &&
-               (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_SINH)) ||
-              (env->priv == PRV_U && !virt_on &&
-               (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_UINH))))) {
+             riscv_pmu_counter_filtered(env,
+                                        env->mhpmevent_val[ctr_idx]))) {
             continue;
         }
 

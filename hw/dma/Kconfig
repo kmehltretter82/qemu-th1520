@@ -33,3 +33,6 @@ config DW_AXI_DMAC
 config XLNX_CSU_DMA
     bool
     select REGISTER
+
+config K230_GSDMA
+    bool

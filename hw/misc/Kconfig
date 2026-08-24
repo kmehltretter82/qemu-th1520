@@ -272,4 +272,7 @@ config TH1520_PINCTRL
 config TH1520_MISCSYS
     bool
 
+config K230_DECOMP_GZIP
+    bool
+
 source macio/Kconfig
