@@ -9,11 +9,13 @@ The audit baseline is QEMU `staging` commit
 into this workspace by `2d7bb62c70`.  Recheck every item against current
 `master` immediately before reporting it.
 
-`UQ-002`, `UQ-011` and `UQ-012` were additionally rechecked against freshly
+`UQ-002`, `UQ-011`, `UQ-012` and `UQ-013` were additionally rechecked against freshly
 fetched QEMU `master` commit
 `bde2492aace2b5acb755a5b057013e915163a77f` on 2026-08-24.  Their generic
 defects remain in that source.  The UQ-002 and UQ-012 reproducers fail there
-and pass on this branch.  UQ-011 matches open GitLab issue
+and pass on this branch.  UQ-013's affected widening-dispatch macros are
+byte-for-byte present there; its generic guest reaches the same checks after
+the branch fix.  UQ-011 matches open GitLab issue
 [qemu-project/qemu#3969](https://gitlab.com/qemu-project/qemu/-/work_items/3969),
 so it needs patch coordination rather than another report.
 
@@ -21,14 +23,14 @@ so it needs patch coordination rather than another report.
 
 The current conservative tally is:
 
-* **11 proposed new upstream report units** (`UQ-001` through `UQ-010` and
-  `UQ-012`);
+* **12 proposed new upstream report units** (`UQ-001` through `UQ-010`,
+  `UQ-012` and `UQ-013`);
 * **2 matching public upstream reports** (`UQ-011` and `UQ-K001`), which are
   not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **7 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L007`), which must not be reported as existing
+* **8 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L008`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -141,6 +143,21 @@ vendor fork, not a released-upstream QEMU bug.  A third architectural payload
 now covers every floating-point decode-check family, all six exception-producing
 helper-loop families, exact/no-exception state and the unsupported reduction
 widths.
+
+The following XTheadVector reduction-boundary milestone adds one generic
+upstream report unit and one local patch-series finding.  `UQ-013` is a
+guest-triggerable out-of-bounds helper-table read in current upstream's shared
+RVV widening translators: validation occurs inside a callee after the caller
+has already indexed a three-element table with `s->sew == 3`.  It is present
+on current master and affects standard RVV independently of this board.
+`UQ-L008` is the corresponding public, unmerged XTheadVector-series audit:
+its three widening dispatch paths had the same ordering defect, while its
+reduction helpers incorrectly modified a whole destination register at
+`vl=0`, its translator accepted nonzero `vstart`, and its widening FP
+reduction wrongly rejected an LMUL=8 vector source despite scalar input/output
+operands.  The combined architectural guests pass normal, dependency-minimal
+and ASan/UBSan board builds; the standard RVV guest passes on `rv64,v=true`.
+The conservative proposed-report tally is therefore 12.
 
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
@@ -828,6 +845,49 @@ manually, rerun the test against then-current `master`, decide whether
 maintainers prefer the missing Smcntrpmf fields split from derived-state
 reconstruction, and disclose the agent-assisted discovery.
 
+### UQ-013: RISC-V widening translators index helper tables before legality checks
+
+Status: **REPORTABLE AFTER CONFIDENTIAL SECURITY TRIAGE; generic current-master
+source defect; final duplicate search and clean upstream-ASan reproduction
+required**
+
+Affected upstream code:
+
+* `target/riscv/tcg/insn_trans/trans_rvv.c.inc`, specifically
+  `GEN_OPIVV_WIDEN_TRANS`, `GEN_OPIWV_WIDEN_TRANS` and
+  `GEN_OPIWX_WIDEN_TRANS`.
+
+Each macro owns a three-entry helper table for source element widths e8, e16
+and e32.  Its pre-fix expansion evaluates `fns[s->sew]` as an argument before
+the helper's legality predicate runs.  `s->sew == 3` represents e64; every
+widening form must reject it because a 128-bit result is not supported, but
+the rejected instruction has already read one pointer past the static table.
+The bug is in the shared standard-RVV translator, not in the BeagleV model.
+
+The new freestanding `test-rvv-widen-illegal` payload enables standard RVV on
+`-M virt -cpu rv64,v=true`, sets e64/m1, and requires illegal-instruction
+traps from widening reduction, narrow-vector/narrow-vector, wide-vector/
+narrow-vector and scalar/wide-vector forms.  Before the fix, ASan/UBSan
+reports a global-buffer-overflow at `trans_vwredsumu_vs`; the same source
+ordering applies to the other two macros.  The branch fix checks legality in
+each macro before indexing the table and leaves the emission helper
+unconditional.  The generic normal-build payload and the C910 board payload
+pass after the fix; the latter also verifies the XTheadVector decoder fallback
+that follows the standard decoder's rejected probe.
+
+Exact `master` commit `bde2492aace2b5acb755a5b057013e915163a77f` retains the
+unsafe macro expansions.  The local branch had already changed `require_rvv()`
+to avoid stealing XTheadVector encodings, but that check is deliberately too
+late to prevent the pre-call table read, so it does not weaken the finding.
+
+This is guest-triggerable C undefined behavior and a host out-of-bounds read.
+It currently has no demonstrated release-build information disclosure or code
+execution, but QEMU's security process requires a possible host-memory-safety
+issue to start as a confidential work item.  Do not file publicly until a
+human has reviewed the minimal ASan trace, run the exact generic payload on a
+fresh upstream sanitizer build, and searched QEMU GitLab and qemu-devel for
+`GEN_OPIVV_WIDEN_TRANS`, `vwredsum`, `opiwv` and `opiwx`.
+
 ## Already reported or addressed upstream
 
 ### UQ-K001: NPCM GMAC transmit buffer integer truncation
@@ -862,7 +922,7 @@ already uses a broader clear-and-reallocate fix.  Rebase onto that series when
 it lands, or coordinate with its author if a smaller backport is needed; do not
 file a duplicate report from this project.
 
-## Investigation candidates not included in the eleven-report tally
+## Investigation candidates not included in the twelve-report tally
 
 ### UQ-C001: `pmpaddr` retains bits above the implemented address width
 
@@ -1122,6 +1182,49 @@ unless an independent reproducer is found in code present on upstream
 ``master``.  Physical C910 conformance, including stepping-specific exception
 and NaN behavior, remains unverified under ``CPU-006``.
 
+### UQ-L008: XTheadVector reductions missed boundary semantics and safe widening dispatch
+
+Status: **FIXED PUBLIC PATCH-SERIES DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The frozen XTheadVector specification inherits the Vector 0.7.1 reduction
+contract: reductions use scalar element zero regardless of LMUL, leave the
+entire destination register unchanged when `vl=0`, and are illegal when
+`vstart` is nonzero.  Widening reductions take scalar input/output operands,
+so an LMUL=8 vector source is valid when the ordinary group-alignment rules
+are met.  Inactive reduction elements are excluded and tail elements are
+zeroed after a nonempty operation.
+
+The public April 2024 XTheadVector implementation violated or endangered that
+contract in four independent ways:
+
+* integer and floating-point reduction helpers wrote element zero and cleared
+  the tail even when `vl=0`;
+* the common reduction check did not require `vstart == 0`, so reductions
+  instead resumed their loop at a nonzero element;
+* widening floating-point reduction rejected `LMUL=8`, treating its scalar
+  accumulator/result as if it were a doubled vector group; and
+* all three integer widening dispatch macro families indexed a three-element
+  helper table before their e64/LMUL legality checks.  The e64 form therefore
+  read beyond the table before trapping.
+
+The first fail-before guest changed a `vl=0` destination and exited at stage
+1.  With only the helper early-exit fixed, it reached stage 21 because a
+nonzero-`vstart` reduction executed instead of trapping.  With the translator
+gate but without safe dispatch, ASan/UBSan stopped QEMU at the e64 widening
+form.  The final reduction payload covers integer and FP `vl=0`, both
+nonzero-`vstart` traps, all three e64 widening source classes, misaligned
+LMUL=8 source groups, valid integer and FP LMUL=8 widening reductions,
+mask/destination overlap, source/destination overlap and all-inactive masks.
+It passes normal, dependency-minimal and ASan/UBSan board runs plus the full
+normal RISC-V TCG suite.
+
+The source was imported from Alibaba/XuanTie QEMU commit
+``3287d345c7f5d60d5c8774d90752f5f710744f85`` and the public
+[April 2024 65-patch XTheadVector series](https://lists.nongnu.org/archive/html/qemu-riscv/2024-04/msg00059.html).
+Current upstream QEMU ``master`` does not contain this extension, so retain it
+as a review item for a revived XTheadVector series or a vendor fork.  The
+analogous standard-RVV table-read is separately tracked as `UQ-013`.
+
 The following are also not counted as upstream QEMU bugs at present:
 
 * devices and SoC blocks that upstream simply does not emulate yet;
@@ -1139,13 +1242,15 @@ The following are also not counted as upstream QEMU bugs at present:
 1. `UQ-006` first, privately, because it may disclose host memory.
 2. `UQ-K001` and `UQ-C002`, to avoid duplicating or conflicting with the
    existing NPCM security work.
-3. Small isolated fixes: `UQ-009`, `UQ-010`, `UQ-008`, `UQ-005`, and
+3. Ask the security team to triage `UQ-013` confidentially, then send its
+   small isolated bounds-check fix if they classify it as public.
+4. Small isolated fixes: `UQ-009`, `UQ-010`, `UQ-008`, `UQ-005`, and
    `UQ-001`.
-4. Migration fixes: `UQ-004` and `UQ-007`, plus the compatibility portions of
+5. Migration fixes: `UQ-004` and `UQ-007`, plus the compatibility portions of
    `UQ-009` and `UQ-010`.
-5. Generic RISC-V PMU work: coordinate the `UQ-011` fix on issue #3969, then
+6. Generic RISC-V PMU work: coordinate the `UQ-011` fix on issue #3969, then
    review `UQ-012`, `UQ-002` and `UQ-003` for new reports.
-6. Only then decide whether `UQ-C001` or `UQ-C003` has enough specification
+7. Only then decide whether `UQ-C001` or `UQ-C003` has enough specification
    and test evidence to promote into the reportable list.
 
 For each completed review, record the current upstream commit, failing and

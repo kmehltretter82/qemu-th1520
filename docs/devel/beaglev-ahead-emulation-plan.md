@@ -75,9 +75,9 @@ remains an open release blocker in the ledger.
 
 ## Current progress estimate
 
-As of 2026-08-24, this branch is approximately **52% complete (plus or minus
+As of 2026-08-24, this branch is approximately **53% complete (plus or minus
 5 percentage points)** against the strict definition above and approximately
-**86% complete for practical C910 Linux and driver development**.  These are
+**87% complete for practical C910 Linux and driver development**.  These are
 weighted engineering estimates, not a ratio of files or register blocks.  The
 strict number remains dominated by authentic boot/reset, exhaustive CPU
 differential validation, USB device/OTG and PHY behavior, display/GPU,
@@ -284,7 +284,8 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   and CSR behavior, debugger/migration integration, naturally aligned vector
   load/store enforcement independent of MXSTATUS.MM, source-preserving
   illegal ``th.vsetvl`` handling, and focused qtest/TCG coverage for WARL,
-  ``vstart``, mask/tail, saturation and rounding behavior; and
+  ``vstart``, mask/tail, saturation, rounding and reduction-boundary behavior;
+  and
 * a reusable C900 CLINT derived from pinned openC910 RTL and OpenSBI behavior,
   with exact M/S software and timer banks, four-hart wiring, a 3 MHz time CSR,
   reset and migration state, qtests for every output, and a TCG privilege/CSR
@@ -549,6 +550,21 @@ dependency-minimal and ASan/UBSan builds.  The complete normal RISC-V TCG
 guest suite and all 17 runnable RISC-V qtest suites, including the 100-case
 board suite, remain green.  Silicon NaN, exception and stepping-specific
 behavior remains explicitly unverified under ``CPU-006``.
+
+The XTheadVector reduction-boundary milestone adds a fourth architectural
+payload and a separate standard-RVV illegal-width payload.  It proves that
+integer and floating-point reductions leave all destination bytes unchanged at
+``vl=0``, trap for every nonzero ``vstart``, and zero their tail only after a
+nonempty operation.  It also checks all three e64 widening source-shape
+classes, a misaligned LMUL=8 source group, valid integer and floating-point
+LMUL=8 reductions with scalar input/output operands, destination overlap with
+the source or mask at the permitted LMUL, and an all-inactive mask.  The
+translator now validates before indexing its widening helper tables; the
+matching standard-RVV fix is tracked separately as upstream candidate
+``UQ-013``.  The normal, dependency-minimal and ASan/UBSan board runs pass,
+as do all 26 normal RISC-V softmmu TCG guests and all 17 runnable RISC-V
+qtest suites.  This confirms the frozen specification contract, not C910
+silicon behavior; physical results remain required under ``CPU-006``.
 
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
@@ -943,7 +959,12 @@ and tail-zero results, sticky saturation and all four fixed-point rounding
 modes.  A third payload covers FS-Off legality across every floating-point
 decode-check family, exception-driven ``fflags``/FS-Dirty propagation through
 all six helper-loop families, no-exception state preservation, VS-Off
-reduction legality and unsupported floating-point reduction widths.  Vector
+reduction legality and unsupported floating-point reduction widths.  A fourth
+payload covers integer/FP reduction ``vl=0`` whole-register preservation,
+nonzero-``vstart`` traps, all e64 widening source-shape traps, LMUL=8 scalar
+reduction operands, source/mask overlap and inactive-mask/tail results; a
+separate generic RVV guest covers the same e64 widening decode boundary on
+``rv64,v=true``.  Vector
 loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
