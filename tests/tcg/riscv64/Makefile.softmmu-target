@@ -53,7 +53,8 @@ run-test-xtheadvector: test-xtheadvector
 EXTRA_RUNS += run-test-thead-c910-pmu
 test-thead-c910-pmu: test-thead-c910-pmu.o
 run-test-thead-c910-pmu: test-thead-c910-pmu
-	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
+	$(call run-test, $<, $(QEMU) -icount shift=0 \
+	  -cpu thead-c910 $(QEMU_OPTS)$<)
 
 THEAD_C910_MM_MARCH = \
 	-march=rv64imafdc_zfh_xtheadfmemidx_xtheadmemidx_xtheadmempair
