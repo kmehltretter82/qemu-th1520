@@ -241,11 +241,15 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   TH1520 no-PMP configuration, Zfh and its Zfhmin dependency, the initial
   custom CSR bank, migration state, provisional MAEE PTE acceptance, and
   dynamic MXSTATUS/SXSTATUS ``MM`` control of standard integer/FP plus every
-  modeled scalar XThead memory path;
+  modeled scalar XThead memory path.  Guarded Sv39 coverage now checks the
+  resulting alignment-versus-page-fault priority in S and U modes, including
+  delegated traps and the distinct scalar, atomic and vector rules;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
   machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
-  event maps, and focused CSR/fixed-counter overflow tests; microarchitectural
-  event values remain an explicit hardware-differential task;
+  event maps, and focused CSR/fixed-counter overflow tests.  The overflow test
+  uses instruction counting so its near-wrap deadline is independent of host
+  speed; microarchitectural event values remain an explicit
+  hardware-differential task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
   and CSR behavior, debugger/migration integration, naturally aligned vector
   load/store enforcement independent of MXSTATUS.MM, and focused qtest/TCG
@@ -481,10 +485,18 @@ MXSTATUS.MM and the SXSTATUS.MM alias across TB boundaries; exercises
 misaligned integer, double/word/half floating-point, XTheadMemIdx indexed and
 incrementing, XTheadMemPair and XTheadFMemIdx loads/stores; and requires
 standard atomics plus XTheadVector loads/stores to remain naturally aligned.
-The same payload and the board-specific CLINT, PLIC, UART, timer and four-hart
-payloads pass in the dependency-minimal and ASan/UBSan builds.  The aggregate
-minimal TCG target is intentionally inapplicable because it begins with tests
-for the omitted generic ``virt`` machine; the explicitly enumerated
+A second payload builds explicitly cleared Sv39 page tables with one mapped
+guard page followed by an unmapped page.  It runs S-mode faults through the
+M-mode handler and delegated U-mode faults through the S-mode handler, and
+checks 23 exact traps, trap values, mapped misaligned scalar success, aligned
+missing-page faults, second-page scalar fault priority with MM set,
+misalignment priority with MM clear, atomic/vector priority independent of MM,
+and no visible first-page bytes from the tested faulting word store.  The full
+normal TCG suite, 98 board qtests and three CSR qtests pass.  Both alignment
+payloads pass in the dependency-minimal build; the new guarded-page payload
+also passes ASan/UBSan with only QEMU's expected coroutine warning.  The
+aggregate minimal TCG target is intentionally inapplicable because it begins
+with tests for the omitted generic ``virt`` machine; the explicitly enumerated
 board-compatible subset is the pruning gate.
 
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
@@ -752,12 +764,14 @@ Gate P2:
 Status: in progress.  CPU identity, the TH1520 no-PMP/40-bit configuration,
 the initial custom CSR/PMU/MAEE state, scalar XThead decode, Zfh/Zfhmin, and
 MXSTATUS/SXSTATUS.MM scalar alignment behavior are implemented and covered by
-CSR, migration and guest-executed tests.  The MM test is grounded in pinned
-openC910 RTL and distinguishes scalar, atomic and vector behavior.  P2 remains
-open for exhaustive scalar/illegal decode, all custom-CSR and privilege
-combinations, complete MAEE memory types and exception priority, cache/CMO and
-ordering effects, reset-vector/security behavior, randomized differential
-testing and physical comparison.
+CSR, migration and guest-executed tests.  The alignment tests are grounded in
+pinned openC910 RTL and distinguish scalar, atomic and vector behavior across
+M/S/U privilege, delegated traps and a mapped/unmapped page boundary.  P2
+remains open for exhaustive scalar/illegal decode, all custom-CSR and privilege
+combinations, complete MAEE memory types, strongly ordered and access-fault
+priority, every access width/form, cache/CMO and ordering effects,
+reset-vector/security behavior, randomized differential testing and physical
+comparison.
 
 ### Phase 3 — XTheadVector / Vector 0.7.1
 
@@ -782,10 +796,12 @@ Gate P3:
 Status: in progress.  The vendor-derived execution engine, 128-bit state,
 custom CSRs, migration/debug integration and a discriminating architectural
 smoke test are present.  Vector loads/stores now enforce natural alignment
-independently of MXSTATUS.MM, matching the pinned openC910 LSU rule.  P3 is not
+independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
+guarded-page vector load/store priority is covered in S and U modes.  P3 is not
 closed: per-instruction boundaries, randomized differential testing,
-fault-only-first/page-priority cases, OS context/signal/ptrace coverage,
-XTheadZvamo availability and physical-silicon comparison remain open.
+fault-only-first/segment page-priority cases, OS context/signal/ptrace
+coverage, XTheadZvamo availability and physical-silicon comparison remain
+open.
 
 ### Phase 4 — authentic reset and boot
 
