@@ -1,6 +1,6 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: active implementation plan, 2026-08-24
+Status: implementation paused at a reviewed milestone; resume requires owner direction, 2026-08-24
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -28,6 +28,28 @@ The companion
 in pre-existing QEMU code from missing emulation, hardware unknowns, and bugs
 confined to this not-yet-upstream board implementation.  It records the
 reproducer and disclosure work required before any external report.
+
+## Pause point and handoff
+
+Per owner direction, feature implementation is paused after the reviewed
+CPU-boundary fixes, focused RISC-V regressions, board-model validation, and
+documentation checkpoint recorded on this branch.  The workspace is left
+clean and rebaseable; this pause is not a claim that BeagleV Ahead emulation is
+complete or that the board is perfectly modeled.
+
+The next work is review rather than more feature expansion:
+
+* inspect [beaglev-ahead-upstream-bugs.md](beaglev-ahead-upstream-bugs.md),
+  starting with the confidential UQ-006 NPCM GMAC receive-path draft;
+* independently rerun the current-master reproducer and decide whether the
+  evidence meets QEMU's confidential security-triage threshold; and
+* only after explicit authorization, prepare an external report.  No report
+  has been filed from this workspace.
+
+If implementation resumes, record the selected open gate and its acceptance
+criteria before changing board code.  Hardware bring-up, including the UART
+adapter connection and all items marked OPEN in the validation ledger, remains
+the authoritative next evidence source for physical fidelity.
 
 ## Executive answer
 
