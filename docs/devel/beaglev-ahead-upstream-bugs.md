@@ -44,6 +44,13 @@ LEDs green, while the schematic, BOM and pinned mainline DTS identify them as
 blue.  That stale cross-project label is recorded under ``BOARD-002`` and is
 not a defect in pre-existing QEMU.  The conservative QEMU tally remains 10.
 
+The 2026-08-24 reset-coupling milestone also did not add a QEMU report unit.
+It connects Linux-described TH1520 AP and storage reset groups to devices
+introduced or integrated on this branch.  The collapsed whole-device reset
+scope and remaining hardware unknowns are new-board fidelity work under
+``RST-001``, not defects in QEMU's pre-existing machines or reusable devices.
+The conservative QEMU tally remains 10.
+
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
 xHCI models and were independently exposed by an upstream Linux host driver.

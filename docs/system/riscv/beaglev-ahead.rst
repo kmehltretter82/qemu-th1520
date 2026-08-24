@@ -27,7 +27,13 @@ The machine currently provides:
   T-Head privilege delegation, writable pending state, and per-source
   edge/level inputs;
 * a C900 CLINT at ``0xffdc000000``, with four-hart MSIP, MTIMECMP,
-  SSIP, and STIMECMP banks and a 3 MHz architectural timer; and
+  SSIP, and STIMECMP banks and a 3 MHz architectural timer;
+* the TH1520 application clock and reset providers at ``0xffef010000`` and
+  ``0xffef014000``.  The reset provider connects all 28 mainline-described
+  groups for currently modeled AP peripherals: watchdogs, PWM, timer groups,
+  UART0-5, I2C0-5, SPI0, GPIO0-3, both application pad controllers, DMAC0,
+  both GMACs and their shared AXI domain.  Output state is derived from the
+  active-low register members and reconstructed after migration;
 * six DesignWare APB UARTs at their TH1520 addresses, including the 16550
   register banks, DesignWare status/reset/probe registers, busy detection,
   and PLIC interrupts 36 through 41.  UART0 at ``0xffe7014000`` is the board
@@ -39,8 +45,9 @@ The machine currently provides:
   through I2C5 are present but board-disabled;
 * the TH1520 miscellaneous clock/reset bank at ``0xffec02c000`` and USB DRD
   wrapper at ``0xffec03f000``.  Their modeled reset values, writable masks,
-  three active-low USB reset outputs, reset and migration state follow the
-  recorded TH1520 software contract; clock-gate bits are visible state only;
+  three active-low storage outputs, three active-low USB outputs, reset and
+  migration state follow the recorded TH1520 software contract; clock-gate
+  bits are visible state only;
 * one DWC3/xHCI USB 3 host controller at ``0xffe7040000`` on PLIC source 68,
   with one paired USB2/USB3 connector.  Host DMA, interrupts, a USB keyboard,
   hotplug, system reset and migration are exercised; the generated generic
@@ -223,6 +230,21 @@ modeled.  Physical-board validation is still needed for timer rollover and
 latching, system-bus handling of wider CPU accesses, oscillator stability,
 and reset-domain behavior.
 
+For each connected AP or storage reset group, clearing any represented
+active-low member immediately cold-resets the corresponding whole QEMU device.
+Releasing the group has no additional modeled effect, and MMIO remains
+accessible while reset is held.  This intentionally conservative convention
+does not distinguish APB, core, counter or AXI members.  Individual and shared
+GMAC resets currently cover both the core/APB wrapper and the reusable model's
+PHY; the eMMC pair similarly collapses to one storage-controller reset.  Raw
+line, device-effect, neighbor-isolation and asserted-line migration qtests
+cover all 28 AP outputs and all three storage outputs.  Physical pulse versus
+level behavior, split-member scope, minimum assertion/release ordering,
+retention and held-reset bus behavior remain unverified.  The C910 and mailbox
+reset words remain register-only pending authentic hart-release and
+per-channel-retention evidence; other reset/power domains are absent, and AP
+clock-gate writes still do not stop child devices.
+
 The six UARTs use a reusable DesignWare APB wrapper around QEMU's 16550 core.
 It
 implements aligned 32-bit register accesses, USR FIFO/busy status, SRR reset,
@@ -254,7 +276,10 @@ register/PLIC instances and migrate an in-flight receive FIFO.
 This is not yet a cycle-accurate I2C implementation.  Commands execute as they
 are written rather than through a timed TX FIFO; slave mode, multi-master
 arbitration, bus clock timing, clock stretching, stuck-line detection and
-recovery, DMA handshakes, SMBus behavior and gate/reset coupling are absent.
+recovery, DMA handshakes, SMBus behavior and clock-gate coupling are absent.
+Each controller's mainline-described APB/core reset pair drives the
+whole-device reset convention described above; the physical split remains
+unverified.
 Only the first 4 KiB of each 16 KiB described aperture is modeled.  High-speed
 mode master-code/count defaults, the register-timeout value, reserved-aperture
 responses and instance differences remain owner-hardware validation items.
@@ -309,9 +334,10 @@ not attach one.
 The generic model defaults to a 16-frame FIFO and one native chip select and
 reports zero component ID/version, because the TH1520 synthesis values have
 not been measured.  Transfers are synchronous rather than clock accurate.
-DMA, enhanced/dual/quad framing, clock-gate/reset coupling, pinmux/electrical
+DMA, enhanced/dual/quad framing, clock-gate coupling, pinmux/electrical
 routing, board SPI peripherals, QSPI0/1, XIP and boot-flash behavior are not
-modeled.  The disabled device-tree status means this model is not yet evidence
+modeled.  SPI0's APB/core reset pair drives a whole-device reset, with the
+physical split still unverified.  The disabled device-tree status means this model is not yet evidence
 that an unmodified mainline Linux SPI driver binds on this board.
 
 The separate TH1520 PWM controller follows the software contract of the
@@ -597,8 +623,8 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 90 tests in the normal build and
-89 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
+device tests, the complete board gate passes 92 tests in the normal build and
+91 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
 omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910

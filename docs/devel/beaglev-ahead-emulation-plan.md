@@ -68,9 +68,9 @@ remains an open release blocker in the ledger.
 
 ## Current progress estimate
 
-As of 2026-08-24, this branch is approximately **48% complete (plus or minus
+As of 2026-08-24, this branch is approximately **49% complete (plus or minus
 5 percentage points)** against the strict definition above and approximately
-**83% complete for practical C910 Linux and driver development**.  These are
+**84% complete for practical C910 Linux and driver development**.  These are
 weighted engineering estimates, not a ratio of files or register blocks.  The
 strict number remains dominated by authentic boot/reset, exhaustive CPU
 differential validation, USB device/OTG and PHY behavior, display/GPU,
@@ -100,6 +100,19 @@ Linux ``gpio-leds`` tests pass.  The schematic and BOM strongly establish the
 wiring and colors, but first-power-up state, polarity, brightness and reset
 behavior still require comparison with the owner's exact assembly.  Buttons
 remain unwired.
+
+The reset-coupling submilestone is about **75% complete**.  All reset members
+published by mainline Linux for the currently modeled AP peripherals now
+drive QEMU device resets: both watchdogs, PWM, both timer groups, UART0-5,
+I2C0-5, SPI0, GPIO0-3, both application pad controllers, DMAC0, both GMACs and
+their shared AXI domain.  The miscellaneous-system eMMC and two SDIO reset
+members and all three USB members are also connected.  Qtests cover all 28 AP
+outputs and three storage outputs, per-device reset effects, neighbor
+isolation and asserted-line migration.  QEMU intentionally collapses each
+multi-bit APB/core/AXI group to a whole-device cold reset and leaves MMIO
+accessible while held; mailbox, C910-hart, AO and auxiliary-domain resets,
+clock-gate effects, physical reset scope, retention and ordering remain open
+under ledger item ``RST-001``.
 
 The pinned mainline and vendor device trees plus the board schematic expose no
 PCIe controller, endpoint or routed connector for BeagleV Ahead.  PCIe is
@@ -179,19 +192,19 @@ validation.
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
-| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB reset/clock bank, documented reset values/write masks, deterministic PLL locking and VMState; selected watchdog, PWM, timer and USB reset lines drive model resets and are replayed after migration; the generated DT uses the upstream Linux providers | Couple gates to children, refine the three USB reset domains, extend reset coupling to remaining blocks, model remaining AO/video/DSP/misc domains and power transitions, and validate every default/timing distinction on hardware |
-| UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior and clock/reset coupling |
-| I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs and clocks; I2C0 carries the 4 KiB board EEPROM and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, clock/reset coupling, reserved-aperture behavior and physical differential validation |
+| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration; the generated DT uses the upstream Linux providers | Couple gates to children; validate split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
+| UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs, AP reset pairs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior, clock-gate coupling and physical reset-scope validation |
+| I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
-| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
-| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
-| SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
+| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
+| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
+| SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node with its AP reset pair. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis, reset split and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  It uses a provisional fixed 125 MHz QEMU input, exposes test-only QOM outputs, and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, clock rate/gating, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
-| GPIO/pinctrl/LEDs | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  Five blue user-LED objects consume GPIO4 pins 8-12 and one green power LED remains on; QOM, reset, migration and Linux ``gpio-leds`` tests cover them.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets, LED polarity/brightness/defaults and electrical effects on hardware; add remaining GPIO consumers, buttons, mux-driven signal routing and deterministic header/device backends |
+| GPIO/pinctrl/LEDs | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  AP reset pairs drive GPIO0-3; GPIO4 and AO GPIO remain in their separate domains.  Five blue user-LED objects consume GPIO4 pins 8-12 and one green power LED remains on; QOM, reset, migration and Linux ``gpio-leds`` tests cover them.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; both AP pad controllers have reset wiring, and the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing, split reset/domain behavior, LED polarity/brightness/defaults and electrical effects on hardware; add remaining GPIO consumers, buttons, mux-driven signal routing and deterministic header/device backends |
 | APB timers | A reusable four-counter DesignWare model and both TH1520 components now provide eight 125 MHz countdown channels, PLIC sources 16-23, local/aggregate EOI and status, reset and VMState; either known APB/core reset bit immediately resets its corresponding component; all eight upstream-DT nodes remain board-disabled | Validate component synthesis, clocks, access widths, reload/zero/enable edges, cascade/PWM and reset-domain behavior on hardware; couple clock gates and remaining resets |
 | PVT/thermal/voltage | A reusable MR75203 model maps the exact TH1520 common, temperature, process and voltage apertures, synthesis identity, 2 temperature sensors, 11 process detectors and 16 voltage channels.  It implements the Linux SDIF programming path, deterministic QOM environment inputs, reset and VMState; pinned Linux binds and reads all advertised temperature and voltage channels | Validate physical samples and calibration across temperature/voltage, conversion latency and DONE behavior, sample-counter edges, alarm/timer/register semantics, any interrupt route, access widths, clock/reset coupling and actual rail-to-channel names on the owner board |
 | RTC/watchdog | A reusable X-Gene-compatible RTC model provides counter/match/delayed-load, interrupt/mask/EOI, wrap, optional prescaler, reset and VMState at the TH1520 address with a 32.768 kHz input and PLIC source 74.  Its disabled DT node and a test-only prescaler-aware module let pinned Linux set/read at 1 Hz and receive an alarm.  A reusable fixed-TOP Synopsys DW APB watchdog model and both TH1520 AP instances provide countdown/restart, direct and two-stage interrupt/reset behavior, PLIC sources 24/25, independent AP resets, VMState and conservative disabled DT nodes; pinned Linux binds, starts, pings and reset-stops both through an external enabling DT.  AO/audio watchdogs remain absent | Validate RTC component identity, exact prescaler/CPCVR/wrap/load edges, calibration, wake and battery/reset retention; establish a mainline TH1520 RTC compatible/driver contract.  Validate watchdog identities, clock/reset scope and edge behavior, couple AP gates and add remaining watchdog domains from public or measured evidence |
-| AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT wiring and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential validation |
+| AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT and AP reset-pair wiring, and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential/reset-scope validation |
 | Mailbox/system control | A bounded TH1520 mailbox model maps the four upstream-Linux resources, CPU-visible channel data/generate registers, local status/clear/mask, PLIC source 28, system reset and VMState; it deliberately has no remote CPU or firmware response | Validate the register/pulse/reset/gate behavior and add E902/C906/C910R/DSP endpoints plus their documented handoff/control protocols |
 | GPU/DPU/HDMI/DSI | Matching models missing | New software-visible register/queue/display pipelines |
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
@@ -310,6 +323,8 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   IDs where applicable.  The generated DT provides gpio0-5 aliases and the
   five board LEDs on GPIO4 pins 8-12.  Five active-high blue QEMU LED objects
   consume those lines, and an always-on green object represents the power LED.
+  The mainline-described AP reset pairs reset GPIO0-3; GPIO4 and AO GPIO stay
+  in their separate reset domains.
   Their intensity is available as a read-only QOM property.  Focused qtests
   cover every bank, pin I/O, both interrupt modes, user-LED direction/data,
   reset and migration; the pinned Linux driver binds all six controllers and
@@ -320,7 +335,8 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   digital PADCFG/MUXCFG reset words, reserved-bit masks, system reset and
   VMState.  The generated DT reproduces all six Linux GPIO range mappings and
   the board's LED, GMAC0, UART0 and Wi-Fi pin groups; pinned Linux binds all
-  three controllers.  Actual mux-driven signal routing, pad electrical effects
+  three controllers.  The two application instances have AP reset wiring;
+  the always-on instance does not.  Actual mux-driven signal routing, pad electrical effects
   and PHY/Wi-Fi/card-detect consumer wiring remain open hardware-validation
   work; and
 * a reusable DesignWare Mobile Storage Host Controller wrapper with the
@@ -329,7 +345,8 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   and all three eMMC/SDIO instances at their physical addresses and PLIC
   sources.  Generic SDHCI now accepts v4 controllers, preserves Host Control 2,
   implements Auto CMD23 and 128-bit 64-address ADMA2 descriptors, and restores
-  its interrupt output after migration; and
+  its interrupt output after migration.  The three active-low misc-system
+  reset groups independently reset eMMC, SDIO0 and SDIO1; and
 * a reusable DesignWare GMAC 3.x model, factored from the NPCM implementation,
   with normal and enhanced descriptors, 16/32-byte descriptor stride, TX/RX
   DMA, FCS handling, bus errors, interrupt recomputation, configurable version/
@@ -337,18 +354,26 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   physical core/APB addresses and PLIC sources, with the nine-register APB
   reset/mask contract, separate 500 MHz AXI, 1 GHz peripheral and 125 MHz APB
   clocks from the AP clock provider, board GMAC0/RTL8211F-facing DT wiring,
-  and disabled board GMAC1; and
+  disabled board GMAC1, individual four-member reset groups and a shared AXI
+  reset group; and
 * a reusable Synopsys DesignWare AXI DMAC 1.01a model with four channels,
   direct and 64-byte-LLI memory-to-memory transfers, 64-bit addresses,
   transfer-width and increment behavior, descriptor valid/last/writeback,
   block/transfer/error status, interrupt masking and aggregation, reset and
   VMState.  The TH1520 general controller is mapped at ``0xffefc00000`` on
   PLIC source 27 with the exact four-channel Linux binding and a measured
-  125 MHz APB clock-provider contract; and
+  125 MHz APB clock-provider contract plus its two-member AP reset group; and
 * TH1520 AP clock and reset controllers at ``0xffef010000`` and
   ``0xffef014000`` with the documented REE register banks, seven PLL groups,
   reset values and writable masks, deterministic 21.25 microsecond PLL-lock
   delay, self-clearing calibration pulses, system reset and VMState.  The
+  reset bank exports all 28 mainline-described groups for currently modeled
+  AP children: watchdogs, PWM, timer components, UART0-5, I2C0-5, SPI0,
+  GPIO0-3, application pad controllers, DMAC0 and individual/shared GMAC
+  domains.  Assertion of any represented active-low member immediately
+  cold-resets the corresponding whole QEMU device; outputs are reconstructed
+  from migrated register state.  This deliberate approximation leaves MMIO
+  accessible while held and does not claim split-member or PHY scope.
   generated DT now exposes the upstream Linux bindings and uses their real
   clock IDs for all six UARTs, the general DMAC, all three storage controllers
   and both GMACs instead of temporary fixed-clock nodes; and
@@ -410,24 +435,26 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently passes 90 board qtests in the normal build and 89
+The focused gate currently passes 92 board qtests in the normal build and 91
 in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
 difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
 from the minimal configurations.  The four remaining USB tests cover exact
 misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
 three reset outputs, Linux's high-half-first and the conventional
 low-half-first ERSTBA sequences, guest-memory DMA, PLIC source 68, system reset
-and migration.  These gates also include eight storage tests
+and migration.  These gates also include ten storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
-routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
-with a 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
+routes, all three misc-system reset outputs and isolated reset effects,
+configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23 with a
+64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
 preservation, and a socket-backed packet path.  Four DMAC tests cover
 reset/masks, a direct copy and PLIC route, a two-item LLI chain above 4 GiB,
 invalid-descriptor failure and completed-state/IRQ migration; the direct-boot
 test also checks the complete generated binding and AP clock-provider IDs.
-Three AP clock/reset tests cover reset values, writable masks, PLL restart and
+Five AP clock/reset tests cover reset values, writable masks, all 28 exported
+reset groups, per-device reset/isolation, asserted-line migration, PLL restart and
 lock delay, calibration self-clear, system reset, reset-bank behavior and
 migration while a PLL lock is pending.  A six-instance UART test verifies the
 exact addresses, aperture descriptions, clock IDs, serial aliases, board
@@ -842,7 +869,7 @@ compatible strings used upstream.  It supplies a generic synchronous FIFO
 master, loopback, error/threshold interrupts and migration without inventing a
 board peripheral or flash.  Four focused qtests cover its reset, PLIC, error
 and migration contracts.  Its FIFO depth, native chip-select count,
-component/probe identity, serial timing, gate/reset behavior, pinmux and
+component/probe identity, serial timing, clock-gate behavior, reset-scope validation, pinmux and
 physical board wiring remain open.  A 2026-08-24 audit of the pinned mainline
 Linux DT and driver tree found QSPI clock/reset identifiers and pad names, but
 no QSPI controller node, compatible string, register aperture, IRQ or driver
@@ -852,14 +879,20 @@ channel controller at the exact Linux address and binding, drives test-only
 QOM output lines from a provisional 125 MHz clock and preserves staged
 configuration/phase across migration.  It does not assert a board pin or
 consumer and leaves one-shot, inactive output, aperture, gate and electrical
-behavior open.  The AP reset controller now translates the two documented
-watchdog lines, PWM pair and two timer APB/core reset pairs into immediate
-QEMU-device resets; the derived outputs are re-emitted after migration.  This
-is a software model, not a claim about pulse width, retention, ordering or bus
-behavior while held.
-Clock gates and all remaining reset outputs are not yet coupled to UART, I2C,
-SPI0, GPIO, DMA, storage, GMAC or the harts, so their guest gate/reset writes
-currently change controller state without stopping those child models.
+behavior open.  The AP reset controller now translates all 28
+mainline-described groups for modeled AP children into immediate QEMU-device
+resets: watchdogs, PWM, timers, UART0-5, I2C0-5, SPI0, GPIO0-3, both AP pad
+controllers, DMAC0 and both individual plus shared GMAC domains.  The misc
+bank likewise resets eMMC, SDIO0 and SDIO1, in addition to the existing USB
+groups.  Raw-output, device-effect, isolation and migration qtests cover this
+contract.  Multi-member APB/core/AXI groups are deliberately collapsed to a
+whole-device cold reset; accesses remain possible while reset is held, and
+GMAC reset currently includes the reusable model's PHY.  These are software
+conventions, not claims about physical pulse width, split scope, retention,
+ordering or held-reset bus behavior.
+Clock gates are still visible state only and do not stop child models.
+Mailbox channel resets and the C910 reset groups remain register-only because
+their per-channel retention and hart-release sequencing are not established.
 Direct boot also releases all four harts even though the modeled C910
 reset-register default releases only the top and core 0.  UART2/4/5 have 16
 KiB DT apertures but only the documented first 256-byte DW register block is
