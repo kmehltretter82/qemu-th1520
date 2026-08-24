@@ -30,6 +30,12 @@ unit.  Upstream had no reusable DW APB watchdog model to regress, and the
 TH1520 integration, provisional synthesis values and hardware uncertainties
 are new-board scope rather than defects in pre-existing QEMU code.
 
+The 2026-08-24 X-Gene/TH1520 RTC milestone also did not add a report unit.
+Upstream had no X-Gene RTC device model, so the new register/timer/migration
+implementation has no pre-existing QEMU regression to report.  Mainline
+Linux's missing TH1520 node and 32.768 kHz prescaler setup are Linux
+integration gaps, not QEMU bugs.  The conservative QEMU tally remains 10.
+
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
 xHCI models and were independently exposed by an upstream Linux host driver.

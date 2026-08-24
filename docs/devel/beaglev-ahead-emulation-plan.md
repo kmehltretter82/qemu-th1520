@@ -68,12 +68,12 @@ remains an open release blocker in the ledger.
 
 ## Current progress estimate
 
-As of 2026-08-24, this branch is approximately **43% complete (plus or minus
+As of 2026-08-24, this branch is approximately **47% complete (plus or minus
 5 percentage points)** against the strict definition above and approximately
-**75% complete for practical C910 Linux and driver development**.  These are
+**82% complete for practical C910 Linux and driver development**.  These are
 weighted engineering estimates, not a ratio of files or register blocks.  The
 strict number remains dominated by authentic boot/reset, exhaustive CPU
-differential validation, USB device/OTG and PHY behavior, PCIe, display/GPU,
+differential validation, USB device/OTG and PHY behavior, display/GPU,
 media/NPU, auxiliary processors, security/power domains, stock-image coverage,
 physical comparison and final source pruning.
 
@@ -84,6 +84,19 @@ host gaps are exact silicon capabilities, PHY/link/timing, clock gating,
 suspend/resume, stress/error injection and physical comparison.  This does not
 mean Phase 7 is 90% complete: USB device/OTG/Fastboot plus Wi-Fi and Bluetooth
 remain largely open.
+
+The RTC submilestone is about **90% complete**: the reusable X-Gene-compatible
+device, TH1520 address/clock/PLIC wiring, generated disabled node, 1 Hz
+prescaler path, set/read/alarm behavior, reset and migration tests, and a
+pinned-mainline Linux proof all pass.  Exact component identity, prescaler and
+wrap edges, calibration, battery/reset retention, suspend wake and physical
+comparison remain open.  Mainline Linux also needs a TH1520-specific binding
+and prescaler contract before the generated node can safely be enabled.
+
+The pinned mainline and vendor device trees plus the board schematic expose no
+PCIe controller, endpoint or routed connector for BeagleV Ahead.  PCIe is
+therefore not counted as missing board emulation; the physical PCB revision
+will still be checked under ledger item ``BOARD-003``.
 
 ## Pinned source set and provenance
 
@@ -169,14 +182,14 @@ validation.
 | GPIO/pinctrl | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets and electrical effects on hardware; add GPIO consumer wiring, mux-driven signal routing and deterministic header/device backends |
 | APB timers | A reusable four-counter DesignWare model and both TH1520 components now provide eight 125 MHz countdown channels, PLIC sources 16-23, local/aggregate EOI and status, reset and VMState; either known APB/core reset bit immediately resets its corresponding component; all eight upstream-DT nodes remain board-disabled | Validate component synthesis, clocks, access widths, reload/zero/enable edges, cascade/PWM and reset-domain behavior on hardware; couple clock gates and remaining resets |
 | PVT/thermal/voltage | A reusable MR75203 model maps the exact TH1520 common, temperature, process and voltage apertures, synthesis identity, 2 temperature sensors, 11 process detectors and 16 voltage channels.  It implements the Linux SDIF programming path, deterministic QOM environment inputs, reset and VMState; pinned Linux binds and reads all advertised temperature and voltage channels | Validate physical samples and calibration across temperature/voltage, conversion latency and DONE behavior, sample-counter edges, alarm/timer/register semantics, any interrupt route, access widths, clock/reset coupling and actual rail-to-channel names on the owner board |
-| RTC/watchdog | A reusable fixed-TOP Synopsys DW APB watchdog model and both TH1520 AP instances now provide exact countdown/restart, direct and two-stage interrupt/reset behavior, PLIC sources 24/25, independent AP resets, VMState and conservative disabled DT nodes.  Pinned Linux binds, starts, pings and reset-stops both through an external enabling DT.  RTC and AO/audio watchdogs remain absent | Validate watchdog identities, clock/reset scope and edge behavior on hardware; couple the AP clock gates; implement RTC only after resolving the vendor-only 32.768 kHz prescaler contract; add remaining watchdog domains from public or measured evidence |
+| RTC/watchdog | A reusable X-Gene-compatible RTC model provides counter/match/delayed-load, interrupt/mask/EOI, wrap, optional prescaler, reset and VMState at the TH1520 address with a 32.768 kHz input and PLIC source 74.  Its disabled DT node and a test-only prescaler-aware module let pinned Linux set/read at 1 Hz and receive an alarm.  A reusable fixed-TOP Synopsys DW APB watchdog model and both TH1520 AP instances provide countdown/restart, direct and two-stage interrupt/reset behavior, PLIC sources 24/25, independent AP resets, VMState and conservative disabled DT nodes; pinned Linux binds, starts, pings and reset-stops both through an external enabling DT.  AO/audio watchdogs remain absent | Validate RTC component identity, exact prescaler/CPCVR/wrap/load edges, calibration, wake and battery/reset retention; establish a mainline TH1520 RTC compatible/driver contract.  Validate watchdog identities, clock/reset scope and edge behavior, couple AP gates and add remaining watchdog domains from public or measured evidence |
 | AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT wiring and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential validation |
 | Mailbox/system control | A bounded TH1520 mailbox model maps the four upstream-Linux resources, CPU-visible channel data/generate registers, local status/clear/mask, PLIC source 28, system reset and VMState; it deliberately has no remote CPU or firmware response | Validate the register/pulse/reset/gate behavior and add E902/C906/C910R/DSP endpoints plus their documented handoff/control protocols |
 | GPU/DPU/HDMI/DSI | Matching models missing | New software-visible register/queue/display pipelines |
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, TH1520 mailbox, MR75203 PVT, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing and add USB transfers active across migration |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing and add USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -349,8 +362,8 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
   CLINT, PLIC, AP clock/reset state, distinct state in all six UARTs and all
   six I2C and GPIO controllers, the board EEPROM, SPI0, both APB timer
-  components, TH1520 mailbox state, all three pad controllers, all three
-  storage controllers, both GMAC cores, PHY banks and both GMAC APB-glue
+  components, X-Gene RTC, TH1520 mailbox state, all three pad controllers and
+  all three storage controllers, both GMAC cores, PHY banks and both GMAC APB-glue
   instances, plus TH1520 USB misc/DRD, DWC3 and xHCI state together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
@@ -384,7 +397,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently passes 87 board qtests in the normal build and 86
+The focused gate currently passes 89 board qtests in the normal build and 88
 in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
 difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
 from the minimal configurations.  The four remaining USB tests cover exact
@@ -769,10 +782,18 @@ and migration.  Seven qtests and a pinned-mainline Linux bind/start/ping/stop
 probe pass.  The generated nodes remain disabled because mainline has not
 established a TH1520 board policy; synthesis identities, the conflicting CCVR
 reset value, clock-gate coupling and physical reset scope remain explicit
-hardware-validation items.  A parallel RTC audit found only a vendor
-``apm,xgene-rtc`` node whose local driver adds a 32.768 kHz prescaler contract
-absent from mainline, so RTC modeling is deferred instead of guessing.  The
-mailbox submilestone maps the upstream driver's 24 KiB local resource and its
+hardware-validation items.  The RTC submilestone adds a reusable
+X-Gene-compatible DesignWare model and maps it at ``0xfffff40000`` with its
+32.768 kHz input and PLIC source 74.  It models counter, match, delayed load,
+interrupt/mask/EOI, wrap and optional prescaler registers, reset and VMState;
+two focused qtests cover register/timing/PLIC and migration behavior.  A
+test-only module on the pinned Linux kernel programs the vendor-established
+``0x8000`` prescaler, registers ``rtc0``, advances at 1 Hz and receives an
+alarm.  The generated node remains disabled because mainline's generic
+X-Gene driver lacks this TH1520 sequence.  Component/reset identity, exact
+prescaler and wrap edges, calibration, wake and battery/reset retention remain
+explicit physical-validation items.  The mailbox submilestone maps the
+upstream driver's 24 KiB local resource and its
 three remote-ICU resources, including remote ICU0's documented 16 KiB offset,
 and emits the exact ``thead,th1520-mbox`` binding with clock IDs 72-75 and PLIC
 source 28.  It models the driver's 32-bit status/clear/mask, generate and
@@ -829,7 +850,8 @@ wiring remain open.  Remaining AP behavior, all other clock/reset and power
 domains, SPI0 serial timing/DMA/advanced framing and board peripheral routing,
 QSPI/XIP/boot-flash behavior, standalone-PWM one-shot/inactive/output-routing
 behavior, timer cascade/load-count-2 waveform behavior, PVT alarms/timing/IRQ
-and physical calibration, RTC and non-AP watchdogs, exact
+and physical calibration, RTC calibration/wake/retention and non-AP
+watchdogs, exact
 enable/reload/zero-count edges, control I/O and every other P6 gate stay open
 until implemented and,
 where necessary, compared with the physical board.

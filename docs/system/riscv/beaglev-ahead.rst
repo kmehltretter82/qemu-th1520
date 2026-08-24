@@ -64,6 +64,11 @@ The machine currently provides:
   and use AP clock IDs 76/77 and reset IDs 3/4.  Both generated nodes remain
   board-disabled because current upstream Linux has not added them to the
   TH1520 device tree;
+* one X-Gene-compatible DesignWare APB RTC at ``0xfffff40000`` with a
+  32.768 kHz input, programmable prescaler and level-high PLIC source 74.
+  Counter, load/match, interrupt, wrap, reset and migration behavior are
+  modeled.  Its generated node remains disabled because mainline Linux does
+  not yet program the TH1520 prescaler;
 * one TH1520 mailbox controller with its 24 KiB local aperture at
   ``0xffffc38000`` and remote-ICU resources at ``0xffffc40000``,
   ``0xffffc4c000`` and ``0xffffc54000``.  Its generated binding uses AP clock
@@ -103,8 +108,9 @@ The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
 SPI0, PWM, APB timer, PVT, GPIO, pinctrl, storage, memory, and cache topology
 bindings as upstream Linux's TH1520 device tree, augmented with the
 schematic-established board EEPROM, two disabled generic DesignWare watchdog
-nodes, both USB syscon apertures, and a disabled generic DWC3 node.  It
-advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every C910 hart.
+nodes, a disabled vendor-established X-Gene RTC node, both USB syscon
+apertures, and a disabled generic DWC3 node.  It advertises
+``xtheadvector`` and ``thead,vlenb = <16>`` for every C910 hart.
 
 Boot options
 ------------
@@ -392,13 +398,33 @@ retention, component identities, access behavior outside aligned 32-bit
 words, and the additional AO/audio watchdogs remain owner-hardware validation
 items.
 
-The RTC is deliberately not modeled yet.  A public vendor kernel describes an
-``apm,xgene-rtc``-compatible block at ``0xfffff40000`` on PLIC source 74, but
-its locally modified driver programs a 32.768 kHz prescaler and an additional
-enable bit that are absent from the mainline X-Gene driver.  Current mainline
-TH1520 device trees omit the node.  QEMU therefore does not claim that an
-unmodified X-Gene RTC model has the correct TH1520 epoch, rate, alarm, wake or
-retention behavior.
+The RTC follows the DesignWare APB programming interface used by the Linux
+``apm,xgene-rtc`` driver.  It implements the 32-bit counter, match and delayed
+load registers; enable, interrupt-enable, interrupt-mask and wrap-enable
+control; masked and raw status; read-to-clear EOI; component-version and the
+optional prescaler registers.  The initial counter comes from QEMU's ``-rtc``
+base.  A TH1520 guest can program ``CPSR = 0x8000`` and the prescaler-enable
+bit to divide the 32.768 kHz input to one counter update per second.  Match
+events route to PLIC source 74.  Counter, prescaler phase, delayed load, alarm,
+register and IRQ state migrate.  QEMU conservatively retains the counter but
+clears control, alarm and prescaler configuration on system reset.
+
+The generated RTC node remains disabled.  Vendor kernel commit
+``b9cf70c75d2b7482195a94e754d59f8cfc9dda2c`` adds the TH1520 prescaler
+sequence to its X-Gene driver, while mainline Linux commit
+``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` has neither that sequence nor a
+TH1520 RTC node.  A controlled external-DT test used a test-only module derived
+from the mainline driver plus the attributed vendor prescaler writes.  Linux
+registered ``rtc0``, set and read time advancing at 1 Hz, and received an
+alarm through PLIC source 74.
+
+The exact component version and reset values, whether the physical divisor is
+``CPSR`` or ``CPSR + 1``, prescaler-current direction, wrap edge, battery
+domain, cold/warm/domain retention, clock calibration and suspend wake path
+remain owner-hardware validation items.  QEMU currently reports zero for the
+unknown component version and prescaler reset, treats ``CPSR`` as the exact
+divisor, applies a load on the next prescaled counter update and does not
+model low-power wake.
 
 The TH1520 mailbox matches the public upstream Linux binding: one 24 KiB local
 resource plus three remote-ICU resources, AP clock IDs 72 through 75 and
@@ -542,7 +568,7 @@ the silicon reset sequence.
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
-APB timer components, both AP watchdogs, TH1520 mailbox and MR75203 PVT state,
+APB timer components, both AP watchdogs, the RTC, TH1520 mailbox, MR75203 PVT,
 all six GPIO controllers, all three pad controllers, storage, GMAC, the USB
 miscellaneous and DRD wrappers, DWC3 and xHCI state in one stream.
 Focused migration tests additionally preserve an in-flight I2C read and
@@ -551,9 +577,11 @@ APB timer with a latched interrupt, a running TH1520 PWM phase with a pending
 update, a mailbox event and remote-window data, plus completed AXI-DMAC
 data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
-conversions.  Together with the focused device tests, the complete board gate
-passes 87 tests in the normal build and 86 in both the dependency-minimal and
-ASan/UBSan builds.  The only conditional omission is the keyboard-hotplug test
+conversions.  The focused RTC migration test preserves counter and prescaler
+phase, match/control state and a future PLIC alarm.  Together with the focused
+device tests, the complete board gate passes 89 tests in the normal build and
+88 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
+omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
@@ -564,10 +592,9 @@ warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
 QSPI/XIP, board SPI peripherals and timer PWM outputs, PVT alarm/timer/IRQ and
-analog timing fidelity, RTC and non-application watchdogs, USB device/OTG,
-PHY and recovery-mode behavior, PCIe, display, audio, camera, video codecs,
-GPU, NPU, the C906 and E902
-auxiliary cores, DSPs, security blocks, the secure DMA
+analog timing fidelity, non-application watchdogs, USB device/OTG, PHY and
+recovery-mode behavior, display, audio, camera, video codecs, GPU, NPU, the
+C906 and E902 auxiliary cores, DSPs, security blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
 Electrical pad routing and GPIO-connected PHY/Wi-Fi/card-detect signals are
 not wired yet.  The remaining storage, Ethernet and general-DMA gaps are
