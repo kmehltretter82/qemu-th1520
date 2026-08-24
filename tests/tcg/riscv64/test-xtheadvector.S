@@ -18,6 +18,8 @@
     .text
     .global _start
 _start:
+    csrr    t0, mhartid
+    bnez    t0, secondary_hart
     lla     t0, trap
     csrw    mtvec, t0
     li      s11, 0
@@ -49,6 +51,41 @@ _start:
     and     t1, t1, t2
     li      t2, MSTATUS_VS_THEAD
     bne     t1, t2, fail_5
+
+    /*
+     * A reserved EDIV value makes vtype illegal and vl zero.  Register-form
+     * th.vsetvl must not modify its rs2 source while constructing that state.
+     */
+    li      t1, 16
+    li      t2, 0x20
+    li      t3, 7
+    csrw    0x008, t3       /* th.vstart */
+    .word   0x807372d7      /* th.vsetvl t0, t1, t2 */
+    bnez    t0, fail_19
+    li      t3, 0x20
+    bne     t2, t3, fail_20
+    csrr    t3, 0xc20       /* th.vl */
+    bnez    t3, fail_21
+    csrr    t3, 0xc21       /* th.vtype */
+    li      t4, 1
+    slli    t4, t4, 63
+    bne     t3, t4, fail_22
+    csrr    t3, 0x008       /* th.vstart */
+    bnez    t3, fail_23
+
+    /* Immediate-form illegal vtype follows the same WARL path. */
+    li      t3, 5
+    csrw    0x008, t3       /* th.vstart */
+    .word   0x020372d7      /* th.vsetvli t0, t1, EDIV=1 */
+    bnez    t0, fail_24
+    csrr    t3, 0xc20       /* th.vl */
+    bnez    t3, fail_25
+    csrr    t3, 0xc21       /* th.vtype */
+    li      t4, 1
+    slli    t4, t4, 63
+    bne     t3, t4, fail_26
+    csrr    t3, 0x008       /* th.vstart */
+    bnez    t3, fail_27
 
     /* Configure 16 8-bit elements in a 128-bit, LMUL=1 register. */
     li      t1, 16
@@ -150,7 +187,20 @@ fail_14: li a0, 14; j exit
 fail_15: li a0, 15; j exit
 fail_16: li a0, 16; j exit
 fail_17: li a0, 17; j exit
-fail_18: li a0, 18
+fail_18: li a0, 18; j exit
+fail_19: li a0, 19; j exit
+fail_20: li a0, 20; j exit
+fail_21: li a0, 21; j exit
+fail_22: li a0, 22; j exit
+fail_23: li a0, 23; j exit
+fail_24: li a0, 24; j exit
+fail_25: li a0, 25; j exit
+fail_26: li a0, 26; j exit
+fail_27: li a0, 27; j exit
+
+secondary_hart:
+    wfi
+    j       secondary_hart
 
 exit:
     lla     a1, semiargs

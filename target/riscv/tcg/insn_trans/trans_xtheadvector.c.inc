@@ -48,21 +48,25 @@ static bool require_xtheadvector(DisasContext *s)
 static bool th_vsetvl(DisasContext *s, int rd, int rs1, TCGv s2)
 {
     TCGv temp = tcg_temp_new();
+    TCGv raw_s2 = tcg_temp_new();
     TCGv dst_s2 = tcg_temp_new();
-    /* illegal value check*/
     TCGLabel *legal = gen_new_label();
-    tcg_gen_shri_tl(temp, s2, 5);
+
+    /* s2 can be a guest GPR or a TCG constant and is always read-only. */
+    tcg_gen_mov_tl(raw_s2, s2);
+    /* Illegal value check. */
+    tcg_gen_shri_tl(temp, raw_s2, 5);
     tcg_gen_brcondi_tl(TCG_COND_EQ, temp, 0, legal);
     /*
      * if illegal, set unsupported value
      * s2[8:5] == 0b111, which is reserved field in XTheadVector
      */
-    tcg_gen_movi_tl(s2, 0xff);
+    tcg_gen_movi_tl(raw_s2, 0xff);
     gen_set_label(legal);
     /* get vlmul, s2[1:0] -> dst_s2[2:0] */
-    tcg_gen_andi_tl(dst_s2, s2, 0x3);
+    tcg_gen_andi_tl(dst_s2, raw_s2, 0x3);
     /* get vsew, s2[4:2] -> dst_s2[5:3] */
-    tcg_gen_andi_tl(temp, s2, 0x1c);
+    tcg_gen_andi_tl(temp, raw_s2, 0x1c);
     tcg_gen_shli_tl(temp, temp, 1);
     tcg_gen_or_tl(dst_s2, dst_s2, temp);
     /*
@@ -72,7 +76,7 @@ static bool th_vsetvl(DisasContext *s, int rd, int rs1, TCGv s2)
      * Make the dst_s2 an illegal value for RVV1.0, leads to the illegal
      * operation processing flow.
      */
-    tcg_gen_andi_tl(temp, s2, 0xe0);
+    tcg_gen_andi_tl(temp, raw_s2, 0xe0);
     tcg_gen_shli_tl(temp, temp, 3);
     tcg_gen_or_tl(dst_s2, dst_s2, temp);
 
