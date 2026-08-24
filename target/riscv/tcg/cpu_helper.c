@@ -1137,7 +1137,15 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     bool svadu = riscv_cpu_cfg(env)->ext_svadu;
     bool adue = svadu ? env->menvcfg & MENVCFG_ADUE : !svade;
     bool svrsw60t59b = riscv_cpu_cfg(env)->ext_svrsw60t59b;
-    bool thead_maee = first_stage && riscv_thead_maee_enabled(env);
+    /*
+     * XTheadMaee owns PTE[63:59] even while MXSTATUS.MAEE is clear.  In
+     * that state C910 ignores those PTE bits and uses its physical system
+     * map attributes instead, so they must not be rejected as reserved.
+     */
+    bool thead_maee_capable = first_stage &&
+                              riscv_cpu_cfg(env)->ext_xtheadmaee;
+    bool thead_maee = thead_maee_capable &&
+                      riscv_thead_maee_enabled(env);
 
     if (first_stage && two_stage && env->virt_enabled) {
         pbmte = pbmte && (env->henvcfg & HENVCFG_PBMTE);
@@ -1228,7 +1236,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
         } else {
             uint64_t reserved = PTE_RESERVED(svrsw60t59b);
 
-            if (thead_maee) {
+            if (thead_maee_capable) {
                 reserved &= ~PTE_THEAD_MAEE;
             }
             if (pte & reserved) {
@@ -1238,7 +1246,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                 return TRANSLATE_FAIL;
             }
 
-            if (!thead_maee && !pbmte && (pte & PTE_PBMT)) {
+            if (!thead_maee_capable && !pbmte && (pte & PTE_PBMT)) {
                 /* Reserved without Svpbmt. */
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits set in PTE, "
                               "and Svpbmt extension is disabled: "
@@ -1258,7 +1266,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
              * case the page-fault is mandatory.  Make both cases consistent
              * by also page faulting here.
              */
-            if (!thead_maee && (pte & PTE_PBMT) == PTE_PBMT) {
+            if (!thead_maee_capable && (pte & PTE_PBMT) == PTE_PBMT) {
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits 62 and 61 are "
                         "reserved but are set in PTE: "
                         "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",
@@ -1266,7 +1274,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                 return TRANSLATE_FAIL;
             }
 
-            if (!thead_maee && !riscv_cpu_cfg(env)->ext_svnapot &&
+            if (!thead_maee_capable && !riscv_cpu_cfg(env)->ext_svnapot &&
                 (pte & PTE_N)) {
                 /* Reserved without Svnapot extension */
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: N bit set in PTE, "
@@ -1291,7 +1299,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
         }
 
         if (pte & (PTE_D | PTE_A | PTE_U |
-                   (thead_maee ? 0 : PTE_ATTR))) {
+                   (thead_maee_capable ? 0 : PTE_ATTR))) {
             /* D, A, and U bits are reserved in non-leaf/inner PTEs */
             qemu_log_mask(LOG_GUEST_ERROR, "%s: D, A, or U bits set in non-leaf PTE: "
                           "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",
@@ -1313,7 +1321,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                       __func__, pte_addr, pte);
         return TRANSLATE_FAIL;
     }
-    if (!thead_maee && !pbmte && (pte & PTE_PBMT)) {
+    if (!thead_maee_capable && !pbmte && (pte & PTE_PBMT)) {
         /* Reserved without Svpbmt. */
         qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits set in PTE, "
                       "and Svpbmt extension is disabled: "
@@ -1331,7 +1339,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
      *
      * Raise a fault if 62-61 (i.e. PTE_PBMT) are set.
      */
-    if (!thead_maee && (pte & PTE_PBMT) == PTE_PBMT) {
+    if (!thead_maee_capable && (pte & PTE_PBMT) == PTE_PBMT) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits 62 and 61 are "
                       "reserved but are set in leaf PTE: "
                       "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",
@@ -1496,7 +1504,8 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     /* For superpage mappings, make a fake leaf PTE for the TLB's benefit. */
     target_ulong vpn = addr >> PGSHIFT;
 
-    if (!thead_maee && riscv_cpu_cfg(env)->ext_svnapot && (pte & PTE_N)) {
+    if (!thead_maee_capable && riscv_cpu_cfg(env)->ext_svnapot &&
+        (pte & PTE_N)) {
         napot_bits = ctzl(ppn) + 1;
         if ((i != (levels - 1)) || (napot_bits != 4)) {
             return TRANSLATE_FAIL;
