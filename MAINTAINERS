@@ -1827,6 +1827,7 @@ F: tests/tcg/riscv64/test-beaglev-ahead-*
 F: tests/tcg/riscv64/test-dw-apb-timer.S
 F: tests/tcg/riscv64/test-dw-apb-uart.S
 F: tests/tcg/riscv64/test-thead-*
+F: tests/tcg/riscv64/test-xtheadvector*
 
 OpenTitan
 M: Alistair Francis <Alistair.Francis@wdc.com>

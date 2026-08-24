@@ -157,6 +157,15 @@ check_output:
     and     t0, t0, t1
     bne     t0, t1, fail_17
 
+    /* Reductions must honor the same VS-Off rule as every vector opcode. */
+    li      t0, MSTATUS_VS_THEAD_M
+    csrc    mstatus, t0
+    .word   0x021121d7      /* th.vredsum.vs v3, v1, v2 */
+    li      t0, 5
+    bne     s11, t0, fail_28
+    li      t0, MSTATUS_VS_THEAD
+    csrs    mstatus, t0
+
     li      a0, 0
     j       exit
 
@@ -197,6 +206,7 @@ fail_24: li a0, 24; j exit
 fail_25: li a0, 25; j exit
 fail_26: li a0, 26; j exit
 fail_27: li a0, 27; j exit
+fail_28: li a0, 28; j exit
 
 secondary_hart:
     wfi
