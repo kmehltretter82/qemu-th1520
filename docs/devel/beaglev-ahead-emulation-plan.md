@@ -203,7 +203,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance/migration, strong-order scalar alignment and instruction-access faults are implemented; cache/order/bus effects and PMU fidelity remain | Finish CSR probes, remaining memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -241,9 +241,12 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   TH1520 no-PMP configuration, Zfh and its Zfhmin dependency, the initial
   custom CSR bank, migration state, provisional MAEE PTE acceptance, and
   dynamic MXSTATUS/SXSTATUS ``MM`` control of standard integer/FP plus every
-  modeled scalar XThead memory path.  Guarded Sv39 coverage now checks the
-  resulting alignment-versus-page-fault priority in S and U modes, including
-  delegated traps and the distinct scalar, atomic and vector rules;
+  modeled scalar XThead memory path.  The MAEE page attributes survive the
+  page walk: strong-order mappings require post-translation scalar alignment
+  and reject instruction fetches with an access fault, while non-cacheable
+  mappings remain executable.  Guarded Sv39 coverage checks these rules plus
+  alignment-versus-page-fault priority in S and U modes, including delegated
+  traps and the distinct scalar, atomic and vector rules;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
   machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
   event maps, and focused CSR/fixed-counter overflow tests.  The overflow test
@@ -498,6 +501,26 @@ also passes ASan/UBSan with only QEMU's expected coroutine warning.  The
 aggregate minimal TCG target is intentionally inapplicable because it begins
 with tests for the omitted generic ``virt`` machine; the explicitly enumerated
 board-compatible subset is the pruning gate.
+
+The following MAEE milestone is grounded in openC910 RTL commit
+``b91c90914c19f114d35c8f6b73408eb241ed847c`` and mainline Linux's T-Head
+memory-type encodings.  QEMU now carries PTE bits 63:59 through the RISC-V
+page walk and uses the strong-order bit to request page-dependent natural
+alignment from the TCG TLB.  RISC-V uses the alignment-aware TLB-fill hook so
+the first access to a new mapping and a cross-page access cannot bypass that
+rule.  A data-side fill suppresses executable permission for a strong-order
+mapping, ensuring a later instruction fetch re-walks and raises the required
+instruction access fault.  A new payload constructs normal, non-cacheable,
+strong-order and non-shareable aliases and checks M-owned MAEE transitions,
+S-mode traps, delegated U-mode traps, exact trap values, first/second-page
+attribute asymmetry, data-to-instruction TLB reuse and MAEE-disabled reserved
+PTE behavior.  It passes in the normal, dependency-minimal and ASan/UBSan
+builds, as do the older MXSTATUS.MM and guarded-priority payloads; generic
+Zicclsm enabled/disabled coverage also remains green.  The complete normal
+RISC-V TCG suite, 98 normal board qtests and three normal CSR qtests pass; the
+minimal and sanitizer board gates each pass their 97 available tests and their
+available CSR subsets.  QEMU still does not claim cache, buffering,
+shareability, security-bus or actual memory-order effects.
 
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
@@ -766,10 +789,13 @@ the initial custom CSR/PMU/MAEE state, scalar XThead decode, Zfh/Zfhmin, and
 MXSTATUS/SXSTATUS.MM scalar alignment behavior are implemented and covered by
 CSR, migration and guest-executed tests.  The alignment tests are grounded in
 pinned openC910 RTL and distinguish scalar, atomic and vector behavior across
-M/S/U privilege, delegated traps and a mapped/unmapped page boundary.  P2
+M/S/U privilege, delegated traps and a mapped/unmapped page boundary.  MAEE
+tests additionally distinguish normal, non-cacheable, strong-order and
+non-shareable mappings, enforce post-translation scalar alignment on the
+strong-order type and require a strong-order instruction access fault.  P2
 remains open for exhaustive scalar/illegal decode, all custom-CSR and privilege
-combinations, complete MAEE memory types, strongly ordered and access-fault
-priority, every access width/form, cache/CMO and ordering effects,
+combinations, MAEE atomic/vector restrictions and B/SH/SEC effects, every
+access width/form, cache/CMO and actual ordering effects, physical-map PMAs,
 reset-vector/security behavior, randomized differential testing and physical
 comparison.
 

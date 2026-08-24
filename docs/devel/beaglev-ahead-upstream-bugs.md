@@ -92,6 +92,14 @@ generic upstream Sscofpmf CSR-mask defect exposed by an independent `rv64`
 payload, not a defect in the new C910 model.  The host-tick overflow scheduling
 observation remains candidate `UQ-C003`; it is not included in the tally.
 
+The following C910 MAEE milestone did not add an upstream report unit.  The
+strong-order PTE behavior, page-dependent scalar alignment and C910-specific
+instruction access fault are new CPU-model work absent from the upstream
+baseline.  Moving RISC-V from the legacy TLB-fill callback to QEMU's existing
+alignment-aware callback is required to express that behavior on a first TLB
+miss; focused C910 and generic Zicclsm regressions found no independent defect
+in an existing upstream CPU.  The proposed-report tally remains 11.
+
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
 xHCI models and were independently exposed by an upstream Linux host driver.

@@ -201,11 +201,15 @@ pending physical-board confirmation.
 The XTheadVector engine covers the frozen instruction set, CSR/status layout,
 debug register file, reset, and migration state.  Current regression coverage
 is an architectural smoke test rather than the exhaustive and differential
-coverage needed to claim silicon equivalence.  Likewise, MAEE PTE attribute
-bits are accepted but their cacheability and ordering effects are not modeled;
-some custom CSRs remain placeholders.  Fixed counters, TLB-miss events and the
-C9xx overflow protocol are implemented, but cache, branch, pipeline and other
-microarchitectural performance events are not yet hardware-accurate.  The
+coverage needed to claim silicon equivalence.  MAEE PTE bits 63:59 are carried
+through translation.  A strong-order page enforces post-translation natural
+alignment for ordinary scalar accesses and rejects instruction fetches;
+non-cacheable instruction fetch remains valid.  Cacheability, buffering,
+shareability, security-bus and actual ordering effects are not modeled, and
+the RTL's non-cacheable atomic and strong-order vector access faults remain
+open.  Some custom CSRs remain placeholders.  Fixed counters, TLB-miss events
+and the C9xx overflow protocol are implemented, but cache, branch, pipeline and
+other microarchitectural performance events are not yet hardware-accurate.  The
 TH1520 integration exposes no writable PMP entries,
 matching public physical-board boot captures, although generic C910
 documentation describes optional PMP configurations.  These uncertainties
@@ -651,7 +655,7 @@ device tests, the complete board gate passes 98 tests in the normal build and
 omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
-vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
+vector/PMU/MAEE, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
 cover the later native UART handoff and expected missing-root panic.  ASan's
