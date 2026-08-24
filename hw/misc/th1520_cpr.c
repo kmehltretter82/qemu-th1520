@@ -12,10 +12,14 @@
  * voltage/frequency coupling still require physical differential tests.
  *
  * Reset registers preserve the silicon defaults and active-low programming
- * convention.  Their outputs are not yet coupled to child QEMU devices: the
- * silicon default releases only C910 core 0, whereas the current direct-boot
- * machine deliberately starts all four harts.  That boot/reset discrepancy is
- * tracked in the BeagleV Ahead hardware-validation ledger.
+ * convention.  The documented PWM and two DesignWare timer APB/core pairs
+ * drive QEMU reset outputs.  An asserted output immediately resets its
+ * consumer's modeled state; this is intentionally not a claim about silicon
+ * pulse width, bus behavior while reset is held, retention, or the many
+ * remaining reset domains.  In
+ * particular, the silicon default releases only C910 core 0, whereas the
+ * current direct-boot machine deliberately starts all four harts.  That
+ * boot/reset discrepancy is tracked in the hardware-validation ledger.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -424,6 +428,45 @@ static const TH1520RegInfo th1520_ap_reset_reginfo[] = {
     RESET_REG(0x220, 0x8, 0xf),
 };
 
+typedef struct TH1520ResetOutputInfo {
+    uint16_t offset;
+    uint32_t mask;
+} TH1520ResetOutputInfo;
+
+/*
+ * Pairs are from reset-th1520.c: one APB and one core/counter reset per
+ * modeled block.  Treat either active-low member as a whole-device reset
+ * until hardware establishes a finer-grained distinction.
+ */
+static const TH1520ResetOutputInfo th1520_ap_reset_output_info[] = {
+    [TH1520_AP_RESET_PWM] = { 0x0c0, 0x3 },
+    [TH1520_AP_RESET_TIMER0_3] = { 0x03c, 0x3 },
+    [TH1520_AP_RESET_TIMER4_7] = { 0x040, 0x3 },
+};
+
+static void th1520_ap_reset_update_output(TH1520APResetState *s,
+                                          unsigned int output, bool force)
+{
+    const TH1520ResetOutputInfo *info =
+        &th1520_ap_reset_output_info[output];
+    bool asserted = (s->regs[info->offset / 4] & info->mask) != info->mask;
+
+    if (force || s->reset_asserted[output] != asserted) {
+        s->reset_asserted[output] = asserted;
+        qemu_set_irq(s->peripheral_reset[output], asserted);
+    }
+}
+
+static void th1520_ap_reset_update_outputs(TH1520APResetState *s,
+                                            hwaddr offset, bool force)
+{
+    for (unsigned int i = 0; i < TH1520_AP_RESET_OUTPUT_COUNT; i++) {
+        if (force || th1520_ap_reset_output_info[i].offset == offset) {
+            th1520_ap_reset_update_output(s, i, force);
+        }
+    }
+}
+
 static uint64_t th1520_ap_reset_read(void *opaque, hwaddr offset,
                                      unsigned int size)
 {
@@ -461,6 +504,9 @@ static void th1520_ap_reset_write(void *opaque, hwaddr offset,
     old = s->regs[offset / 4];
     s->regs[offset / 4] = (old & ~info->write_mask) |
                           ((uint32_t)value & info->write_mask);
+    if (old != s->regs[offset / 4]) {
+        th1520_ap_reset_update_outputs(s, offset, false);
+    }
 }
 
 static const MemoryRegionOps th1520_ap_reset_ops = {
@@ -489,12 +535,22 @@ static void th1520_ap_reset_reset(DeviceState *dev)
 
         s->regs[info->offset / 4] = info->reset;
     }
+    th1520_ap_reset_update_outputs(s, 0, true);
+}
+
+static int th1520_ap_reset_post_load(void *opaque, int version_id)
+{
+    TH1520APResetState *s = opaque;
+
+    th1520_ap_reset_update_outputs(s, 0, true);
+    return 0;
 }
 
 static const VMStateDescription vmstate_th1520_ap_reset = {
     .name = TYPE_TH1520_AP_RESET,
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = th1520_ap_reset_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, TH1520APResetState,
                              TH1520_AP_RESET_REGS),
@@ -510,6 +566,9 @@ static void th1520_ap_reset_init(Object *obj)
                           TYPE_TH1520_AP_RESET,
                           TH1520_AP_RESET_MMIO_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    qdev_init_gpio_out_named(DEVICE(s), s->peripheral_reset,
+                             "peripheral-reset",
+                             TH1520_AP_RESET_OUTPUT_COUNT);
 }
 
 static void th1520_ap_reset_class_init(ObjectClass *klass, const void *data)

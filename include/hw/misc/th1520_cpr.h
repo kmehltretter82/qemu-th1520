@@ -7,6 +7,7 @@
 #ifndef HW_MISC_TH1520_CPR_H
 #define HW_MISC_TH1520_CPR_H
 
+#include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 #include "qemu/timer.h"
 #include "qom/object.h"
@@ -23,6 +24,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(TH1520APResetState, TH1520_AP_RESET)
 #define TH1520_AP_RESET_REGS (TH1520_AP_RESET_MMIO_SIZE / sizeof(uint32_t))
 #define TH1520_AP_PLL_COUNT 7
 
+/*
+ * Software-visible reset outputs currently backed by exact Linux reset IDs.
+ * Each output is asserted when either member of its documented APB/core pair
+ * is active low.  Other TH1520 reset words remain register-only.
+ */
+enum {
+    TH1520_AP_RESET_PWM,
+    TH1520_AP_RESET_TIMER0_3,
+    TH1520_AP_RESET_TIMER4_7,
+    TH1520_AP_RESET_OUTPUT_COUNT,
+};
+
 struct TH1520APClockState {
     SysBusDevice parent_obj;
 
@@ -38,7 +51,9 @@ struct TH1520APResetState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
+    qemu_irq peripheral_reset[TH1520_AP_RESET_OUTPUT_COUNT];
     uint32_t regs[TH1520_AP_RESET_REGS];
+    bool reset_asserted[TH1520_AP_RESET_OUTPUT_COUNT];
 };
 
 #endif /* HW_MISC_TH1520_CPR_H */
