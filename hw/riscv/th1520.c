@@ -263,6 +263,87 @@ static GlobalProperty beaglev_ahead_cpu_defaults[] = {
     { TYPE_RISCV_CPU_THEAD_C910, "debug", "off" },
 };
 
+static void th1520_soc_reset_gmac(TH1520SoCState *s, unsigned int index)
+{
+    /* Whether an individual/shared reset also covers the PHY is unverified. */
+    device_cold_reset(DEVICE(&s->gmac[index]));
+    device_cold_reset(DEVICE(&s->gmac_apb[index]));
+}
+
+/*
+ * Linux publishes reset IDs and bit groupings, but not the effect of each
+ * member or the bus contract while reset remains asserted.  Model an
+ * assertion as an immediate whole-device cold reset, leave MMIO accessible,
+ * and record the provisional pulse/level/domain semantics under RST-001.
+ */
+static void th1520_soc_ap_reset(void *opaque, int n, int level)
+{
+    TH1520SoCState *s = opaque;
+
+    if (!level) {
+        return;
+    }
+
+    if (n >= TH1520_AP_RESET_UART0 && n <= TH1520_AP_RESET_UART5) {
+        device_cold_reset(DEVICE(&s->uart[n - TH1520_AP_RESET_UART0]));
+        return;
+    }
+    if (n >= TH1520_AP_RESET_I2C0 && n <= TH1520_AP_RESET_I2C5) {
+        device_cold_reset(DEVICE(&s->i2c[n - TH1520_AP_RESET_I2C0]));
+        return;
+    }
+    if (n >= TH1520_AP_RESET_GPIO0 && n <= TH1520_AP_RESET_GPIO3) {
+        device_cold_reset(DEVICE(&s->gpio[n - TH1520_AP_RESET_GPIO0]));
+        return;
+    }
+
+    switch (n) {
+    case TH1520_AP_RESET_SPI0:
+        device_cold_reset(DEVICE(&s->spi[0]));
+        break;
+    case TH1520_AP_RESET_PADCTRL0:
+        device_cold_reset(DEVICE(&s->padctrl[2]));
+        break;
+    case TH1520_AP_RESET_PADCTRL1:
+        device_cold_reset(DEVICE(&s->padctrl[1]));
+        break;
+    case TH1520_AP_RESET_DMAC0:
+        device_cold_reset(DEVICE(&s->dmac0));
+        break;
+    case TH1520_AP_RESET_GMAC0:
+        th1520_soc_reset_gmac(s, 0);
+        break;
+    case TH1520_AP_RESET_GMAC1:
+        th1520_soc_reset_gmac(s, 1);
+        break;
+    case TH1520_AP_RESET_GMAC_SHARED:
+        for (unsigned int i = 0; i < TH1520_GMAC_COUNT; i++) {
+            th1520_soc_reset_gmac(s, i);
+        }
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void th1520_soc_storage_reset(void *opaque, int n, int level)
+{
+    TH1520SoCState *s = opaque;
+
+    if (level) {
+        g_assert(n >= 0 && n < TH1520_MSHC_COUNT);
+        device_cold_reset(DEVICE(&s->mshc[n]));
+    }
+}
+
+static void th1520_soc_connect_ap_reset(TH1520SoCState *s,
+                                         unsigned int output)
+{
+    qdev_connect_gpio_out_named(
+        DEVICE(&s->ap_reset), "peripheral-reset", output,
+        qdev_get_gpio_in_named(DEVICE(s), "ap-peripheral-reset", output));
+}
+
 static void th1520_create_pmu_fdt(void *fdt)
 {
     static const uint32_t events[] = {
@@ -330,6 +411,13 @@ static void th1520_soc_init(Object *obj)
         "gmac0-apb", "gmac1-apb",
     };
     TH1520SoCState *s = RISCV_TH1520_SOC(obj);
+
+    qdev_init_gpio_in_named(DEVICE(s), th1520_soc_ap_reset,
+                            "ap-peripheral-reset",
+                            TH1520_AP_RESET_OUTPUT_COUNT);
+    qdev_init_gpio_in_named(DEVICE(s), th1520_soc_storage_reset,
+                            "storage-reset",
+                            TH1520_MISCSYS_STORAGE_RESET_COUNT);
 
     object_initialize_child(obj, "c910-cpus", &s->c910_cpus,
                             TYPE_RISCV_HART_ARRAY);
@@ -610,6 +698,7 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(uart, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   th1520_uart_irqs[i]));
+        th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_UART0 + i);
     }
 
     for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
@@ -623,6 +712,9 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(gpio, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   info->irq));
+        if (i < 4) {
+            th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_GPIO0 + i);
+        }
     }
 
     for (int i = 0; i < TH1520_PADCTRL_COUNT; i++) {
@@ -633,6 +725,11 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
             return;
         }
         sysbus_mmio_map(padctrl, 0, th1520_memmap[info->memmap].base);
+        if (i == 1) {
+            th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_PADCTRL1);
+        } else if (i == 2) {
+            th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_PADCTRL0);
+        }
     }
 
     for (int i = 0; i < TH1520_I2C_COUNT; i++) {
@@ -646,6 +743,7 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(i2c, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   info->irq));
+        th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_I2C0 + i);
     }
 
     for (int i = 0; i < TH1520_SPI_COUNT; i++) {
@@ -659,6 +757,7 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(spi, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   info->irq));
+        th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_SPI0 + i);
     }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->pwm), errp)) {
@@ -758,6 +857,7 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->dmac0), 0,
                        qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                               TH1520_DMAC0_IRQ));
+    th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_DMAC0);
 
     for (int i = 0; i < TH1520_GMAC_COUNT; i++) {
         SysBusDevice *gmac = SYS_BUS_DEVICE(&s->gmac[i]);
@@ -780,7 +880,9 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         }
         sysbus_mmio_map(apb, 0,
                         th1520_memmap[th1520_gmac_apb_memmap[i]].base);
+        th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_GMAC0 + i);
     }
+    th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_GMAC_SHARED);
 
     for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
         SysBusDevice *mshc = SYS_BUS_DEVICE(&s->mshc[i]);
@@ -793,6 +895,9 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(mshc, 0,
                            qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                                   th1520_mshc_irqs[i]));
+        qdev_connect_gpio_out_named(
+            DEVICE(&s->miscsys), "storage-reset", i,
+            qdev_get_gpio_in_named(DEVICE(s), "storage-reset", i));
     }
 }
 
