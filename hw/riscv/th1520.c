@@ -562,6 +562,11 @@ static void th1520_soc_init(Object *obj)
                              TH1520_GMAC_VERSION);
         qdev_prop_set_uint32(DEVICE(&s->gmac[i]), "hw-feature",
                              TH1520_GMAC_HW_FEATURE);
+        qdev_prop_set_bit(DEVICE(&s->gmac[i]), "rx-filtering", true);
+        qdev_prop_set_uint16(DEVICE(&s->gmac[i]), "hash-bins",
+                             TH1520_GMAC_HASH_BINS);
+        qdev_prop_set_uint8(DEVICE(&s->gmac[i]), "num-mac-addresses",
+                            TH1520_GMAC_MAC_ADDRS);
         qdev_prop_set_uint8(DEVICE(&s->gmac[i]), "phy-addr",
                             TH1520_GMAC_PHY_ADDR);
         qdev_prop_set_uint16(DEVICE(&s->gmac[i]), "phy-id1",
@@ -1857,9 +1862,11 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_cell(ms->fdt, name, "snps,pbl", 32);
         qemu_fdt_setprop(ms->fdt, name, "snps,fixed-burst", NULL, 0);
         qemu_fdt_setprop_cell(ms->fdt, name,
-                              "snps,multicast-filter-bins", 64);
+                              "snps,multicast-filter-bins",
+                              TH1520_GMAC_HASH_BINS);
         qemu_fdt_setprop_cell(ms->fdt, name,
-                              "snps,perfect-filter-entries", 32);
+                              "snps,perfect-filter-entries",
+                              TH1520_GMAC_MAC_ADDRS);
         qemu_fdt_setprop_cell(ms->fdt, name, "snps,axi-config",
                               stmmac_axi_phandle);
         qemu_fdt_setprop(ms->fdt, name, "local-mac-address",

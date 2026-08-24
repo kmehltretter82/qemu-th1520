@@ -482,6 +482,16 @@
 
 #define DWMAC_MAC_CONFIG           0x0000
 #define DWMAC_FRAME_FILTER         0x0004
+#define DWMAC_HASH_HIGH            0x0008
+#define DWMAC_HASH_LOW             0x000c
+#define DWMAC_FLOW_CTRL            0x0018
+#define DWMAC_VLAN_TAG             0x001c
+#define DWMAC_MAC0_ADDR_HI         0x0040
+#define DWMAC_MAC0_ADDR_LO         0x0044
+#define DWMAC_VLAN_HASH_TABLE      0x0588
+#define DWMAC_MAC_ADDR_HI(index) \
+    ((index) < 16 ? 0x40 + 8 * (index) : 0x800 + 8 * ((index) - 16))
+#define DWMAC_MAC_ADDR_LO(index)   (DWMAC_MAC_ADDR_HI(index) + 4)
 #define DWMAC_MII_ADDR             0x0010
 #define DWMAC_MII_DATA             0x0014
 #define DWMAC_VERSION              0x0020
@@ -514,6 +524,7 @@
 
 #define GMAC_TEST_DESC_ADDR        0x00100000
 #define GMAC_TEST_DATA_ADDR        0x00110000
+#define GMAC_TEST_DATA2_ADDR       0x00111000
 #define GMAC_ENHANCED_DESC_STRIDE  32
 #define GMAC_TEST_TIMEOUT_S        5
 
@@ -3309,6 +3320,29 @@ static void assert_gmac_reset_state(QTestState *qts,
                     TH1520_GMAC_FEATURE_RESET);
     g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_DMA_BUS_MODE),
                     ==, 0x00020100);
+    g_assert_cmphex(qtest_readl(qts,
+                                controller->base + DWMAC_FRAME_FILTER), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_HASH_HIGH), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_HASH_LOW), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_VLAN_TAG), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(qts,
+                                controller->base + DWMAC_VLAN_HASH_TABLE), ==,
+                    0);
+    g_assert_cmphex(qtest_readl(qts,
+                                controller->base + DWMAC_MAC0_ADDR_HI), ==,
+                    0x8000ffff);
+    g_assert_cmphex(qtest_readl(qts,
+                                controller->base + DWMAC_MAC0_ADDR_LO), ==,
+                    UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, controller->base +
+                                DWMAC_MAC_ADDR_HI(31)), ==, 0x0000ffff);
+    g_assert_cmphex(qtest_readl(qts, controller->base +
+                                DWMAC_MAC_ADDR_LO(31)), ==, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, controller->base +
+                                DWMAC_MAC_ADDR_HI(32)), ==, 0);
     g_assert_cmphex(gmac_mdio_read(qts, controller->base,
                                   TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
                     MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED1000);
@@ -3352,6 +3386,33 @@ static void test_gmac_registers(void)
         g_assert_cmphex(gmac_mdio_read(qts, gmac->base,
                                       TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
                         MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+        qtest_writel(qts, gmac->base + DWMAC_FRAME_FILTER, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, gmac->base + DWMAC_FRAME_FILTER), ==,
+                        0x800107ff);
+        qtest_writel(qts, gmac->base + DWMAC_VLAN_TAG, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, gmac->base + DWMAC_VLAN_TAG), ==,
+                        0x0007ffff);
+        qtest_writel(qts, gmac->base + DWMAC_VLAN_HASH_TABLE, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, gmac->base +
+                                    DWMAC_VLAN_HASH_TABLE), ==, 0);
+        qtest_writel(qts, gmac->base + DWMAC_HASH_HIGH, 0x89abcdef);
+        qtest_writel(qts, gmac->base + DWMAC_HASH_LOW, 0x01234567);
+        g_assert_cmphex(qtest_readl(qts, gmac->base + DWMAC_HASH_HIGH), ==,
+                        0x89abcdef);
+        g_assert_cmphex(qtest_readl(qts, gmac->base + DWMAC_HASH_LOW), ==,
+                        0x01234567);
+        qtest_writel(qts, gmac->base + DWMAC_MAC0_ADDR_HI, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, gmac->base + DWMAC_MAC0_ADDR_HI), ==,
+                        0x8000ffff);
+        qtest_writel(qts, gmac->base + DWMAC_MAC_ADDR_HI(31), UINT32_MAX);
+        qtest_writel(qts, gmac->base + DWMAC_MAC_ADDR_LO(31), 0x12345678);
+        g_assert_cmphex(qtest_readl(qts, gmac->base +
+                                    DWMAC_MAC_ADDR_HI(31)), ==, 0xff00ffff);
+        g_assert_cmphex(qtest_readl(qts, gmac->base +
+                                    DWMAC_MAC_ADDR_LO(31)), ==, 0x12345678);
+        qtest_writel(qts, gmac->base + DWMAC_MAC_ADDR_HI(32), UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, gmac->base +
+                                    DWMAC_MAC_ADDR_HI(32)), ==, 0);
     }
 
     qtest_system_reset(qts);
@@ -3404,6 +3465,8 @@ static void test_gmac_interrupt(gconstpointer test_data)
     qtest_quit(qts);
 }
 
+static void wait_for_migration_complete(QTestState *qts);
+
 #ifndef _WIN32
 
 static bool gmac_wait_socket_readable(int fd)
@@ -3453,6 +3516,464 @@ static QTestState *gmac_packet_test_init(int sockets[2])
                       "-nic socket,fd=%d,model=gmac0", sockets[1]);
     close(sockets[1]);
     return qts;
+}
+
+static void gmac_send_two_packets(int fd,
+                                  const uint8_t *first, size_t first_len,
+                                  const uint8_t *second, size_t second_len)
+{
+    uint32_t first_wire_len = htonl(first_len);
+    uint32_t second_wire_len = htonl(second_len);
+    const struct iovec iov[] = {
+        { .iov_base = &first_wire_len, .iov_len = sizeof(first_wire_len) },
+        { .iov_base = (void *)first, .iov_len = first_len },
+        { .iov_base = &second_wire_len, .iov_len = sizeof(second_wire_len) },
+        { .iov_base = (void *)second, .iov_len = second_len },
+    };
+    size_t total = sizeof(first_wire_len) + first_len +
+                   sizeof(second_wire_len) + second_len;
+
+    g_assert_cmpint(iov_send(fd, iov, ARRAY_SIZE(iov), 0, total), ==, total);
+}
+
+static int gmac_wait_for_packet(QTestState *qts, uint32_t first_buffer,
+                                uint32_t second_buffer,
+                                const uint8_t *packet, size_t packet_len)
+{
+    g_autofree uint8_t *first = g_malloc(packet_len);
+    g_autofree uint8_t *second = g_malloc(packet_len);
+    gint64 deadline = g_get_monotonic_time() +
+                      GMAC_TEST_TIMEOUT_S * G_TIME_SPAN_SECOND;
+
+    do {
+        qtest_memread(qts, first_buffer, first, packet_len);
+        qtest_memread(qts, second_buffer, second, packet_len);
+        if (!memcmp(first, packet, packet_len)) {
+            return 0;
+        }
+        if (!memcmp(second, packet, packet_len)) {
+            return 1;
+        }
+        qtest_clock_step(qts, 1000);
+    } while (g_get_monotonic_time() < deadline);
+
+    return -1;
+}
+
+typedef struct GMACFilterRegWrite {
+    uint32_t offset;
+    uint32_t value;
+} GMACFilterRegWrite;
+
+typedef struct GMACFilterCase {
+    const char *name;
+    uint32_t frame_filter;
+    const uint8_t *candidate;
+    size_t candidate_len;
+    const uint8_t *barrier;
+    size_t barrier_len;
+    bool candidate_accepted;
+    uint32_t candidate_status;
+    const GMACFilterRegWrite *writes;
+    size_t write_count;
+} GMACFilterCase;
+
+static void gmac_assert_rx_frame(QTestState *qts, uint32_t desc_addr,
+                                 uint32_t buffer_addr, const uint8_t *packet,
+                                 size_t packet_len, uint32_t filter_status)
+{
+    g_autofree uint8_t *actual = g_malloc(packet_len + sizeof(uint32_t));
+    uint32_t expected_fcs = cpu_to_le32(gmac_test_crc32(packet, packet_len));
+    GMACDesc desc;
+
+    gmac_read_desc(qts, desc_addr, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_cmphex(desc.des0 & (BIT(9) | BIT(8)), ==, BIT(9) | BIT(8));
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==,
+                     packet_len + sizeof(expected_fcs));
+    g_assert_cmphex(desc.des0 & (BIT(30) | BIT(13) | BIT(10)), ==,
+                    filter_status);
+    qtest_memread(qts, buffer_addr, actual,
+                  packet_len + sizeof(expected_fcs));
+    g_assert_cmpmem(actual, packet_len, packet, packet_len);
+    g_assert_cmpmem(actual + packet_len, sizeof(expected_fcs),
+                    &expected_fcs, sizeof(expected_fcs));
+}
+
+static void gmac_run_filter_case(const GMACFilterCase *test)
+{
+    GMACDesc first = {
+        .des0 = BIT(31),
+        .des1 = BIT(31) | 2048,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    GMACDesc second = {
+        .des0 = BIT(31),
+        .des1 = 2048,
+        .des2 = GMAC_TEST_DATA2_ADDR,
+    };
+    QTestState *qts;
+    int sockets[2];
+    int barrier_slot;
+
+    g_test_message("GMAC filter case: %s", test->name);
+    qts = gmac_packet_test_init(sockets);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 8192);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &first);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &second);
+    second = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + 2 * GMAC_ENHANCED_DESC_STRIDE,
+                    &second);
+
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                  BIT(31) | 0x5634);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12000002);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_FRAME_FILTER,
+                  test->frame_filter);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(6));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(2));
+    for (size_t i = 0; i < test->write_count; i++) {
+        qtest_writel(qts, TH1520_GMAC0_BASE + test->writes[i].offset,
+                      test->writes[i].value);
+    }
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+
+    gmac_send_two_packets(sockets[0], test->candidate, test->candidate_len,
+                          test->barrier, test->barrier_len);
+    barrier_slot = gmac_wait_for_packet(qts, GMAC_TEST_DATA_ADDR,
+                                        GMAC_TEST_DATA2_ADDR, test->barrier,
+                                        test->barrier_len);
+    g_assert_cmpint(barrier_slot, ==, test->candidate_accepted ? 1 : 0);
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &first);
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                   &second);
+    if (test->candidate_accepted) {
+        gmac_assert_rx_frame(qts, GMAC_TEST_DESC_ADDR,
+                             GMAC_TEST_DATA_ADDR, test->candidate,
+                             test->candidate_len, test->candidate_status);
+        gmac_assert_rx_frame(qts,
+                             GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                             GMAC_TEST_DATA2_ADDR, test->barrier,
+                             test->barrier_len, 0);
+        g_assert_cmphex(second.des0 & BIT(31), ==, 0);
+    } else {
+        uint8_t untouched;
+
+        gmac_assert_rx_frame(qts, GMAC_TEST_DESC_ADDR,
+                             GMAC_TEST_DATA_ADDR, test->barrier,
+                             test->barrier_len, 0);
+        g_assert_cmphex(second.des0 & BIT(31), ==, BIT(31));
+        qtest_memread(qts, GMAC_TEST_DATA2_ADDR, &untouched,
+                      sizeof(untouched));
+        g_assert_cmphex(untouched, ==, 0xa5);
+    }
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_RX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR +
+                        (test->candidate_accepted ? 2 : 1) *
+                        GMAC_ENHANCED_DESC_STRIDE);
+    g_assert_cmphex(qtest_readl(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (BIT(16) | BIT(7) | BIT(6)), ==,
+                    test->candidate_accepted ? BIT(16) | BIT(6) : 0);
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+static void test_gmac_rx_filter_perfect(void)
+{
+    static const uint8_t rejected[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x57,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    static const uint8_t accepted[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x5a,
+    };
+    const GMACFilterCase test = {
+        .name = "primary-perfect-drop",
+        .frame_filter = BIT(10),
+        .candidate = rejected,
+        .candidate_len = sizeof(rejected),
+        .barrier = accepted,
+        .barrier_len = sizeof(accepted),
+    };
+
+    /* The accepted second frame proves that a drop did not consume RX DMA. */
+    gmac_run_filter_case(&test);
+}
+
+static void test_gmac_rx_filter_matrix(void)
+{
+    static const uint8_t own[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x01,
+    };
+    static const uint8_t own_barrier[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x5a,
+    };
+    static const uint8_t foreign[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x57,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x02,
+    };
+    static const uint8_t foreign2[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x58,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x03,
+    };
+    static const uint8_t broadcast[64] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x04,
+    };
+    static const uint8_t multicast[64] = {
+        0x01, 0x00, 0x5e, 0x00, 0x00, 0x01,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x05,
+    };
+    static const uint8_t additional[64] = {
+        0x02, 0x00, 0x00, 0xaa, 0xbb, 0xcc,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x06,
+    };
+    static const uint8_t source_miss[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x22,
+        0x08, 0x00, 0x45, 0x00, 0x07,
+    };
+    static const uint8_t foreign_source_miss[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x57,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x22,
+        0x08, 0x00, 0x45, 0x00, 0x08,
+    };
+    static const uint8_t control_foreign[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x57,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x88, 0x08, 0x00, 0x02, 0x09,
+    };
+    static const uint8_t control_own[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x88, 0x08, 0x00, 0x02, 0x0a,
+    };
+    static const uint8_t control_broadcast[64] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x88, 0x08, 0x00, 0x02, 0x0b,
+    };
+    static const uint8_t pause_multicast[64] = {
+        0x01, 0x80, 0xc2, 0x00, 0x00, 0x01,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x88, 0x08, 0x00, 0x01, 0x0c,
+    };
+    /* DWC GMAC manual hash examples: indexes 0x2c and 0x07. */
+    static const uint8_t hash_multicast[64] = {
+        0x1f, 0x52, 0x41, 0x9c, 0xb6, 0xaf,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x0c,
+    };
+    static const uint8_t hash_multicast_barrier[64] = {
+        0x1f, 0x52, 0x41, 0x9c, 0xb6, 0xaf,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x5c,
+    };
+    static const uint8_t hash_multicast_miss[64] = {
+        0x01, 0x00, 0x5e, 0x00, 0x00, 0x02,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x0d,
+    };
+    static const uint8_t hash_unicast[64] = {
+        0xa0, 0x0a, 0x98, 0x00, 0x00, 0x45,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x0e,
+    };
+    static const uint8_t hash_unicast_barrier[64] = {
+        0xa0, 0x0a, 0x98, 0x00, 0x00, 0x45,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x5e,
+    };
+    static const uint8_t hash_unicast_miss[64] = {
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x0f,
+    };
+    static const uint8_t vlan_match[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x81, 0x00, 0x01, 0x23, 0x08, 0x00, 0x10,
+    };
+    static const uint8_t vlan_miss[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x81, 0x00, 0x01, 0x24, 0x08, 0x00, 0x11,
+    };
+    static const uint8_t vlan_pcp[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x81, 0x00, 0xa1, 0x23, 0x08, 0x00, 0x12,
+    };
+    static const uint8_t svlan_match[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x88, 0xa8, 0x01, 0x23, 0x08, 0x00, 0x13,
+    };
+    static const uint8_t short_frame[] = { 0x02, 0x00, 0x00, 0x12, 0x34 };
+    static const GMACFilterRegWrite address1[] = {
+        { DWMAC_MAC_ADDR_HI(1), BIT(31) | 0xccbb },
+        { DWMAC_MAC_ADDR_LO(1), 0xaa000002 },
+    };
+    static const GMACFilterRegWrite address1_disabled[] = {
+        { DWMAC_MAC_ADDR_HI(1), 0xccbb },
+        { DWMAC_MAC_ADDR_LO(1), 0xaa000002 },
+    };
+    static const GMACFilterRegWrite address31[] = {
+        { DWMAC_MAC_ADDR_HI(31), BIT(31) | 0xccbb },
+        { DWMAC_MAC_ADDR_LO(31), 0xaa000002 },
+    };
+    static const GMACFilterRegWrite address1_masked[] = {
+        { DWMAC_MAC_ADDR_HI(1), BIT(31) | BIT(29) | 0xddbb },
+        { DWMAC_MAC_ADDR_LO(1), 0xaa000002 },
+    };
+    static const GMACFilterRegWrite source1[] = {
+        { DWMAC_MAC_ADDR_HI(1), BIT(31) | BIT(30) | 0x2143 },
+        { DWMAC_MAC_ADDR_LO(1), 0x65000002 },
+    };
+    static const GMACFilterRegWrite multicast_hash[] = {
+        { DWMAC_HASH_HIGH, BIT(12) },
+    };
+    static const GMACFilterRegWrite unicast_hash[] = {
+        { DWMAC_HASH_LOW, BIT(7) },
+    };
+    static const GMACFilterRegWrite vlan_tag[] = {
+        { DWMAC_VLAN_TAG, 0x0123 },
+    };
+    static const GMACFilterRegWrite vlan_tag_etv[] = {
+        { DWMAC_VLAN_TAG, BIT(16) | 0x0123 },
+    };
+    static const GMACFilterRegWrite vlan_tag_inverse[] = {
+        { DWMAC_VLAN_TAG, BIT(17) | 0x0123 },
+    };
+    static const GMACFilterRegWrite svlan_tag[] = {
+        { DWMAC_VLAN_TAG, BIT(18) | 0x0123 },
+    };
+    static const GMACFilterRegWrite pause_processing[] = {
+        { DWMAC_MAC_CONFIG, BIT(11) | BIT(2) },
+        { DWMAC_FLOW_CTRL, BIT(2) },
+    };
+    static const GMACFilterCase cases[] = {
+        { "primary-perfect-accept", 0, own, sizeof(own),
+          own_barrier, sizeof(own_barrier), true },
+        { "broadcast-default", 0, broadcast, sizeof(broadcast),
+          own_barrier, sizeof(own_barrier), true },
+        { "broadcast-dbf-absolute", BIT(31) | BIT(7) | BIT(5) | BIT(0),
+          control_broadcast, sizeof(control_broadcast), own_barrier,
+          sizeof(own_barrier), false },
+        { "multicast-perfect-miss", 0, multicast, sizeof(multicast),
+          own_barrier, sizeof(own_barrier), false },
+        { "multicast-pass-all", BIT(4), multicast, sizeof(multicast),
+          own_barrier, sizeof(own_barrier), true },
+        { "promiscuous-clears-fail", BIT(9) | BIT(0), foreign_source_miss,
+          sizeof(foreign_source_miss), own_barrier, sizeof(own_barrier), true,
+          0, source1, ARRAY_SIZE(source1) },
+        { "receive-all-preserves-fail", BIT(31) | BIT(9),
+          foreign_source_miss, sizeof(foreign_source_miss), own_barrier,
+          sizeof(own_barrier), true, BIT(30) | BIT(13), source1,
+          ARRAY_SIZE(source1) },
+        { "destination-inverse-own", BIT(3), own, sizeof(own), foreign2,
+          sizeof(foreign2), false },
+        { "destination-inverse-foreign", BIT(3), foreign, sizeof(foreign),
+          foreign2, sizeof(foreign2), true },
+        { "address1-disabled", 0, additional, sizeof(additional),
+          own_barrier, sizeof(own_barrier), false, 0, address1_disabled,
+          ARRAY_SIZE(address1_disabled) },
+        { "address1-perfect", 0, additional, sizeof(additional),
+          own_barrier, sizeof(own_barrier), true, 0, address1,
+          ARRAY_SIZE(address1) },
+        { "address31-perfect", 0, additional, sizeof(additional),
+          own_barrier, sizeof(own_barrier), true, 0, address31,
+          ARRAY_SIZE(address31) },
+        { "address-byte-mask", 0, additional, sizeof(additional),
+          own_barrier, sizeof(own_barrier), true, 0, address1_masked,
+          ARRAY_SIZE(address1_masked) },
+        { "multicast-hash-hit", BIT(2), hash_multicast,
+          sizeof(hash_multicast), hash_multicast_barrier,
+          sizeof(hash_multicast_barrier), true, 0, multicast_hash,
+          ARRAY_SIZE(multicast_hash) },
+        { "multicast-hash-miss", BIT(2), hash_multicast_miss,
+          sizeof(hash_multicast_miss), hash_multicast_barrier,
+          sizeof(hash_multicast_barrier), false, 0, multicast_hash,
+          ARRAY_SIZE(multicast_hash) },
+        { "unicast-hash-hit", BIT(1), hash_unicast, sizeof(hash_unicast),
+          hash_unicast_barrier, sizeof(hash_unicast_barrier), true, 0,
+          unicast_hash, ARRAY_SIZE(unicast_hash) },
+        { "unicast-hash-miss", BIT(1), hash_unicast_miss,
+          sizeof(hash_unicast_miss), hash_unicast_barrier,
+          sizeof(hash_unicast_barrier), false, 0, unicast_hash,
+          ARRAY_SIZE(unicast_hash) },
+        { "hash-or-perfect", BIT(10) | BIT(1), own, sizeof(own),
+          own_barrier, sizeof(own_barrier), true },
+        { "source-filter-miss", BIT(9), source_miss, sizeof(source_miss),
+          own_barrier, sizeof(own_barrier), false, 0, source1,
+          ARRAY_SIZE(source1) },
+        { "source-inverse-match", BIT(9) | BIT(8), own, sizeof(own),
+          source_miss, sizeof(source_miss), false, 0, source1,
+          ARRAY_SIZE(source1) },
+        { "source-status-without-drop", 0, source_miss,
+          sizeof(source_miss), own_barrier, sizeof(own_barrier), true,
+          BIT(13), source1, ARRAY_SIZE(source1) },
+        { "control-mode-zero", 0, control_foreign,
+          sizeof(control_foreign), own_barrier, sizeof(own_barrier), false },
+        { "control-mode-one", BIT(6), control_foreign,
+          sizeof(control_foreign), own_barrier, sizeof(own_barrier), true,
+          BIT(30) },
+        { "control-mode-one-processed-pause", BIT(6), pause_multicast,
+          sizeof(pause_multicast), own_barrier, sizeof(own_barrier), false,
+          0, pause_processing, ARRAY_SIZE(pause_processing) },
+        { "control-mode-two", BIT(7), control_foreign,
+          sizeof(control_foreign), own_barrier, sizeof(own_barrier), true,
+          BIT(30) },
+        { "control-mode-three-fail", BIT(7) | BIT(6), control_foreign,
+          sizeof(control_foreign), own_barrier, sizeof(own_barrier), false },
+        { "control-mode-three-pass", BIT(7) | BIT(6), control_own,
+          sizeof(control_own), own_barrier, sizeof(own_barrier), true },
+        { "vlan-perfect", BIT(16), vlan_match, sizeof(vlan_match),
+          own_barrier, sizeof(own_barrier), true, BIT(10), vlan_tag,
+          ARRAY_SIZE(vlan_tag) },
+        { "vlan-perfect-miss", BIT(16), vlan_miss, sizeof(vlan_miss),
+          own_barrier, sizeof(own_barrier), false, 0, vlan_tag,
+          ARRAY_SIZE(vlan_tag) },
+        { "vlan-vid-only", BIT(16), vlan_pcp, sizeof(vlan_pcp),
+          own_barrier, sizeof(own_barrier), true, BIT(10), vlan_tag_etv,
+          ARRAY_SIZE(vlan_tag_etv) },
+        { "vlan-inverse-match", BIT(16), vlan_match, sizeof(vlan_match),
+          own_barrier, sizeof(own_barrier), false, 0, vlan_tag_inverse,
+          ARRAY_SIZE(vlan_tag_inverse) },
+        { "vlan-inverse-miss", BIT(16), vlan_miss, sizeof(vlan_miss),
+          own_barrier, sizeof(own_barrier), true, BIT(10), vlan_tag_inverse,
+          ARRAY_SIZE(vlan_tag_inverse) },
+        { "svlan-perfect", BIT(16), svlan_match, sizeof(svlan_match),
+          own_barrier, sizeof(own_barrier), true, BIT(10), svlan_tag,
+          ARRAY_SIZE(svlan_tag) },
+        { "short-frame-bounds", 0, short_frame, sizeof(short_frame),
+          own_barrier, sizeof(own_barrier), false },
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+        gmac_run_filter_case(&cases[i]);
+    }
 }
 
 static void test_gmac_enhanced_descriptors(void)
@@ -3528,6 +4049,9 @@ static void test_gmac_enhanced_descriptors(void)
     gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
                     &desc);
 
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                  BIT(31) | 0x5634);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12005452);
     qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
                   0x00020100 | BIT(7));
     qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR,
@@ -3570,6 +4094,130 @@ static void test_gmac_enhanced_descriptors(void)
 
     qtest_quit(qts);
     close(sockets[0]);
+}
+
+static void test_gmac_rx_filter_migration(void)
+{
+    static const uint8_t old_mac_packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x31,
+    };
+    static const uint8_t new_mac_packet[64] = {
+        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
+        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x32,
+    };
+    GMACDesc desc = {
+        .des0 = BIT(31),
+        .des1 = BIT(31) | 2048,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int src_sockets[2];
+    int dst_sockets[2];
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-gmac-filter-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, src_sockets), ==, 0);
+    src = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-nic socket,fd=%d,model=gmac0,"
+                      "mac=52:54:00:12:34:56", src_sockets[1]);
+    close(src_sockets[1]);
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, dst_sockets), ==, 0);
+    dst = qtest_initf("-machine beaglev-ahead -bios none -incoming defer "
+                      "-nic socket,fd=%d,model=gmac0,"
+                      "mac=52:54:00:12:34:56", dst_sockets[1]);
+    close(dst_sockets[1]);
+
+    qtest_memset(src, GMAC_TEST_DATA_ADDR, 0xa5, 8192);
+    gmac_write_desc(src, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) {
+        .des0 = BIT(31),
+        .des1 = 2048,
+        .des2 = GMAC_TEST_DATA2_ADDR,
+    };
+    gmac_write_desc(src, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(src,
+                    GMAC_TEST_DESC_ADDR + 2 * GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                  BIT(31) | 0x5634);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12000002);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC_ADDR_HI(31),
+                  BIT(31) | 0x6655);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC_ADDR_LO(31),
+                  0x44332211);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_HASH_HIGH, 0x12345678);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_HASH_LOW, 0x89abcdef);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_VLAN_TAG,
+                  BIT(16) | 0x0123);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_FRAME_FILTER, BIT(10));
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(6));
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(2));
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_FRAME_FILTER), ==,
+                    BIT(10));
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE + DWMAC_HASH_HIGH), ==,
+                    0x12345678);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE + DWMAC_HASH_LOW), ==,
+                    0x89abcdef);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE + DWMAC_VLAN_TAG), ==,
+                    BIT(16) | 0x0123);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE +
+                                DWMAC_MAC_ADDR_HI(31)), ==,
+                    BIT(31) | 0x6655);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE +
+                                DWMAC_MAC_ADDR_LO(31)), ==, 0x44332211);
+
+    gmac_send_two_packets(dst_sockets[0], old_mac_packet,
+                          sizeof(old_mac_packet), new_mac_packet,
+                          sizeof(new_mac_packet));
+    g_assert_cmpint(gmac_wait_for_packet(dst, GMAC_TEST_DATA_ADDR,
+                                         GMAC_TEST_DATA2_ADDR,
+                                         new_mac_packet,
+                                         sizeof(new_mac_packet)), ==, 0);
+    gmac_assert_rx_frame(dst, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         new_mac_packet, sizeof(new_mac_packet), 0);
+    gmac_read_desc(dst, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                   &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, BIT(31));
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_RX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (BIT(16) | BIT(7) | BIT(6)), ==, 0);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    close(dst_sockets[0]);
+    close(src_sockets[0]);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 #endif /* _WIN32 */
@@ -8418,6 +9066,12 @@ int main(int argc, char **argv)
                                 test_gmac_interrupt);
         }
 #ifndef _WIN32
+        qtest_add_func("/beaglev-ahead/gmac/rx-filter-perfect",
+                       test_gmac_rx_filter_perfect);
+        qtest_add_func("/beaglev-ahead/gmac/rx-filter-matrix",
+                       test_gmac_rx_filter_matrix);
+        qtest_add_func("/beaglev-ahead/gmac/rx-filter-migration",
+                       test_gmac_rx_filter_migration);
         qtest_add_func("/beaglev-ahead/gmac/enhanced-descriptors",
                        test_gmac_enhanced_descriptors);
 #endif

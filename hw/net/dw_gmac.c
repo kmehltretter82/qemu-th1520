@@ -68,6 +68,7 @@ REG32(DW_GMAC_MAC2_ADDR_HI, 0x50)
 REG32(DW_GMAC_MAC2_ADDR_LO, 0x54)
 REG32(DW_GMAC_MAC3_ADDR_HI, 0x58)
 REG32(DW_GMAC_MAC3_ADDR_LO, 0x5c)
+REG32(DW_GMAC_VLAN_HASH_TABLE, 0x588)
 REG32(DW_GMAC_RGMII_STATUS, 0xd8)
 REG32(DW_GMAC_WATCHDOG, 0xdc)
 REG32(DW_GMAC_PTP_TCR, 0x700)
@@ -92,6 +93,330 @@ REG32(DW_GMAC_PTP_TTSR, 0x71c)
 #define DWMAC_DMA_BUS_MODE_SWR               BIT(0)
 #define DWMAC_DMA_BUS_MODE_ATDS              BIT(7)
 #define DWMAC_DMA_HW_FEATURE_ENH_DESC         BIT(24)
+
+#define DW_GMAC_MAC_ADDR0_BASE                0x40
+#define DW_GMAC_MAC_ADDR16_BASE               0x800
+#define DW_GMAC_MAC_ADDR128_END               0xb80
+#define DW_GMAC_MAC_ADDR_STRIDE               8
+#define DW_GMAC_ARCH_MAC_ADDRS                 128
+#define DW_GMAC_MAC_ADDR_HIGH_MASK             0xff00ffffu
+#define DW_GMAC_MAC_ADDR_AE                    BIT(31)
+#define DW_GMAC_MAC_ADDR_SA                    BIT(30)
+#define DW_GMAC_MAC_ADDR_MBC(word)             extract32((word), 24, 6)
+#define DW_GMAC_FRAME_FILTER_MASK               0x800107ffu
+#define DW_GMAC_FRAME_FILTER_HASH_MASK \
+    (DW_GMAC_FRAME_FILTER_HPF_MASK | DW_GMAC_FRAME_FILTER_HMC_MASK | \
+     DW_GMAC_FRAME_FILTER_HUC_MASK)
+#define DW_GMAC_VLAN_TAG_MASK                   0x0007ffffu
+
+#define DW_GMAC_MAC_CONFIG_DM                  BIT(11)
+#define DW_GMAC_FLOW_CTRL_UP                   BIT(3)
+#define DW_GMAC_FLOW_CTRL_RFE                  BIT(2)
+
+#define DW_GMAC_CONTROL_ETHERTYPE              0x8808
+#define DW_GMAC_PAUSE_OPCODE                   0x0001
+
+typedef struct DWGMACRxFilterResult {
+    bool accept;
+    bool da_fail;
+    bool sa_fail;
+    bool vlan_tag;
+} DWGMACRxFilterResult;
+
+static hwaddr gmac_mac_addr_reg(unsigned int index, bool high)
+{
+    hwaddr base;
+
+    g_assert(index < DW_GMAC_ARCH_MAC_ADDRS);
+    if (index < 16) {
+        base = DW_GMAC_MAC_ADDR0_BASE + index * DW_GMAC_MAC_ADDR_STRIDE;
+    } else {
+        base = DW_GMAC_MAC_ADDR16_BASE +
+               (index - 16) * DW_GMAC_MAC_ADDR_STRIDE;
+    }
+    return base + (high ? 0 : sizeof(uint32_t));
+}
+
+static bool gmac_decode_mac_addr_reg(hwaddr offset, unsigned int *index,
+                                     bool *high)
+{
+    hwaddr relative;
+
+    if (offset >= DW_GMAC_MAC_ADDR0_BASE &&
+        offset < DW_GMAC_MAC_ADDR0_BASE + 16 * DW_GMAC_MAC_ADDR_STRIDE) {
+        relative = offset - DW_GMAC_MAC_ADDR0_BASE;
+        *index = relative / DW_GMAC_MAC_ADDR_STRIDE;
+    } else if (offset >= DW_GMAC_MAC_ADDR16_BASE &&
+               offset < DW_GMAC_MAC_ADDR128_END) {
+        relative = offset - DW_GMAC_MAC_ADDR16_BASE;
+        *index = 16 + relative / DW_GMAC_MAC_ADDR_STRIDE;
+    } else {
+        return false;
+    }
+
+    *high = !(relative & sizeof(uint32_t));
+    return true;
+}
+
+static void gmac_sync_conf_mac(DWGMACState *gmac)
+{
+    uint32_t high = gmac->regs[
+        gmac_mac_addr_reg(0, true) / sizeof(uint32_t)];
+    uint32_t low = gmac->regs[
+        gmac_mac_addr_reg(0, false) / sizeof(uint32_t)];
+
+    gmac->conf.macaddr.a[0] = low;
+    gmac->conf.macaddr.a[1] = low >> 8;
+    gmac->conf.macaddr.a[2] = low >> 16;
+    gmac->conf.macaddr.a[3] = low >> 24;
+    gmac->conf.macaddr.a[4] = high;
+    gmac->conf.macaddr.a[5] = high >> 8;
+}
+
+static void gmac_sanitize_filter_regs(DWGMACState *gmac)
+{
+    uint32_t frame_filter_mask = DW_GMAC_FRAME_FILTER_MASK;
+
+    if (!gmac->hash_bins) {
+        frame_filter_mask &= ~DW_GMAC_FRAME_FILTER_HASH_MASK;
+        gmac->regs[R_DW_GMAC_HASH_HIGH] = 0;
+        gmac->regs[R_DW_GMAC_HASH_LOW] = 0;
+    }
+    gmac->regs[R_DW_GMAC_FRAME_FILTER] &= frame_filter_mask;
+    gmac->regs[R_DW_GMAC_VLAN_FLAG] &= DW_GMAC_VLAN_TAG_MASK;
+    gmac->regs[R_DW_GMAC_VLAN_HASH_TABLE] = 0;
+
+    gmac->regs[gmac_mac_addr_reg(0, true) / 4] =
+        DW_GMAC_MAC_ADDR_AE |
+        (gmac->regs[gmac_mac_addr_reg(0, true) / 4] & 0xffff);
+    for (unsigned int index = 1; index < gmac->num_mac_addrs; index++) {
+        gmac->regs[gmac_mac_addr_reg(index, true) / 4] &=
+            DW_GMAC_MAC_ADDR_HIGH_MASK;
+    }
+    for (unsigned int index = gmac->num_mac_addrs;
+         index < DW_GMAC_ARCH_MAC_ADDRS; index++) {
+        gmac->regs[gmac_mac_addr_reg(index, true) / 4] = 0;
+        gmac->regs[gmac_mac_addr_reg(index, false) / 4] = 0;
+    }
+}
+
+static bool gmac_mac_addr_matches(DWGMACState *gmac, unsigned int index,
+                                  const uint8_t *addr)
+{
+    uint32_t high = gmac->regs[gmac_mac_addr_reg(index, true) / 4];
+    uint32_t low = gmac->regs[gmac_mac_addr_reg(index, false) / 4];
+    uint8_t masked = index ? DW_GMAC_MAC_ADDR_MBC(high) : 0;
+
+    for (unsigned int byte = 0; byte < ETH_ALEN; byte++) {
+        uint8_t expected;
+
+        if (masked & BIT(byte)) {
+            continue;
+        }
+        expected = byte < 4 ? extract32(low, byte * 8, 8) :
+                              extract32(high, (byte - 4) * 8, 8);
+        if (addr[byte] != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool gmac_perfect_addr_match(DWGMACState *gmac, const uint8_t *addr,
+                                    bool source, bool *filter_present)
+{
+    *filter_present = !source;
+
+    for (unsigned int index = 0; index < gmac->num_mac_addrs; index++) {
+        uint32_t high = gmac->regs[gmac_mac_addr_reg(index, true) / 4];
+
+        if (index) {
+            if (!(high & DW_GMAC_MAC_ADDR_AE) ||
+                !!(high & DW_GMAC_MAC_ADDR_SA) != source) {
+                continue;
+            }
+            *filter_present = true;
+        } else if (source) {
+            continue;
+        }
+
+        if (gmac_mac_addr_matches(gmac, index, addr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool gmac_hash_addr_match(DWGMACState *gmac, const uint8_t *addr)
+{
+    unsigned int index = (~net_crc32(addr, ETH_ALEN)) >> 26;
+    uint32_t table = gmac->regs[index < 32 ? R_DW_GMAC_HASH_LOW :
+                                             R_DW_GMAC_HASH_HIGH];
+
+    return table & BIT(index & 31);
+}
+
+static bool gmac_vlan_filter(DWGMACState *gmac, const uint8_t *buf,
+                             size_t len, bool *tagged)
+{
+    uint32_t reg = gmac->regs[R_DW_GMAC_VLAN_FLAG];
+    uint16_t protocol;
+    uint16_t frame_tag;
+    uint16_t wanted;
+    bool match;
+
+    *tagged = false;
+    if (len < ETH_HLEN + sizeof(uint16_t)) {
+        return true;
+    }
+
+    protocol = lduw_be_p(buf + 2 * ETH_ALEN);
+    if (protocol != ETH_P_VLAN &&
+        (protocol != ETH_P_DVLAN || !(reg & DW_GMAC_VLAN_TAG_ESVL_MASK))) {
+        return true;
+    }
+
+    frame_tag = lduw_be_p(buf + ETH_HLEN);
+    wanted = DW_GMAC_VLAN_TAG_VL_MASK(reg);
+    if (reg & DW_GMAC_VLAN_TAG_ETV_MASK) {
+        frame_tag &= VLAN_VID_MASK;
+        wanted &= VLAN_VID_MASK;
+    }
+
+    if (!wanted) {
+        match = true;
+    } else {
+        match = frame_tag == wanted;
+    }
+
+    if (reg & DW_GMAC_VLAN_TAG_VTIM_MASK) {
+        match = !match;
+    }
+    *tagged = match;
+    return !(gmac->regs[R_DW_GMAC_FRAME_FILTER] &
+             DW_GMAC_FRAME_FILTER_VTFE_MASK) || match;
+}
+
+static bool gmac_pause_is_processed(DWGMACState *gmac, const uint8_t *buf,
+                                    size_t len)
+{
+    static const uint8_t pause_multicast[ETH_ALEN] = {
+        0x01, 0x80, 0xc2, 0x00, 0x00, 0x01,
+    };
+    bool own_address;
+
+    if (len < ETH_HLEN + sizeof(uint16_t) ||
+        lduw_be_p(buf + ETH_HLEN) != DW_GMAC_PAUSE_OPCODE ||
+        !(gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_DM) ||
+        !(gmac->regs[R_DW_GMAC_FLOW_CTRL] & DW_GMAC_FLOW_CTRL_RFE)) {
+        return false;
+    }
+
+    own_address = gmac_mac_addr_matches(gmac, 0, buf);
+    return !memcmp(buf, pause_multicast, ETH_ALEN) ||
+           ((gmac->regs[R_DW_GMAC_FLOW_CTRL] & DW_GMAC_FLOW_CTRL_UP) &&
+            own_address);
+}
+
+static DWGMACRxFilterResult gmac_filter_packet(DWGMACState *gmac,
+                                                const uint8_t *buf,
+                                                size_t len)
+{
+    uint32_t filter = gmac->regs[R_DW_GMAC_FRAME_FILTER] &
+        DW_GMAC_FRAME_FILTER_MASK &
+        (gmac->hash_bins ? UINT32_MAX : ~DW_GMAC_FRAME_FILTER_HASH_MASK);
+    DWGMACRxFilterResult result = { 0 };
+    bool da_pass = false;
+    bool sa_pass = true;
+    bool da_perfect = false;
+    bool da_filter_present;
+    bool sa_match = false;
+    bool sa_filter_present = false;
+    bool address_pass;
+    bool control = len >= ETH_HLEN &&
+                   lduw_be_p(buf + 2 * ETH_ALEN) ==
+                   DW_GMAC_CONTROL_ETHERTYPE;
+
+    if (filter & DW_GMAC_FRAME_FILTER_PR_MASK) {
+        da_pass = true;
+    } else if (len >= ETH_ALEN) {
+        if (is_broadcast_ether_addr(buf)) {
+            da_pass = !(filter & DW_GMAC_FRAME_FILTER_DBF_MASK);
+        } else if (is_multicast_ether_addr(buf) &&
+                   (filter & DW_GMAC_FRAME_FILTER_PM_MASK)) {
+            da_pass = true;
+        } else {
+            bool hash_enabled = filter &
+                (is_multicast_ether_addr(buf) ?
+                 DW_GMAC_FRAME_FILTER_HMC_MASK :
+                 DW_GMAC_FRAME_FILTER_HUC_MASK);
+
+            da_perfect = gmac_perfect_addr_match(gmac, buf, false,
+                                                  &da_filter_present);
+            if (hash_enabled) {
+                da_pass = gmac_hash_addr_match(gmac, buf);
+                if (filter & DW_GMAC_FRAME_FILTER_HPF_MASK) {
+                    da_pass |= da_perfect;
+                }
+            } else {
+                da_pass = da_perfect;
+            }
+            if (filter & DW_GMAC_FRAME_FILTER_DAIF_MASK) {
+                da_pass = !da_pass;
+            }
+        }
+    }
+
+    if (!(filter & DW_GMAC_FRAME_FILTER_PR_MASK) && len >= 2 * ETH_ALEN) {
+        sa_match = gmac_perfect_addr_match(gmac, buf + ETH_ALEN, true,
+                                           &sa_filter_present);
+        if (sa_filter_present || (filter & DW_GMAC_FRAME_FILTER_SAF_MASK)) {
+            sa_pass = (filter & DW_GMAC_FRAME_FILTER_SAIF_MASK) ?
+                      !sa_match : sa_match;
+        }
+    } else if (!(filter & DW_GMAC_FRAME_FILTER_PR_MASK) &&
+               (filter & DW_GMAC_FRAME_FILTER_SAF_MASK)) {
+        sa_pass = !!(filter & DW_GMAC_FRAME_FILTER_SAIF_MASK);
+    }
+
+    result.da_fail = !da_pass;
+    result.sa_fail = !sa_pass;
+    address_pass = da_pass &&
+                   (!(filter & DW_GMAC_FRAME_FILTER_SAF_MASK) || sa_pass);
+    if (filter & DW_GMAC_FRAME_FILTER_REC_ALL_MASK) {
+        address_pass = true;
+    }
+
+    if (control) {
+        switch (DW_GMAC_FRAME_FILTER_PCF_MASK(filter)) {
+        case 0:
+            result.accept = false;
+            break;
+        case 1:
+            result.accept = !gmac_pause_is_processed(gmac, buf, len);
+            break;
+        case 2:
+            result.accept = true;
+            break;
+        case 3:
+            result.accept = address_pass;
+            break;
+        default:
+            g_assert_not_reached();
+        }
+    } else {
+        result.accept = address_pass;
+    }
+
+    if (!gmac_vlan_filter(gmac, buf, len, &result.vlan_tag)) {
+        result.accept = false;
+    }
+    if (len >= ETH_ALEN && is_broadcast_ether_addr(buf) &&
+        (filter & DW_GMAC_FRAME_FILTER_DBF_MASK)) {
+        result.accept = false;
+    }
+    return result;
+}
 
 static const uint32_t dw_gmac_cold_reset_values[DW_GMAC_NR_REGS] = {
     /* Reduce version to 3.2 so that the kernel can enable interrupt. */
@@ -231,6 +556,11 @@ static void dw_gmac_soft_reset(DWGMACState *gmac)
 {
     memcpy(gmac->regs, dw_gmac_cold_reset_values,
            DW_GMAC_NR_REGS * sizeof(uint32_t));
+    for (unsigned int index = 1; index < gmac->num_mac_addrs; index++) {
+        gmac->regs[gmac_mac_addr_reg(index, true) / 4] = 0x0000ffff;
+        gmac->regs[gmac_mac_addr_reg(index, false) / 4] = 0xffffffff;
+    }
+    gmac_sanitize_filter_regs(gmac);
     gmac->regs[R_DW_GMAC_VERSION] = gmac->version;
     gmac->regs[R_DWMAC_DMA_HW_FEATURE] = gmac->hw_feature;
     /* Clear reset bits */
@@ -456,6 +786,7 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
     uint32_t transferred = 0;
     uint32_t descriptors = 0;
     bool first_desc = true;
+    DWGMACRxFilterResult filter_result = { .accept = true };
 
     trace_dw_gmac_packet_receive(DEVICE(gmac)->canonical_path, len);
     if (!gmac_can_receive(nc)) {
@@ -465,6 +796,14 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
 
     if (len > UINT32_MAX - ETH_FCS_LEN) {
         return -1;
+    }
+
+    if (gmac->rx_filtering) {
+        filter_result = gmac_filter_packet(gmac, buf, len);
+        if (!filter_result.accept) {
+            /* The MAC consumed and discarded the frame; do not retry it. */
+            return len;
+        }
     }
 
     /* QEMU network backends omit the FCS, but DWMAC DMA includes it. */
@@ -482,11 +821,6 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
     desc_addr = DWMAC_DMA_HOST_RX_DESC_MASK(
         gmac->regs[R_DWMAC_DMA_HOST_RX_DESC]);
 
-    /*
-     * TODO: implement the programmable destination/source/hash/VLAN filters.
-     * Until then every packet offered by the selected network backend reaches
-     * the receive descriptor ring.
-     */
     while (left_frame) {
         uint32_t rx_buf_len;
         uint32_t rx_buf_addr;
@@ -566,6 +900,15 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
 
         if (eof_transferred) {
             rx_desc.rdes0 |= RX_DESC_RDES0_LAST_DESC_MASK;
+            if (filter_result.da_fail) {
+                rx_desc.rdes0 |= RX_DESC_RDES0_DEST_ADDR_FILT_FAIL;
+            }
+            if (filter_result.sa_fail) {
+                rx_desc.rdes0 |= RX_DESC_RDES0_SRC_ADDR_FILT_FAIL_MASK;
+            }
+            if (filter_result.vlan_tag) {
+                rx_desc.rdes0 |= RX_DESC_RDES0_VLAN_TAG_MASK;
+            }
             rx_desc.rdes0 = deposit32(rx_desc.rdes0,
                                       RX_DESC_RDES0_FRAME_LEN_SHIFT, 14,
                                       MIN(transferred, 0x3fff));
@@ -850,12 +1193,25 @@ static uint64_t dw_gmac_read(void *opaque, hwaddr offset, unsigned size)
 {
     DWGMACState *gmac = opaque;
     uint32_t v = 0;
+    unsigned int mac_index;
+    bool mac_high;
 
     if (offset >= DW_GMAC_REG_SIZE) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "%s: invalid register offset: 0x%04" HWADDR_PRIx"\n",
                       DEVICE(gmac)->canonical_path, offset);
         return v;
+    }
+
+    if (gmac_decode_mac_addr_reg(offset, &mac_index, &mac_high)) {
+        if (mac_index < gmac->num_mac_addrs) {
+            v = gmac->regs[offset / sizeof(uint32_t)];
+            if (mac_high) {
+                v = mac_index ? v & DW_GMAC_MAC_ADDR_HIGH_MASK :
+                    DW_GMAC_MAC_ADDR_AE | (v & 0xffff);
+            }
+        }
+        goto done;
     }
 
     switch (offset) {
@@ -867,10 +1223,31 @@ static uint64_t dw_gmac_read(void *opaque, hwaddr offset, unsigned size)
                       "\n", DEVICE(gmac)->canonical_path, offset);
         break;
 
+    case A_DW_GMAC_FRAME_FILTER:
+        v = gmac->regs[offset / sizeof(uint32_t)] &
+            DW_GMAC_FRAME_FILTER_MASK &
+            (gmac->hash_bins ? UINT32_MAX :
+             ~DW_GMAC_FRAME_FILTER_HASH_MASK);
+        break;
+
+    case A_DW_GMAC_HASH_HIGH:
+    case A_DW_GMAC_HASH_LOW:
+        v = gmac->hash_bins ?
+            gmac->regs[offset / sizeof(uint32_t)] : 0;
+        break;
+
+    case A_DW_GMAC_VLAN_FLAG:
+        v = gmac->regs[offset / sizeof(uint32_t)] & DW_GMAC_VLAN_TAG_MASK;
+        break;
+
+    case A_DW_GMAC_VLAN_HASH_TABLE:
+        break;
+
     default:
         v = gmac->regs[offset / sizeof(uint32_t)];
     }
 
+done:
     trace_dw_gmac_reg_read(DEVICE(gmac)->canonical_path, offset, v);
     return v;
 }
@@ -879,6 +1256,8 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
                               uint64_t v, unsigned size)
 {
     DWGMACState *gmac = opaque;
+    unsigned int mac_index;
+    bool mac_high;
 
     trace_dw_gmac_reg_write(DEVICE(gmac)->canonical_path, offset, v);
 
@@ -886,6 +1265,24 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
         qemu_log_mask(LOG_GUEST_ERROR,
                       "%s: invalid register offset: 0x%04" HWADDR_PRIx"\n",
                       DEVICE(gmac)->canonical_path, offset);
+        return;
+    }
+
+    if (gmac_decode_mac_addr_reg(offset, &mac_index, &mac_high)) {
+        if (mac_index < gmac->num_mac_addrs) {
+            if (mac_high) {
+                gmac->regs[offset / sizeof(uint32_t)] = mac_index ?
+                    (v & DW_GMAC_MAC_ADDR_HIGH_MASK) :
+                    (DW_GMAC_MAC_ADDR_AE | (v & 0xffff));
+            } else {
+                gmac->regs[offset / sizeof(uint32_t)] = v;
+            }
+
+            if (!mac_index) {
+                gmac_sync_conf_mac(gmac);
+            }
+        }
+        gmac_update_irq(gmac);
         return;
     }
 
@@ -912,34 +1309,28 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
         gmac->regs[offset / sizeof(uint32_t)] = v;
         break;
 
+    case A_DW_GMAC_FRAME_FILTER:
+        gmac->regs[offset / sizeof(uint32_t)] =
+            v & DW_GMAC_FRAME_FILTER_MASK &
+            (gmac->hash_bins ? UINT32_MAX :
+             ~DW_GMAC_FRAME_FILTER_HASH_MASK);
+        break;
+
+    case A_DW_GMAC_HASH_HIGH:
+    case A_DW_GMAC_HASH_LOW:
+        gmac->regs[offset / sizeof(uint32_t)] = gmac->hash_bins ? v : 0;
+        break;
+
     case A_DW_GMAC_MII_ADDR:
         dw_gmac_mdio_access(gmac, v);
         break;
 
-    case A_DW_GMAC_MAC0_ADDR_HI:
-        gmac->regs[offset / sizeof(uint32_t)] = v;
-        gmac->conf.macaddr.a[5] = v >> 8;
-        gmac->conf.macaddr.a[4] = v >> 0;
+    case A_DW_GMAC_VLAN_FLAG:
+        gmac->regs[offset / sizeof(uint32_t)] = v & DW_GMAC_VLAN_TAG_MASK;
         break;
 
-    case A_DW_GMAC_MAC0_ADDR_LO:
-        gmac->regs[offset / sizeof(uint32_t)] = v;
-        gmac->conf.macaddr.a[3] = v >> 24;
-        gmac->conf.macaddr.a[2] = v >> 16;
-        gmac->conf.macaddr.a[1] = v >> 8;
-        gmac->conf.macaddr.a[0] = v >> 0;
-        break;
-
-    case A_DW_GMAC_MAC1_ADDR_HI:
-    case A_DW_GMAC_MAC1_ADDR_LO:
-    case A_DW_GMAC_MAC2_ADDR_HI:
-    case A_DW_GMAC_MAC2_ADDR_LO:
-    case A_DW_GMAC_MAC3_ADDR_HI:
-    case A_DW_GMAC_MAC3_ADDR_LO:
-        gmac->regs[offset / sizeof(uint32_t)] = v;
-        qemu_log_mask(LOG_UNIMP,
-                      "%s: Only MAC Address 0 is supported. This request "
-                      "is ignored.\n", DEVICE(gmac)->canonical_path);
+    case A_DW_GMAC_VLAN_HASH_TABLE:
+        gmac->regs[offset / sizeof(uint32_t)] = 0;
         break;
 
     case A_DWMAC_DMA_BUS_MODE:
@@ -1051,6 +1442,16 @@ static void dw_gmac_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "phy-addr must be below %u", DW_GMAC_MAX_PHYS);
         return;
     }
+    if (!gmac->num_mac_addrs ||
+        gmac->num_mac_addrs > DW_GMAC_MAX_MAC_ADDRS) {
+        error_setg(errp, "num-mac-addresses must be between 1 and %u",
+                   DW_GMAC_MAX_MAC_ADDRS);
+        return;
+    }
+    if (gmac->hash_bins != 0 && gmac->hash_bins != 64) {
+        error_setg(errp, "hash-bins must be either 0 or 64");
+        return;
+    }
 
     memory_region_init_io(&gmac->iomem, OBJECT(gmac), &dw_gmac_ops, gmac,
                           object_get_typename(OBJECT(dev)), 8 * KiB);
@@ -1082,6 +1483,7 @@ static int dw_gmac_post_load(void *opaque, int version_id)
 {
     DWGMACState *gmac = opaque;
 
+    gmac_sync_conf_mac(gmac);
     gmac_update_irq(gmac);
     return 0;
 }
@@ -1113,6 +1515,10 @@ static const Property dw_gmac_properties[] = {
     DEFINE_NIC_PROPERTIES(DWGMACState, conf),
     DEFINE_PROP_UINT32("version", DWGMACState, version, 0x1032),
     DEFINE_PROP_UINT32("hw-feature", DWGMACState, hw_feature, 0x100d4f37),
+    /* Preserve legacy users' accept-all behavior unless explicitly enabled. */
+    DEFINE_PROP_BOOL("rx-filtering", DWGMACState, rx_filtering, false),
+    DEFINE_PROP_UINT16("hash-bins", DWGMACState, hash_bins, 64),
+    DEFINE_PROP_UINT8("num-mac-addresses", DWGMACState, num_mac_addrs, 4),
     DEFINE_PROP_UINT8("phy-addr", DWGMACState, phy_addr, 0),
     DEFINE_PROP_UINT16("phy-id1", DWGMACState, phy_id1, 0x0362),
     DEFINE_PROP_UINT16("phy-id2", DWGMACState, phy_id2, 0x5e6a),

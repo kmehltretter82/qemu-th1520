@@ -20,6 +20,7 @@
 
 #define DW_GMAC_MAX_PHYS 32
 #define DW_GMAC_MAX_PHY_REGS 32
+#define DW_GMAC_MAX_MAC_ADDRS 32
 
 struct DWGMACRxDesc {
     uint32_t rdes0;
@@ -160,6 +161,9 @@ typedef struct DWGMACState {
 
     uint32_t version;
     uint32_t hw_feature;
+    bool rx_filtering;
+    uint16_t hash_bins;
+    uint8_t num_mac_addrs;
     uint8_t phy_addr;
     uint16_t phy_id1;
     uint16_t phy_id2;
@@ -321,6 +325,8 @@ typedef DWGMACState NPCMGMACState;
 
 /* Frame Receive All */
 #define DW_GMAC_FRAME_FILTER_REC_ALL_MASK BIT(31)
+/* VLAN Tag Filter Enable */
+#define DW_GMAC_FRAME_FILTER_VTFE_MASK BIT(16)
 /* Frame HPF Filter*/
 #define DW_GMAC_FRAME_FILTER_HPF_MASK BIT(10)
 /* Frame SAF Filter*/
@@ -341,5 +347,11 @@ typedef DWGMACState NPCMGMACState;
 #define DW_GMAC_FRAME_FILTER_HUC_MASK BIT(1)
 /* Frame PR Filter*/
 #define DW_GMAC_FRAME_FILTER_PR_MASK BIT(0)
+
+/* VLAN Tag register */
+#define DW_GMAC_VLAN_TAG_ESVL_MASK BIT(18)
+#define DW_GMAC_VLAN_TAG_VTIM_MASK BIT(17)
+#define DW_GMAC_VLAN_TAG_ETV_MASK BIT(16)
+#define DW_GMAC_VLAN_TAG_VL_MASK(word) extract32((word), 0, 16)
 
 #endif /* DW_GMAC_H */
