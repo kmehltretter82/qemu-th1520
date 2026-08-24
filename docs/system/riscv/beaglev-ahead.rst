@@ -57,6 +57,11 @@ The machine currently provides:
   IDs 72 through 75 and level-high PLIC source 28.  Only the C910-visible
   local-side register contract is modeled; no remote CPU or firmware endpoint
   is attached;
+* one MR75203 PVT controller in four apertures beginning at
+  ``0xfffff4e000``.  Its TH1520 synthesis has two temperature sensors, 11
+  process detectors and one 16-channel voltage monitor.  The Linux SDIF
+  programming and sample paths, deterministic QOM environment inputs, reset
+  and migration are modeled;
 * six DesignWare APB GPIO controllers at ``0xffec005000``, ``0xffec006000``,
   ``0xffe7f34000``, ``0xffe7f38000``, ``0xfffff52000``, and
   ``0xfffff41000``.  Their 157 Linux-described GPIO lines support input,
@@ -82,8 +87,8 @@ The machine currently provides:
   descriptor writeback, errors, interrupt aggregation, reset and migration.
 
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
-SPI0, PWM, APB timer, GPIO, pinctrl, storage, memory, and cache topology bindings as
-upstream Linux's TH1520 device tree, augmented with the
+SPI0, PWM, APB timer, PVT, GPIO, pinctrl, storage, memory, and cache topology
+bindings as upstream Linux's TH1520 device tree, augmented with the
 schematic-established board EEPROM.  It advertises ``xtheadvector`` and
 ``thead,vlenb = <16>`` for every C910 hart.
 
@@ -322,6 +327,37 @@ semantics remain unmodeled.  The generated mailbox node therefore describes a
 bounded CPU-visible transport, not a working AON or auxiliary-processor
 service.
 
+The MR75203 PVT controller matches the four-resource ``moortec,mr75203`` node
+in pinned upstream Linux.  Its common, temperature, process and voltage
+apertures are at ``0xfffff4e000``, ``0xfffff4e080``, ``0xfffff4e180`` and
+``0xfffff4e800``.  QEMU reports the TH1520 component and synthesis identity,
+uses the DT calibration coefficients and implements the SDIF command sequence
+used by Linux.  A pinned kernel binds the generated node and reads both
+temperature sensors and all 16 voltage-monitor channels.
+
+The environment presented to the guest can be changed at runtime with monitor
+``qom-set`` commands.  Temperatures use milli-degrees Celsius; voltages use
+millivolts; process samples are unscaled 16-bit values.  The defaults are 25 C,
+800 mV and zero process samples.
+
+.. code-block:: none
+
+   (qemu) qom-set /machine/soc/pvt temperature[0] 42000
+   (qemu) qom-set /machine/soc/pvt voltage[3] 900
+   (qemu) qom-set /machine/soc/pvt process-sample[0] 1234
+
+Valid indices are ``temperature[0..1]``, ``voltage[0..15]`` and
+``process-sample[0..10]``.  Environment inputs deliberately survive a guest
+system reset and migrate with the VM, while guest-programmed PVT registers
+reset normally.
+
+This is a deterministic software-facing sensor model, not an analog or thermal
+simulation.  Conversions configured for continuous operation become ready
+without a modeled delay.  Alarm comparators and status/masks, the controller
+timer, conversion latency, DONE clearing/rearming, interrupt aggregation and
+the physical rail names are not modeled.  The mainline node has no interrupt
+property, so QEMU does not invent a PLIC route.
+
 The six GPIO controllers use a reusable one-port DesignWare APB model.  The
 model implements software data and direction, external pin sampling, combined
 edge/level interrupt generation, polarity, enable/mask, edge EOI, synchronous
@@ -398,7 +434,9 @@ the full and dependency-minimal QEMU builds.  OpenSBI passes the C910 identity
 to S-mode, Linux activates the T-Head noncoherent cache-maintenance path,
 brings up four harts, uses earlycon, and binds the DesignWare UART as
 ``ttyS0``.  A variant with ``CONFIG_EEPROM_AT24=y`` also binds I2C0 and reads
-all 4096 bytes of the synthetic erased board EEPROM.  With no block device
+all 4096 bytes of the synthetic erased board EEPROM.  A separate variant with
+``CONFIG_SENSORS_MR75203=y`` binds the PVT controller and reads two temperature
+and 16 voltage hwmon channels.  With no block device
 attached, the expected endpoint is a
 missing-root-filesystem panic; this is a bring-up test, not a claim that a
 production image is supported.
@@ -411,13 +449,16 @@ the silicon reset sequence.
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
-APB timer components, TH1520 mailbox state, all six GPIO controllers, all
-three pad controllers, storage and GMAC state in one stream.  Focused migration
+APB timer components, TH1520 mailbox and MR75203 PVT state, all six GPIO
+controllers, all three pad controllers, storage and GMAC state in one stream.
+Focused migration
 tests additionally preserve an in-flight I2C read and EEPROM address pointer,
 a running APB timer with a latched interrupt, a running TH1520 PWM phase with a
 pending update, a mailbox event and remote-window data, plus completed
-AXI-DMAC data/register/interrupt state.  Together with the focused device
-tests, the complete 73-test board gate runs
+AXI-DMAC data/register/interrupt state.  The PVT migration test preserves
+guest registers, sample counters, temperature/voltage inputs and their
+resulting conversions.  Together with the focused device tests, the complete
+75-test board gate runs
 in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
@@ -426,7 +467,8 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-QSPI/XIP, board SPI peripherals and timer PWM outputs, RTC/watchdog, USB,
+QSPI/XIP, board SPI peripherals and timer PWM outputs, PVT alarm/timer/IRQ and
+analog timing fidelity, RTC/watchdog, USB,
 PCIe, display, audio, camera, video codecs, GPU, NPU, the C906 and E902
 auxiliary cores, DSPs, security blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.

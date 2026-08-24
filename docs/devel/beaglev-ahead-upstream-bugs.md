@@ -21,6 +21,10 @@ The current conservative tally is:
   (`UQ-L001`), which must not be reported as an existing upstream bug; and
 * **0 reports filed by this project so far**.
 
+The 2026-08-24 MR75203 PVT milestone did not add a report unit.  Its missing
+alarm, timer, conversion-latency and interrupt behavior is new-model scope,
+not a defect in pre-existing upstream QEMU.
+
 A report unit groups symptoms that have the same subsystem, reproducer, and
 likely fix.  A maintainer may reasonably split `UQ-003`, `UQ-004`, or
 `UQ-007`, so the eventual issue count can increase without discovering a new
@@ -390,6 +394,8 @@ The following are also not counted as upstream QEMU bugs at present:
 * uncertain C910/TH1520 hardware behavior awaiting owner-board validation;
 * Linux's early DW APB timer clockevent/PLIC ordering and unavailable early
   TH1520 clock provider, which are Linux/device-tree integration questions;
+* MR75203 alarm/timer/IRQ/timing fidelity and local implementation mistakes
+  found and fixed before submission, because the device model is not upstream;
 * optional C910 PMP presence, reset topology, or `THEADISAEE` semantics until
   public evidence and physical tests establish the exact contract; and
 * fidelity limitations explicitly recorded as open hardware-validation items.
