@@ -59,7 +59,7 @@ run-test-thead-c910-pmu: test-thead-c910-pmu
 THEAD_C910_MM_MARCH = \
 	-march=rv64imafdc_zfh_xtheadfmemidx_xtheadmemidx_xtheadmempair
 CLEANFILES += test-thead-c910-mxstatus-mm test-thead-c910-mm-priority \
-	test-thead-c910-maee
+	test-thead-c910-maee test-thead-c910-physical-pma
 
 test-thead-c910-mxstatus-mm: test-thead-c910-mxstatus-mm.S $(LINK_SCRIPT)
 	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
@@ -86,6 +86,26 @@ test-thead-c910-maee: test-thead-c910-maee.S $(LINK_SCRIPT)
 EXTRA_RUNS += run-test-thead-c910-maee
 run-test-thead-c910-maee: test-thead-c910-maee
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
+THEAD_PMA_CONFIG_0 = \
+	0x80401000:0x0e/0x80402000:0x12/0x80403000:0x06/
+THEAD_PMA_CONFIG_1 = \
+	0x80404000:0x0e/0x80405000:0x12/0x80406000:0x06/
+THEAD_PMA_CONFIG_2 = \
+	0x80407000:0x0e/0x80408000:0x12/default:0x06
+THEAD_PMA_CONFIG = \
+	$(THEAD_PMA_CONFIG_0)$(THEAD_PMA_CONFIG_1)$(THEAD_PMA_CONFIG_2)
+
+test-thead-c910-physical-pma: test-thead-c910-physical-pma.S \
+	thead-c910-physical-pma.ld
+	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
+	$(LD) -T $(TEST_SRC)/thead-c910-physical-pma.ld $@.o -o $@
+
+EXTRA_RUNS += run-test-thead-c910-physical-pma
+run-test-thead-c910-physical-pma: test-thead-c910-physical-pma
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -cpu thead-c910$(comma)x-thead-pma=$(THEAD_PMA_CONFIG) \
 	  -semihosting -bios $<)
 
 EXTRA_RUNS += run-test-thead-c900-clint
