@@ -29,6 +29,13 @@ static bool require_xtheadvector(DisasContext *s)
            s->mstatus_vs != EXT_STATUS_DISABLED;
 }
 
+/* Vector floating-point instructions require both vector and FP state. */
+static bool require_xtheadvector_fp(DisasContext *s)
+{
+    return require_xtheadvector(s) &&
+           s->mstatus_fs != EXT_STATUS_DISABLED;
+}
+
 /*
  * XTheadVector has different vtype encoding from RVV1.0.
  * We recode the value in RVV1.0 vtype format to reuse the RVV1.0 functions.
@@ -1766,7 +1773,7 @@ GEN_OPIVI_NARROW_TRANS_TH(th_vnclip_vi, IMM_ZX, th_vnclip_vx)
  */
 static bool opfvv_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return require_xtheadvector(s) &&
+    return require_xtheadvector_fp(s) &&
            vext_check_isa_ill(s) &&
            th_check_overlap_mask(s, a->rd, a->vm, false) &&
            th_check_reg(s, a->rd, false) &&
@@ -1850,7 +1857,7 @@ static bool opfvf_check_th(DisasContext *s, arg_rmrr *a)
  * If the current SEW does not correspond to a supported IEEE floating-point
  * type, an illegal instruction exception is raised
  */
-    return require_xtheadvector(s) &&
+    return require_xtheadvector_fp(s) &&
            vext_check_isa_ill(s) &&
            th_check_overlap_mask(s, a->rd, a->vm, false) &&
            th_check_reg(s, a->rd, false) &&
@@ -1917,7 +1924,7 @@ GEN_OPFVF_TRANS_TH_BF(th_vfrsub_vf,  opfvf_check_th)
 /* Vector Widening Floating-Point Add/Subtract Instructions */
 static bool opfvv_widen_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, true) &&
             th_check_reg(s, a->rd, true) &&
@@ -1963,7 +1970,7 @@ GEN_OPFVV_WIDEN_TRANS_TH(th_vfwsub_vv, opfvv_widen_check_th)
 
 static bool opfvf_widen_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, true) &&
             th_check_reg(s, a->rd, true) &&
@@ -1999,7 +2006,7 @@ GEN_OPFVF_WIDEN_TRANS_TH(th_vfwsub_vf)
 
 static bool opfwv_widen_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, true) &&
             th_check_reg(s, a->rd, true) &&
@@ -2044,7 +2051,7 @@ GEN_OPFWV_WIDEN_TRANS_TH(th_vfwsub_wv)
 
 static bool opfwf_widen_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, true) &&
             th_check_reg(s, a->rd, true) &&
@@ -2123,7 +2130,7 @@ GEN_OPFVF_WIDEN_TRANS_TH(th_vfwnmsac_vf)
  */
 static bool opfv_check_th(DisasContext *s, arg_rmr *a)
 {
-    return require_xtheadvector(s) &&
+    return require_xtheadvector_fp(s) &&
            vext_check_isa_ill(s) &&
            th_check_overlap_mask(s, a->rd, a->vm, false) &&
            th_check_reg(s, a->rd, false) &&
@@ -2179,7 +2186,7 @@ GEN_OPFVF_TRANS_TH(th_vfsgnjx_vf, opfvf_check_th)
 /* Vector Floating-Point Compare Instructions */
 static bool opfvv_cmp_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_reg(s, a->rs2, false) &&
             th_check_reg(s, a->rs1, false) &&
@@ -2197,7 +2204,7 @@ GEN_OPFVV_TRANS_TH_BF(th_vmford_vv, opfvv_cmp_check_th)
 
 static bool opfvf_cmp_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_reg(s, a->rs2, false) &&
             (s->sew != 0) &&
@@ -2219,13 +2226,18 @@ GEN_OPFV_TRANS_TH(th_vfclass_v, opfv_check_th)
 /* Vector Floating-Point Merge Instruction */
 GEN_OPFVF_TRANS_TH(th_vfmerge_vfm,  opfvf_check_th)
 
+static bool vfmv_v_f_check_th(DisasContext *s, int rd)
+{
+    return require_xtheadvector_fp(s) &&
+           vext_check_isa_ill(s) &&
+           th_check_reg(s, rd, false) &&
+           s->sew != MO_8;
+}
+
 /* Besides of check function, th_vfmv_v_f just reuse the helper_th_vmv_v_x */
 static bool trans_th_vfmv_v_f(DisasContext *s, arg_th_vfmv_v_f *a)
 {
-    if (require_xtheadvector(s) &&
-        vext_check_isa_ill(s) &&
-        th_check_reg(s, a->rd, false) &&
-        (s->sew != 0)) {
+    if (vfmv_v_f_check_th(s, a->rd)) {
 
         TCGv_i64 t1;
 
@@ -2275,7 +2287,7 @@ GEN_OPFV_TRANS_TH(th_vfcvt_f_x_v, opfv_check_th)
  */
 static bool opfv_widen_check_th(DisasContext *s, arg_rmr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, true) &&
             th_check_reg(s, a->rd, true) &&
@@ -2287,7 +2299,7 @@ static bool opfv_widen_check_th(DisasContext *s, arg_rmr *a)
 
 static bool opfxv_widen_check_th(DisasContext *s, arg_rmr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, true) &&
             th_check_reg(s, a->rd, true) &&
@@ -2367,7 +2379,7 @@ GEN_OPFV_WIDEN_TRANS_TH(th_vfwcvt_f_f_v)
  */
 static bool opfv_narrow_check_th(DisasContext *s, arg_rmr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, false) &&
             th_check_reg(s, a->rd, false) &&
@@ -2379,7 +2391,7 @@ static bool opfv_narrow_check_th(DisasContext *s, arg_rmr *a)
 
 static bool opxfv_narrow_check_th(DisasContext *s, arg_rmr *a)
 {
-    return (require_xtheadvector(s) &&
+    return (require_xtheadvector_fp(s) &&
             vext_check_isa_ill(s) &&
             th_check_overlap_mask(s, a->rd, a->vm, false) &&
             th_check_reg(s, a->rd, false) &&
@@ -2459,7 +2471,9 @@ GEN_OPFV_NARROW_TRANS_TH(th_vfncvt_f_f_v)
 /* Vector Single-Width Integer Reduction Instructions */
 static bool reduction_check_th(DisasContext *s, arg_rmrr *a)
 {
-    return vext_check_isa_ill(s) && th_check_reg(s, a->rs2, false);
+    return require_xtheadvector(s) &&
+           vext_check_isa_ill(s) &&
+           th_check_reg(s, a->rs2, false);
 }
 
 GEN_OPIVV_TRANS_TH(th_vredsum_vs, reduction_check_th)
@@ -2476,12 +2490,26 @@ GEN_OPIVV_WIDEN_TRANS_TH(th_vwredsum_vs, reduction_check_th)
 GEN_OPIVV_WIDEN_TRANS_TH(th_vwredsumu_vs, reduction_check_th)
 
 /* Vector Single-Width Floating-Point Reduction Instructions */
-GEN_OPFVV_TRANS_TH_BF(th_vfredsum_vs, reduction_check_th)
-GEN_OPFVV_TRANS_TH_BF(th_vfredmax_vs, reduction_check_th)
-GEN_OPFVV_TRANS_TH_BF(th_vfredmin_vs, reduction_check_th)
+static bool freduction_check_th(DisasContext *s, arg_rmrr *a)
+{
+    return require_xtheadvector_fp(s) &&
+           reduction_check_th(s, a) &&
+           s->sew != MO_8;
+}
+
+GEN_OPFVV_TRANS_TH_BF(th_vfredsum_vs, freduction_check_th)
+GEN_OPFVV_TRANS_TH_BF(th_vfredmax_vs, freduction_check_th)
+GEN_OPFVV_TRANS_TH_BF(th_vfredmin_vs, freduction_check_th)
 
 /* Vector Widening Floating-Point Reduction Instructions */
-GEN_OPFVV_WIDEN_TRANS_TH(th_vfwredsum_vs, reduction_check_th)
+static bool freduction_widen_check_th(DisasContext *s, arg_rmrr *a)
+{
+    return freduction_check_th(s, a) &&
+           s->sew < MO_64 &&
+           s->lmul < 3;
+}
+
+GEN_OPFVV_WIDEN_TRANS_TH(th_vfwredsum_vs, freduction_widen_check_th)
 
 /*
  * Vector Mask Operations
@@ -2838,9 +2866,8 @@ static bool trans_th_vmv_s_x(DisasContext *s, arg_th_vmv_s_x *a)
 /* Floating-Point Scalar Move Instructions */
 static bool trans_th_vfmv_f_s(DisasContext *s, arg_th_vfmv_f_s *a)
 {
-    if (require_xtheadvector(s) &&
+    if (require_xtheadvector_fp(s) &&
         !s->vill && has_ext(s, RVF) &&
-        (s->mstatus_fs != 0) &&
         (s->sew != 0)) {
         unsigned int len = 8 << s->sew;
 
@@ -2861,7 +2888,7 @@ static bool trans_th_vfmv_f_s(DisasContext *s, arg_th_vfmv_f_s *a)
 /* vfmv.s.f vd, rs1 # vd[0] = rs1 (vs2=0) */
 static bool trans_th_vfmv_s_f(DisasContext *s, arg_th_vfmv_s_f *a)
 {
-    if (require_xtheadvector(s) &&
+    if (require_xtheadvector_fp(s) &&
         !s->vill && has_ext(s, RVF) &&
         (s->sew != 0)) {
         TCGv_i64 t1;

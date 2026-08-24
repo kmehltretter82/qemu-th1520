@@ -2816,6 +2816,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,          \
     uint32_t vm = th_vm(desc);                            \
     uint32_t vl = env->vl;                                \
     uint32_t i;                                           \
+    FloatExceptionFlags pre_fflag =                       \
+        get_float_exception_flags(&env->fp_status);       \
                                                           \
     VSTART_CHECK_EARLY_EXIT(env);                         \
     for (i = env->vstart; i < vl; i++) {                  \
@@ -2826,6 +2828,7 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,          \
     }                                                     \
     env->vstart = 0;                                      \
     CLEAR_FN(vd, vl, vl * DSZ,  vlmax * DSZ);             \
+    riscv_cpu_check_fflags(env, pre_fflag);               \
 }
 
 THCALL(TH_OPFVV2, th_vfadd_vv_bh, OP_UUU_H, H2, H2, H2, bfloat16_add)
@@ -2855,6 +2858,8 @@ void HELPER(NAME)(void *vd, void *v0, uint64_t s1,        \
     uint32_t vm = th_vm(desc);                            \
     uint32_t vl = env->vl;                                \
     uint32_t i;                                           \
+    FloatExceptionFlags pre_fflag =                       \
+        get_float_exception_flags(&env->fp_status);       \
                                                           \
     VSTART_CHECK_EARLY_EXIT(env);                         \
     for (i = env->vstart; i < vl; i++) {                  \
@@ -2865,6 +2870,7 @@ void HELPER(NAME)(void *vd, void *v0, uint64_t s1,        \
     }                                                     \
     env->vstart = 0;                                      \
     CLEAR_FN(vd, vl, vl * DSZ,  vlmax * DSZ);             \
+    riscv_cpu_check_fflags(env, pre_fflag);               \
 }
 
 THCALL(TH_OPFVF2, th_vfadd_vf_bh, OP_UUU_H, H2, H2, bfloat16_add)
@@ -3245,6 +3251,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs2,       \
     uint32_t vm = th_vm(desc);                         \
     uint32_t vl = env->vl;                             \
     uint32_t i;                                        \
+    FloatExceptionFlags pre_fflag =                    \
+        get_float_exception_flags(&env->fp_status);    \
                                                        \
     VSTART_CHECK_EARLY_EXIT(env);                      \
     if (vl == 0) {                                     \
@@ -3258,6 +3266,7 @@ void HELPER(NAME)(void *vd, void *v0, void *vs2,       \
     }                                                  \
     env->vstart = 0;                                   \
     CLEAR_FN(vd, vl, vl * DSZ,  vlmax * DSZ);          \
+    riscv_cpu_check_fflags(env, pre_fflag);            \
 }
 
 THCALL(TH_OPFVV1, th_vfsqrt_v_bh, OP_UU_H, H2, H2, bfloat16_sqrt)
@@ -3355,6 +3364,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1, void *vs2,   \
     uint32_t vl = env->vl;                                    \
     uint32_t vlmax = th_maxsz(desc) / sizeof(ETYPE);          \
     uint32_t i;                                               \
+    FloatExceptionFlags pre_fflag =                           \
+        get_float_exception_flags(&env->fp_status);           \
                                                               \
     VSTART_CHECK_EARLY_EXIT(env);                             \
     for (i = env->vstart; i < vl; i++) {                      \
@@ -3370,6 +3381,7 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1, void *vs2,   \
     for (; i < vlmax; i++) {                                  \
         th_set_elem_mask(vd, mlen, i, 0);                     \
     }                                                         \
+    riscv_cpu_check_fflags(env, pre_fflag);                   \
 }
 
 GEN_TH_CMP_VV_ENV(th_vmfeq_vv_bh, uint16_t, H2, bfloat16_eq_quiet)
@@ -3386,6 +3398,8 @@ void HELPER(NAME)(void *vd, void *v0, uint64_t s1, void *vs2,       \
     uint32_t vl = env->vl;                                          \
     uint32_t vlmax = th_maxsz(desc) / sizeof(ETYPE);                \
     uint32_t i;                                                     \
+    FloatExceptionFlags pre_fflag =                                 \
+        get_float_exception_flags(&env->fp_status);                 \
                                                                     \
     VSTART_CHECK_EARLY_EXIT(env);                                   \
     for (i = env->vstart; i < vl; i++) {                            \
@@ -3400,6 +3414,7 @@ void HELPER(NAME)(void *vd, void *v0, uint64_t s1, void *vs2,       \
     for (; i < vlmax; i++) {                                        \
         th_set_elem_mask(vd, mlen, i, 0);                           \
     }                                                               \
+    riscv_cpu_check_fflags(env, pre_fflag);                         \
 }
 
 GEN_TH_CMP_VF(th_vmfeq_vf_bh, uint16_t, H2, bfloat16_eq_quiet)
@@ -3769,6 +3784,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,           \
     uint32_t vl = env->vl;                                 \
     uint32_t i;                                            \
     uint32_t tot = env_archcpu(env)->cfg.vlenb;            \
+    FloatExceptionFlags pre_fflag =                        \
+        get_float_exception_flags(&env->fp_status);        \
     TD s1 =  *((TD *)vs1 + HD(0));                         \
                                                            \
     for (i = env->vstart; i < vl; i++) {                   \
@@ -3781,6 +3798,7 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,           \
     *((TD *)vd + HD(0)) = s1;                              \
     env->vstart = 0;                                       \
     CLEAR_FN(vd, 1, sizeof(TD), tot);                      \
+    riscv_cpu_check_fflags(env, pre_fflag);                \
 }
 
 /* Unordered sum */
