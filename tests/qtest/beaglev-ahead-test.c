@@ -9,6 +9,8 @@
 #include "qemu/bswap.h"
 #include "qemu/iov.h"
 #include "qemu/units.h"
+#include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_miscsys.h"
 #include "hw/net/mii.h"
 #include "hw/sd/sdhci.h"
 #include "hw/sd/sdhci-internal.h"
@@ -325,6 +327,7 @@
 #define C900_PLIC_QOM_PATH         "/machine/soc/plic"
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 #define TH1520_AP_RESET_QOM_PATH   "/machine/soc/ap-reset"
+#define TH1520_MISCSYS_QOM_PATH    "/machine/soc/miscsys"
 #define TH1520_MBOX_QOM_PATH       "/machine/soc/mbox"
 #define TH1520_PVT_QOM_PATH        "/machine/soc/pvt"
 #define TH1520_PWM_QOM_PATH        "/machine/soc/pwm"
@@ -713,6 +716,50 @@ typedef struct TH1520USBReg {
     uint32_t reset;
     uint32_t write_mask;
 } TH1520USBReg;
+
+typedef struct TH1520ResetTestOutput {
+    uint32_t offset;
+    uint32_t deasserted;
+} TH1520ResetTestOutput;
+
+static const TH1520ResetTestOutput
+th1520_ap_reset_test_outputs[TH1520_AP_RESET_OUTPUT_COUNT] = {
+    [TH1520_AP_RESET_PWM] = { 0x0c0, 0x3 },
+    [TH1520_AP_RESET_TIMER0_3] = { 0x03c, 0x3 },
+    [TH1520_AP_RESET_TIMER4_7] = { 0x040, 0x3 },
+    [TH1520_AP_RESET_WDT0] = { 0x034, 0x1 },
+    [TH1520_AP_RESET_WDT1] = { 0x038, 0x1 },
+    [TH1520_AP_RESET_UART0] = { 0x070, 0x3 },
+    [TH1520_AP_RESET_UART1] = { 0x074, 0x3 },
+    [TH1520_AP_RESET_UART2] = { 0x078, 0x3 },
+    [TH1520_AP_RESET_UART3] = { 0x07c, 0x3 },
+    [TH1520_AP_RESET_UART4] = { 0x080, 0x3 },
+    [TH1520_AP_RESET_UART5] = { 0x084, 0x3 },
+    [TH1520_AP_RESET_I2C0] = { 0x098, 0x3 },
+    [TH1520_AP_RESET_I2C1] = { 0x09c, 0x3 },
+    [TH1520_AP_RESET_I2C2] = { 0x0a0, 0x3 },
+    [TH1520_AP_RESET_I2C3] = { 0x0a4, 0x3 },
+    [TH1520_AP_RESET_I2C4] = { 0x0a8, 0x3 },
+    [TH1520_AP_RESET_I2C5] = { 0x0ac, 0x3 },
+    [TH1520_AP_RESET_SPI0] = { 0x094, 0x3 },
+    [TH1520_AP_RESET_GPIO0] = { 0x0b0, 0x3 },
+    [TH1520_AP_RESET_GPIO1] = { 0x0b4, 0x3 },
+    [TH1520_AP_RESET_GPIO2] = { 0x0b8, 0x3 },
+    [TH1520_AP_RESET_GPIO3] = { 0x1a8, 0x3 },
+    [TH1520_AP_RESET_PADCTRL0] = { 0x0c4, 0x1 },
+    [TH1520_AP_RESET_PADCTRL1] = { 0x20c, 0x1 },
+    [TH1520_AP_RESET_DMAC0] = { 0x14c, 0x3 },
+    [TH1520_AP_RESET_GMAC0] = { 0x068, 0xf },
+    [TH1520_AP_RESET_GMAC1] = { 0x204, 0xf },
+    [TH1520_AP_RESET_GMAC_SHARED] = { 0x208, 0x3 },
+};
+
+static const TH1520ResetTestOutput
+th1520_storage_reset_test_outputs[TH1520_MISCSYS_STORAGE_RESET_COUNT] = {
+    [TH1520_MISCSYS_STORAGE_EMMC] = { 0x000, 0x3 },
+    [TH1520_MISCSYS_STORAGE_SDIO0] = { 0x00c, 0x1 },
+    [TH1520_MISCSYS_STORAGE_SDIO1] = { 0x010, 0x1 },
+};
 
 static const TH1520USBReg th1520_miscsys_regs[] = {
     { 0x000, 0x00000003, 0x00000003 },
@@ -2359,26 +2406,25 @@ static void test_ap_reset_outputs(void)
     qtest_irq_intercept_out_named(qts, TH1520_AP_RESET_QOM_PATH,
                                   "peripheral-reset");
 
-    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x03c, 0x2);
-    g_assert_true(qtest_get_irq(qts, 1));
-    g_assert_false(qtest_get_irq(qts, 0));
-    g_assert_false(qtest_get_irq(qts, 2));
-    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x03c, 0x3);
-    g_assert_false(qtest_get_irq(qts, 1));
+    for (size_t output = 0;
+         output < ARRAY_SIZE(th1520_ap_reset_test_outputs); output++) {
+        const TH1520ResetTestOutput *info =
+            &th1520_ap_reset_test_outputs[output];
 
-    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x1);
-    g_assert_true(qtest_get_irq(qts, 2));
-    g_assert_false(qtest_get_irq(qts, 0));
-    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x3);
-    g_assert_false(qtest_get_irq(qts, 2));
-
-    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0c0, 0x2);
-    g_assert_true(qtest_get_irq(qts, 0));
-    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0c0, 0x3);
-    g_assert_false(qtest_get_irq(qts, 0));
+        qtest_writel(qts, TH1520_AP_RESET_BASE + info->offset,
+                      info->deasserted - 1);
+        for (size_t line = 0;
+             line < ARRAY_SIZE(th1520_ap_reset_test_outputs); line++) {
+            g_assert_cmpint(qtest_get_irq(qts, line), ==, line == output);
+        }
+        qtest_writel(qts, TH1520_AP_RESET_BASE + info->offset,
+                      info->deasserted);
+        g_assert_false(qtest_get_irq(qts, output));
+    }
 
     qtest_system_reset(qts);
-    for (unsigned int i = 0; i < 3; i++) {
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_ap_reset_test_outputs); i++) {
         g_assert_false(qtest_get_irq(qts, i));
     }
     qtest_quit(qts);
@@ -3025,6 +3071,9 @@ static void assert_gmac_reset_state(QTestState *qts,
     g_assert_cmphex(qtest_readl(qts, controller->base + DWMAC_DMA_BUS_MODE),
                     ==, 0x00020100);
     g_assert_cmphex(gmac_mdio_read(qts, controller->base,
+                                  TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                    MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED1000);
+    g_assert_cmphex(gmac_mdio_read(qts, controller->base,
                                   TH1520_GMAC_PHY_ADDR, MII_PHYID1), ==,
                     TH1520_GMAC_PHY_ID1);
     g_assert_cmphex(gmac_mdio_read(qts, controller->base,
@@ -3334,6 +3383,73 @@ static void assert_dwcmshc_reset_state(QTestState *qts, uint64_t base)
     g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_SMPLDL_CNFG), ==,
                     0x0e);
     g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_PHY_DLL_STATUS), ==, 0);
+}
+
+static void test_storage_reset_outputs(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_MISCSYS_QOM_PATH,
+                                  "storage-reset");
+
+    for (size_t output = 0;
+         output < ARRAY_SIZE(th1520_storage_reset_test_outputs); output++) {
+        const TH1520ResetTestOutput *info =
+            &th1520_storage_reset_test_outputs[output];
+
+        qtest_writel(qts, TH1520_MISCSYS_BASE + info->offset,
+                      info->deasserted - 1);
+        for (size_t line = 0;
+             line < ARRAY_SIZE(th1520_storage_reset_test_outputs); line++) {
+            g_assert_cmpint(qtest_get_irq(qts, line), ==, line == output);
+        }
+        qtest_writel(qts, TH1520_MISCSYS_BASE + info->offset,
+                      info->deasserted);
+        g_assert_false(qtest_get_irq(qts, output));
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_storage_reset_test_outputs); i++) {
+        g_assert_false(qtest_get_irq(qts, i));
+    }
+    qtest_quit(qts);
+}
+
+static void test_storage_reset_peripherals(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        const TH1520ResetTestOutput *reset =
+            &th1520_storage_reset_test_outputs[i];
+        size_t neighbor = (i + 1) % ARRAY_SIZE(dwcmshc_controllers);
+        uint64_t base = dwcmshc_controllers[i].base;
+        uint64_t neighbor_base = dwcmshc_controllers[neighbor].base;
+
+        qtest_writeb(qts, base + DWCMSHC_MSHC_CTRL, 0x10);
+        qtest_writeb(qts, neighbor_base + DWCMSHC_MSHC_CTRL, 0x11);
+        g_assert_cmphex(qtest_readb(qts, base + DWCMSHC_MSHC_CTRL), ==,
+                        0x10);
+        g_assert_cmphex(qtest_readb(qts,
+                                    neighbor_base + DWCMSHC_MSHC_CTRL), ==,
+                        0x11);
+
+        qtest_writel(qts, TH1520_MISCSYS_BASE + reset->offset,
+                      reset->deasserted - 1);
+        assert_dwcmshc_reset_state(qts, base);
+        g_assert_cmphex(qtest_readb(qts,
+                                    neighbor_base + DWCMSHC_MSHC_CTRL), ==,
+                        0x11);
+        qtest_writel(qts, TH1520_MISCSYS_BASE + reset->offset,
+                      reset->deasserted);
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        assert_dwcmshc_reset_state(qts, dwcmshc_controllers[i].base);
+    }
+    qtest_quit(qts);
 }
 
 static void test_dwcmshc_registers(void)
@@ -6139,6 +6255,14 @@ static void test_th1520_pwm_migration(void)
 
 static void test_ap_reset_peripherals(void)
 {
+    static const struct {
+        unsigned int output;
+        size_t controller;
+        size_t neighbor;
+    } pad_resets[] = {
+        { TH1520_AP_RESET_PADCTRL0, 2, 1 },
+        { TH1520_AP_RESET_PADCTRL1, 1, 2 },
+    };
     const uint32_t ctrl = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
 
@@ -6170,6 +6294,171 @@ static void test_ap_reset_peripherals(void)
     qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x1);
     assert_dw_timer_reset_state(qts, TH1520_TIMER4_7_BASE);
     qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x3);
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
+        const TH1520ResetTestOutput *reset =
+            &th1520_ap_reset_test_outputs[TH1520_AP_RESET_UART0 + i];
+        size_t neighbor = (i + 1) % ARRAY_SIZE(th1520_uart_controllers);
+        uint64_t base = th1520_uart_controllers[i].base;
+        uint64_t neighbor_base = th1520_uart_controllers[neighbor].base;
+
+        qtest_writel(qts, base + DW_UART_SCR_OFFSET, 0x40 + i);
+        qtest_writel(qts, neighbor_base + DW_UART_SCR_OFFSET, 0xa0 + i);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted - 1);
+        g_assert_cmphex(qtest_readl(qts, base + DW_UART_SCR_OFFSET), ==, 0);
+        g_assert_cmphex(qtest_readl(qts,
+                                    neighbor_base + DW_UART_SCR_OFFSET), ==,
+                        0xa0 + i);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted);
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
+        const TH1520ResetTestOutput *reset =
+            &th1520_ap_reset_test_outputs[TH1520_AP_RESET_I2C0 + i];
+        size_t neighbor = (i + 1) % ARRAY_SIZE(th1520_i2c_controllers);
+        uint64_t base = th1520_i2c_controllers[i].base;
+        uint64_t neighbor_base = th1520_i2c_controllers[neighbor].base;
+
+        qtest_writel(qts, base + DW_I2C_SDA_SETUP, 0x20 + i);
+        qtest_writel(qts, neighbor_base + DW_I2C_SDA_SETUP, 0x80 + i);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted - 1);
+        assert_dw_i2c_reset_state(qts, base);
+        g_assert_cmphex(qtest_readl(qts,
+                                    neighbor_base + DW_I2C_SDA_SETUP), ==,
+                        0x80 + i);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted);
+    }
+
+    qtest_writel(qts, th1520_spi0.base + DW_SSI_CTRLR0,
+                  DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, TH1520_I2C0_BASE + DW_I2C_SDA_SETUP, 0x55);
+    qtest_writel(qts, TH1520_AP_RESET_BASE +
+                       th1520_ap_reset_test_outputs[
+                           TH1520_AP_RESET_SPI0].offset,
+                  0x2);
+    assert_dw_spi_reset_state(qts);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_I2C0_BASE + DW_I2C_SDA_SETUP), ==,
+                    0x55);
+    qtest_writel(qts, TH1520_AP_RESET_BASE +
+                       th1520_ap_reset_test_outputs[
+                           TH1520_AP_RESET_SPI0].offset,
+                  0x3);
+
+    for (size_t i = 0; i < 4; i++) {
+        const TH1520ResetTestOutput *reset =
+            &th1520_ap_reset_test_outputs[TH1520_AP_RESET_GPIO0 + i];
+        const TH1520GPIOController *controller =
+            &th1520_gpio_controllers[i];
+        size_t neighbor = (i + 1) % 4;
+        uint64_t neighbor_base = th1520_gpio_controllers[neighbor].base;
+
+        qtest_writel(qts, controller->base + DW_GPIO_SWPORTA_DR, BIT(0));
+        qtest_writel(qts, controller->base + DW_GPIO_SWPORTA_DDR, BIT(0));
+        qtest_writel(qts, neighbor_base + DW_GPIO_SWPORTA_DR, BIT(1));
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted - 1);
+        assert_dw_gpio_reset_state(qts, controller);
+        g_assert_cmphex(qtest_readl(qts,
+                                    neighbor_base + DW_GPIO_SWPORTA_DR), ==,
+                        BIT(1));
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted);
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(pad_resets); i++) {
+        const TH1520ResetTestOutput *reset =
+            &th1520_ap_reset_test_outputs[pad_resets[i].output];
+        const TH1520PadCtrl *controller =
+            &th1520_padctrls[pad_resets[i].controller];
+        const TH1520PadCtrl *neighbor =
+            &th1520_padctrls[pad_resets[i].neighbor];
+
+        qtest_writel(qts, controller->base + 0x400, 0x01234567);
+        qtest_writel(qts, neighbor->base + 0x400, 0x07654321);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset, 0);
+        assert_padctrl_reset_state(qts, controller);
+        g_assert_cmphex(qtest_readl(qts, neighbor->base + 0x400), ==,
+                        0x07654321);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset, 1);
+    }
+
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(0),
+                  0x1122334455667788ULL);
+    qtest_writel(qts, th1520_spi0.base + DW_SSI_CTRLR0,
+                  DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, TH1520_AP_RESET_BASE +
+                       th1520_ap_reset_test_outputs[
+                           TH1520_AP_RESET_DMAC0].offset,
+                  0x2);
+    assert_dmac_reset_state(qts);
+    g_assert_cmphex(qtest_readl(qts, th1520_spi0.base + DW_SSI_CTRLR0), ==,
+                    DW_SSI_CTRLR0_DFS_8 | DW_SSI_CTRLR0_SRL);
+    qtest_writel(qts, TH1520_AP_RESET_BASE +
+                       th1520_ap_reset_test_outputs[
+                           TH1520_AP_RESET_DMAC0].offset,
+                  0x3);
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
+        const TH1520ResetTestOutput *reset =
+            &th1520_ap_reset_test_outputs[TH1520_AP_RESET_GMAC0 + i];
+        const TH1520GMACController *controller =
+            &th1520_gmac_controllers[i];
+        size_t neighbor = (i + 1) % ARRAY_SIZE(th1520_gmac_controllers);
+        const TH1520GMACController *other =
+            &th1520_gmac_controllers[neighbor];
+
+        qtest_writel(qts, controller->base + DWMAC_DMA_BUS_MODE,
+                      0x00020180);
+        qtest_writel(qts, controller->apb_base + GMAC_APB_CLK_EN, 0x55 + i);
+        gmac_mdio_write(qts, controller->base, TH1520_GMAC_PHY_ADDR,
+                        MII_BMCR, MII_BMCR_FD | MII_BMCR_SPEED100);
+        qtest_writel(qts, other->base + DWMAC_DMA_BUS_MODE, 0x00020180);
+        qtest_writel(qts, other->apb_base + GMAC_APB_CLK_EN, 0xa0 + i);
+        gmac_mdio_write(qts, other->base, TH1520_GMAC_PHY_ADDR, MII_BMCR,
+                        MII_BMCR_AUTOEN | MII_BMCR_SPEED100);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted - 1);
+        assert_gmac_reset_state(qts, controller);
+        g_assert_cmphex(qtest_readl(qts,
+                                    other->base + DWMAC_DMA_BUS_MODE), ==,
+                        0x00020180);
+        g_assert_cmphex(qtest_readl(qts,
+                                    other->apb_base + GMAC_APB_CLK_EN), ==,
+                        0xa0 + i);
+        g_assert_cmphex(gmac_mdio_read(qts, other->base,
+                                      TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                        MII_BMCR_AUTOEN | MII_BMCR_SPEED100);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + reset->offset,
+                      reset->deasserted);
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
+        qtest_writel(qts,
+                      th1520_gmac_controllers[i].base + DWMAC_DMA_BUS_MODE,
+                      0x00020180);
+        qtest_writel(qts,
+                      th1520_gmac_controllers[i].apb_base + GMAC_APB_CLK_EN,
+                      0x66 + i);
+        gmac_mdio_write(qts, th1520_gmac_controllers[i].base,
+                        TH1520_GMAC_PHY_ADDR, MII_BMCR,
+                        MII_BMCR_FD | MII_BMCR_SPEED100);
+    }
+    qtest_writel(qts, TH1520_AP_RESET_BASE +
+                       th1520_ap_reset_test_outputs[
+                           TH1520_AP_RESET_GMAC_SHARED].offset,
+                  0x2);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
+        assert_gmac_reset_state(qts, &th1520_gmac_controllers[i]);
+    }
+    qtest_writel(qts, TH1520_AP_RESET_BASE +
+                       th1520_ap_reset_test_outputs[
+                           TH1520_AP_RESET_GMAC_SHARED].offset,
+                  0x3);
 
     qtest_quit(qts);
 }
@@ -6560,6 +6849,8 @@ static void test_ap_cpr_migration(void)
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x004, 0x1f);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x1b0, 1);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x0c0, 0x2);
+    qtest_writel(src, TH1520_AP_RESET_BASE + 0x084, 0x2);
+    qtest_writel(src, TH1520_AP_RESET_BASE + 0x208, 0x2);
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -6579,9 +6870,16 @@ static void test_ap_cpr_migration(void)
                     0x1f);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x1b0), ==, 1);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x0c0), ==, 2);
-    g_assert_true(qtest_get_irq(dst, 0));
-    g_assert_false(qtest_get_irq(dst, 1));
-    g_assert_false(qtest_get_irq(dst, 2));
+    g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x084), ==, 2);
+    g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x208), ==, 2);
+    for (size_t line = 0;
+         line < ARRAY_SIZE(th1520_ap_reset_test_outputs); line++) {
+        bool expected = line == TH1520_AP_RESET_PWM ||
+                        line == TH1520_AP_RESET_UART5 ||
+                        line == TH1520_AP_RESET_GMAC_SHARED;
+
+        g_assert_cmpint(qtest_get_irq(dst, line), ==, expected);
+    }
 
     qtest_clock_step(dst, TH1520_PLL_LOCK_TIME_NS - 10000 - 1);
     g_assert_cmphex(qtest_readl(dst,
@@ -6746,6 +7044,8 @@ static void test_dwcmshc_migration(void)
 
     src = qtest_init("-machine beaglev-ahead -bios none");
     dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(dst, TH1520_MISCSYS_QOM_PATH,
+                                  "storage-reset");
 
     qtest_writeb(src, base + DWCMSHC_MSHC_CTRL, 0x10);
     qtest_writeb(src, base + DWCMSHC_MBIU_CTRL, 0x05);
@@ -6770,6 +7070,7 @@ static void test_dwcmshc_migration(void)
     qtest_writeb(src, TH1520_SDIO1_BASE + DWCMSHC_MSHC_CTRL, 0x11);
     qtest_writel(src, TH1520_SDIO1_BASE + DWCMSHC_EMBEDDED_CTRL,
                   0x0badf00d);
+    qtest_writel(src, TH1520_MISCSYS_BASE + 0x00c, 0);
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -6809,11 +7110,16 @@ static void test_dwcmshc_migration(void)
     g_assert_cmphex(qtest_readl(dst,
                     TH1520_SDIO1_BASE + DWCMSHC_EMBEDDED_CTRL), ==,
                     0x0b250000);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE + 0x00c), ==, 0);
+    g_assert_false(qtest_get_irq(dst, TH1520_MISCSYS_STORAGE_EMMC));
+    g_assert_true(qtest_get_irq(dst, TH1520_MISCSYS_STORAGE_SDIO0));
+    g_assert_false(qtest_get_irq(dst, TH1520_MISCSYS_STORAGE_SDIO1));
     assert_dwcmshc_reset_state(dst, TH1520_SDIO0_BASE);
 
     qtest_system_reset(dst);
     for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
         assert_dwcmshc_reset_state(dst, dwcmshc_controllers[i].base);
+        g_assert_false(qtest_get_irq(dst, i));
     }
 
     qtest_quit(dst);
@@ -7424,6 +7730,10 @@ int main(int argc, char **argv)
 #endif
         qtest_add_func("/beaglev-ahead/dwcmshc/registers",
                        test_dwcmshc_registers);
+        qtest_add_func("/beaglev-ahead/dwcmshc/reset-outputs",
+                       test_storage_reset_outputs);
+        qtest_add_func("/beaglev-ahead/dwcmshc/peripheral-resets",
+                       test_storage_reset_peripherals);
         qtest_add_func("/beaglev-ahead/dwcmshc/configurable-ids",
                        test_dwcmshc_configurable_ids);
         for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
