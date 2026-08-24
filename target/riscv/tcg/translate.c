@@ -106,6 +106,7 @@ typedef struct DisasContext {
     bool vl_eq_vlmax;
     bool altfmt;
     bool theadisaee;
+    bool thead_mm;
     CPUState *cs;
     TCGv zero;
     /* actual address width */
@@ -131,6 +132,11 @@ typedef struct DisasContext {
 static inline bool has_ext(DisasContext *ctx, uint32_t ext)
 {
     return ctx->misa_ext & ext;
+}
+
+static inline bool scalar_misaligned_access_enabled(DisasContext *ctx)
+{
+    return ctx->cfg_ptr->ext_zicclsm || ctx->thead_mm;
 }
 
 #ifdef TARGET_RISCV32
@@ -1342,6 +1348,7 @@ static void riscv_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     ctx->vl_eq_vlmax = FIELD_EX32(tb_flags, TB_FLAGS, VL_EQ_VLMAX);
     ctx->altfmt = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, ALTFMT);
     ctx->theadisaee = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, THEADISAEE);
+    ctx->thead_mm = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, THEAD_MM);
     ctx->misa_mxl_max = mcc->def->misa_mxl_max;
     ctx->xl = FIELD_EX32(tb_flags, TB_FLAGS, XL);
     ctx->address_xl = FIELD_EX32(tb_flags, TB_FLAGS, AXL);

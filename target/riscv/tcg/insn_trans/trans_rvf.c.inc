@@ -52,7 +52,7 @@ static bool trans_flw(DisasContext *ctx, arg_flw *a)
     if (ctx->cfg_ptr->ext_zama16b) {
         memop |= MO_ATOM_WITHIN16;
     }
-    if (!ctx->cfg_ptr->ext_zicclsm) {
+    if (!scalar_misaligned_access_enabled(ctx)) {
         memop |= MO_ALIGN;
     }
 
@@ -78,7 +78,7 @@ static bool trans_fsw(DisasContext *ctx, arg_fsw *a)
     if (ctx->cfg_ptr->ext_zama16b) {
         memop |= MO_ATOM_WITHIN16;
     }
-    if (!ctx->cfg_ptr->ext_zicclsm) {
+    if (!scalar_misaligned_access_enabled(ctx)) {
         memop |= MO_ALIGN;
     }
 

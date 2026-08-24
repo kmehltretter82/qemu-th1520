@@ -61,7 +61,7 @@ static bool trans_fld(DisasContext *ctx, arg_fld *a)
         memop |= MO_ATOM_IFALIGN;
     }
     memop |= ctx->mo_endianness;
-    if (!ctx->cfg_ptr->ext_zicclsm) {
+    if (!scalar_misaligned_access_enabled(ctx)) {
         memop |= MO_ALIGN;
     }
 
@@ -89,7 +89,7 @@ static bool trans_fsd(DisasContext *ctx, arg_fsd *a)
         memop |= MO_ATOM_IFALIGN;
     }
     memop |= ctx->mo_endianness;
-    if (!ctx->cfg_ptr->ext_zicclsm) {
+    if (!scalar_misaligned_access_enabled(ctx)) {
         memop |= MO_ALIGN;
     }
 

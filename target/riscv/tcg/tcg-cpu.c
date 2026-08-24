@@ -201,8 +201,15 @@ static TCGTBCPUState riscv_get_tb_cpu_state(CPUState *cs)
     ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEADISAEE,
                            !cpu->cfg.ext_xtheadmaee ||
                            (env->th_mxstatus & THEAD_MXSTATUS_THEADISAEE));
+    ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEAD_MM,
+                           object_dynamic_cast(OBJECT(cpu),
+                                               TYPE_RISCV_CPU_THEAD_C910) &&
+                           (env->th_mxstatus & THEAD_MXSTATUS_MM));
 #else
     ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEADISAEE, 1);
+    ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEAD_MM,
+                           object_dynamic_cast(OBJECT(cpu),
+                                               TYPE_RISCV_CPU_THEAD_C910));
 #endif
 
     return (TCGTBCPUState){
@@ -446,17 +453,19 @@ static bool riscv_cpu_c910_allows_legacy_ext(RISCVCPU *cpu,
                                              const RISCVIsaExtData *edata)
 {
     /*
-     * C910 reports Privileged ISA 1.10 but implements Zfh and the scalar
-     * XThead extensions.  Their instruction semantics do not depend on the
-     * newer privileged architecture version used as their generic QEMU
-     * registration floor.  Ziccrse names the legacy counter behavior that
-     * this core also exposes in its hardware device tree.
+     * C910 reports Privileged ISA 1.10 but implements Zfh (including its
+     * implied Zfhmin dependency) and the scalar XThead extensions.  Their
+     * instruction semantics do not depend on the newer privileged
+     * architecture version used as their generic QEMU registration floor.
+     * Ziccrse names the legacy counter behavior that this core also exposes
+     * in its hardware device tree.
      */
     if (!object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910)) {
         return false;
     }
 
     return !strcmp(edata->name, "zfh") ||
+           !strcmp(edata->name, "zfhmin") ||
            !strcmp(edata->name, "ziccrse") ||
            g_str_has_prefix(edata->name, "xthead");
 }

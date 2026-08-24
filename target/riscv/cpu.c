@@ -3590,6 +3590,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_zifencei = true,
         .cfg.ext_zihpm = true,
         .cfg.ext_zfh = true,
+        .cfg.ext_zfhmin = true,
         .cfg.ext_xtheadba = true,
         .cfg.ext_xtheadbb = true,
         .cfg.ext_xtheadbs = true,

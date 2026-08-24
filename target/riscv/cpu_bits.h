@@ -745,6 +745,7 @@ typedef enum {
 /* T-Head C9xx machine-extension status bits. */
 #define THEAD_MXSTATUS_MAEE       BIT_ULL(21)
 #define THEAD_MXSTATUS_THEADISAEE BIT_ULL(22)
+#define THEAD_MXSTATUS_MM         BIT_ULL(15)
 #define THEAD_MXSTATUS_PMDM       BIT_ULL(13)
 #define THEAD_MXSTATUS_PMDS       BIT_ULL(11)
 #define THEAD_MXSTATUS_PMDU       BIT_ULL(10)

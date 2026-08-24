@@ -245,6 +245,85 @@ typedef void th_ldst_elem_fn(CPURISCVState *env, abi_ptr addr,
                              uint32_t idx, void *vd, uintptr_t retaddr);
 
 /*
+ * openC910 treats every misaligned vector load or store as an
+ * address-misaligned exception, independently of MXSTATUS.MM.  Keep the
+ * legacy XTheadVector helpers aligned to their memory element width; the
+ * register element width can be larger for the sign/zero-extending forms
+ * below.
+ */
+static inline MemOpIdx th_vector_memop_idx(CPURISCVState *env, MemOp memop)
+{
+    return make_memop_idx(memop | MO_ALIGN,
+                          riscv_env_mmu_index(env, false));
+}
+
+static inline uint32_t th_ldub_data_ra(CPURISCVState *env, abi_ptr addr,
+                                       uintptr_t ra)
+{
+    return cpu_ldb_mmu(env, addr, th_vector_memop_idx(env, MO_UB), ra);
+}
+
+static inline int th_ldsb_data_ra(CPURISCVState *env, abi_ptr addr,
+                                  uintptr_t ra)
+{
+    return (int8_t)th_ldub_data_ra(env, addr, ra);
+}
+
+static inline uint32_t th_lduw_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                          uintptr_t ra)
+{
+    return cpu_ldw_mmu(env, addr,
+                       th_vector_memop_idx(env, MO_LEUW), ra);
+}
+
+static inline int th_ldsw_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                     uintptr_t ra)
+{
+    return (int16_t)th_lduw_le_data_ra(env, addr, ra);
+}
+
+static inline uint32_t th_ldl_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                         uintptr_t ra)
+{
+    return cpu_ldl_mmu(env, addr,
+                       th_vector_memop_idx(env, MO_LEUL), ra);
+}
+
+static inline uint64_t th_ldq_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                         uintptr_t ra)
+{
+    return cpu_ldq_mmu(env, addr,
+                       th_vector_memop_idx(env, MO_LEUQ), ra);
+}
+
+static inline void th_stb_data_ra(CPURISCVState *env, abi_ptr addr,
+                                  uint32_t data, uintptr_t ra)
+{
+    cpu_stb_mmu(env, addr, data, th_vector_memop_idx(env, MO_UB), ra);
+}
+
+static inline void th_stw_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                     uint32_t data, uintptr_t ra)
+{
+    cpu_stw_mmu(env, addr, data,
+                th_vector_memop_idx(env, MO_LEUW), ra);
+}
+
+static inline void th_stl_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                     uint32_t data, uintptr_t ra)
+{
+    cpu_stl_mmu(env, addr, data,
+                th_vector_memop_idx(env, MO_LEUL), ra);
+}
+
+static inline void th_stq_le_data_ra(CPURISCVState *env, abi_ptr addr,
+                                     uint64_t data, uintptr_t ra)
+{
+    cpu_stq_mmu(env, addr, data,
+                th_vector_memop_idx(env, MO_LEUQ), ra);
+}
+
+/*
  * GEN_TH_LD_ELEM is almost the copy of to GEN_VEXT_LD_ELEM, except that
  * we add "MTYPE data" to deal with zero/sign-extended.
  *
@@ -263,7 +342,7 @@ static void NAME(CPURISCVState *env, abi_ptr addr,         \
 {                                                          \
     MTYPE data;                                            \
     ETYPE *cur = ((ETYPE *)vd + H(idx));                   \
-    data = cpu_##LDSUF##_data_ra(env, addr, retaddr);      \
+    data = th_##LDSUF##_data_ra(env, addr, retaddr);       \
     *cur = data;                                           \
 }                                                          \
 
@@ -295,7 +374,7 @@ static void NAME(CPURISCVState *env, abi_ptr addr,         \
                  uint32_t idx, void *vd, uintptr_t retaddr)\
 {                                                          \
     ETYPE data = *((ETYPE *)vd + H(idx));                  \
-    cpu_##STSUF##_data_ra(env, addr, data, retaddr);       \
+    th_##STSUF##_data_ra(env, addr, data, retaddr);        \
 }
 
 GEN_TH_ST_ELEM(stb_b, int8_t,  H1, stb)
