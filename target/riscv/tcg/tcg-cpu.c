@@ -1744,8 +1744,18 @@ static void riscv_tcg_cpu_instance_init(CPUState *cs)
                             "riscv.cpu.rnmi", RNMI_MAX);
 #endif
 
-    misa_ext_user_opts = g_hash_table_new(NULL, g_direct_equal);
-    multi_ext_user_opts = g_hash_table_new(NULL, g_direct_equal);
+    /* Each CPU initialization starts with an empty set of user choices. */
+    if (misa_ext_user_opts) {
+        g_hash_table_remove_all(misa_ext_user_opts);
+    } else {
+        misa_ext_user_opts = g_hash_table_new(NULL, g_direct_equal);
+    }
+
+    if (multi_ext_user_opts) {
+        g_hash_table_remove_all(multi_ext_user_opts);
+    } else {
+        multi_ext_user_opts = g_hash_table_new(NULL, g_direct_equal);
+    }
 
     if (!misa_ext_implied_rules) {
         misa_ext_implied_rules = g_hash_table_new(NULL, g_direct_equal);
