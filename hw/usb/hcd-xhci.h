@@ -157,6 +157,7 @@ typedef struct XHCIInterrupter {
     uint32_t erstba_high;
     uint32_t erdp_low;
     uint32_t erdp_high;
+    uint8_t erstba_write_mask;
 
     bool msix_used, er_pcs;
 

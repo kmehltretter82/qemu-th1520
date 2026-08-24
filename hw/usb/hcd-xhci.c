@@ -2733,6 +2733,7 @@ static void xhci_reset(DeviceState *dev)
         xhci->intr[i].erstba_high = 0;
         xhci->intr[i].erdp_low = 0;
         xhci->intr[i].erdp_high = 0;
+        xhci->intr[i].erstba_write_mask = 0;
 
         xhci->intr[i].er_ep_idx = 0;
         xhci->intr[i].er_pcs = 1;
@@ -3129,10 +3130,20 @@ static void xhci_runtime_write(void *ptr, hwaddr reg,
         } else {
             intr->erstba_low = val & 0xffffffc0;
         }
+        /* Guests program the two 32-bit halves in either order. */
+        intr->erstba_write_mask |= BIT(0);
+        if (intr->erstba_write_mask == 3) {
+            intr->erstba_write_mask = 0;
+            xhci_er_reset(xhci, v);
+        }
         break;
     case 0x14: /* ERSTBA high */
         intr->erstba_high = val;
-        xhci_er_reset(xhci, v);
+        intr->erstba_write_mask |= BIT(1);
+        if (intr->erstba_write_mask == 3) {
+            intr->erstba_write_mask = 0;
+            xhci_er_reset(xhci, v);
+        }
         break;
     case 0x18: /* ERDP low */
         if (val & ERDP_EHB) {
@@ -3590,7 +3601,8 @@ static bool xhci_er_full(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_xhci_intr = {
     .name = "xhci-intr",
-    .version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         /* registers */
         VMSTATE_UINT32(iman,          XHCIInterrupter),
@@ -3600,6 +3612,7 @@ static const VMStateDescription vmstate_xhci_intr = {
         VMSTATE_UINT32(erstba_high,   XHCIInterrupter),
         VMSTATE_UINT32(erdp_low,      XHCIInterrupter),
         VMSTATE_UINT32(erdp_high,     XHCIInterrupter),
+        VMSTATE_UINT8_V(erstba_write_mask, XHCIInterrupter, 2),
 
         /* state */
         VMSTATE_BOOL(msix_used,       XHCIInterrupter),
