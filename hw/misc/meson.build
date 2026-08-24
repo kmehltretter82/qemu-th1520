@@ -175,4 +175,5 @@ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
 
 system_ss.add(when: 'CONFIG_AXIADO_CLK', if_true: files('axiado_clk.c'))
 system_ss.add(when: 'CONFIG_TH1520_CPR', if_true: files('th1520_cpr.c'))
+system_ss.add(when: 'CONFIG_TH1520_MBOX', if_true: files('th1520_mbox.c'))
 system_ss.add(when: 'CONFIG_TH1520_PINCTRL', if_true: files('th1520_pinctrl.c'))
