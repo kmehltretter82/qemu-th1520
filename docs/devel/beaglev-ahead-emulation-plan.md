@@ -1,12 +1,15 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: implementation paused at a reviewed milestone; resume requires owner direction, 2026-08-24
+Status: implementation paused at the reviewed GMAC receive-filter milestone,
+2026-08-24
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
 QEMU baseline: 2be159078ea26feac4c9c9902acf8906f1a05c2a
 
 Workspace integration commit: 2d7bb62c70 (merge of the baseline above)
+
+GMAC receive-filter checkpoint: 5dd4f5794b
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -34,29 +37,21 @@ The companion
 checklist for branch-only defects, current normal/sanitizer evidence, and
 fidelity gaps that must not be mislabeled as upstream bugs.
 
-## Pause point and handoff
+## Current milestone and handoff
 
-Per owner direction, feature implementation is paused after the reviewed
-CPU-boundary fixes, focused RISC-V regressions, board-model validation, and
-documentation checkpoint recorded on this branch.  The workspace is left
-clean and rebaseable; this pause is not a claim that BeagleV Ahead emulation is
-complete or that the board is perfectly modeled.
+Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
+than upstream bug reporting.  The completed bounded milestone adds DWC GMAC
+receive filtering, regression and same-version migration coverage, and records
+the physical questions that it cannot settle.  This is not a claim that the
+board is complete or perfectly modeled.
 
-The next work is review rather than more feature expansion:
-
-* inspect [beaglev-ahead-local-bugs.md](beaglev-ahead-local-bugs.md) and keep
-  branch-only fixes and open fidelity gaps separate;
-* inspect [beaglev-ahead-upstream-bugs.md](beaglev-ahead-upstream-bugs.md),
-  starting with the confidential UQ-006 NPCM GMAC receive-path draft;
-* review the completed current-master ASan reproducer and decide whether the
-  evidence meets QEMU's confidential security-triage threshold; and
-* only after explicit authorization, prepare an external report.  No report
-  has been filed from this workspace.
-
-If implementation resumes, record the selected open gate and its acceptance
-criteria before changing board code.  Hardware bring-up, including the UART
-adapter connection and all items marked OPEN in the validation ledger, remains
-the authoritative next evidence source for physical fidelity.
+Upstream triage remains deferred.  The two companion bug documents continue
+to separate pre-existing QEMU issues from branch-only implementation gaps, and
+no external report has been filed from this workspace.  After this checkpoint,
+select the next local fidelity gate or begin the documented read-only hardware
+capture.  Hardware bring-up, including the UART adapter connection and every
+item marked OPEN in the validation ledger, remains the authoritative evidence
+source for physical fidelity.
 
 ## Executive answer
 
@@ -245,7 +240,7 @@ validation.
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
-| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
+| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000.  Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete checksum modes, PTP/MMC/WOL/EEE and flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node with its AP reset pair. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis, reset split and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  Its AP gate drives a provisional 125 MHz/zero QEMU clock; gating freezes the pending phase and output, including across migration, and re-enabling resumes it.  It exposes test-only QOM outputs and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, physical clock rate and gate phase/output behavior, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
 | GPIO/pinctrl/LEDs | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  AP reset pairs drive GPIO0-3; GPIO4 and AO GPIO remain in their separate domains.  Five blue user-LED objects consume GPIO4 pins 8-12 and one green power LED remains on; QOM, reset, migration and Linux ``gpio-leds`` tests cover them.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; both AP pad controllers have reset wiring, and the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing, split reset/domain behavior, LED polarity/brightness/defaults and electrical effects on hardware; add remaining GPIO consumers, buttons, mux-driven signal routing and deterministic header/device backends |
@@ -258,7 +253,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing and add USB transfers active across migration |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  A focused GMAC test preserves MAC0/MAC31, frame-filter, address-hash and VLAN state and proves post-load old-address rejection/new-address acceptance using a separately created destination socket | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing, queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -441,7 +436,18 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   reset/mask contract, separate 500 MHz AXI, 1 GHz peripheral and 125 MHz APB
   clocks from the AP clock provider, board GMAC0/RTL8211F-facing DT wiring,
   disabled board GMAC1, individual four-member reset groups and a shared AXI
-  reset group; and
+  reset group.  The receive path filters before allocating an FCS buffer or
+  touching an RX descriptor: MAC0 plus 31 additional perfect slots support
+  enable, source-selection and byte-mask controls; the frame filter implements
+  promiscuous/receive-all, broadcast/multicast, destination/source inverse and
+  all four control-frame modes including processed pause recognition; the
+  64-bin address hash follows the documented CRC examples; and C-/S-VLAN
+  perfect, VID-only and inverse matching updates final-descriptor DA/SA/VLAN
+  status.  TH1520 uses the generated-DT contract of 64 address-hash bins and
+  32 total perfect entries.  VLAN-hash mode is deliberately not exposed
+  because its synthesis has not been established.  An immutable machine
+  property enables filtering for TH1520 while retaining the reusable model's
+  legacy accept-all behavior for existing NPCM machines; and
 * a reusable Synopsys DesignWare AXI DMAC 1.01a model with four channels,
   direct and 64-byte-LLI memory-to-memory transfers, 64-bit addresses,
   transfer-width and increment behavior, descriptor valid/last/writeback,
@@ -494,7 +500,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   SPI0, both APB timer components, X-Gene RTC, TH1520 mailbox state, all three
   pad controllers and
   all three storage controllers, both GMAC cores, PHY banks and both GMAC APB-glue
-  instances, plus TH1520 USB misc/DRD, DWC3 and xHCI state together; and
+  instances, plus TH1520 USB misc/DRD, DWC3 and xHCI state together.  A
+  separate same-version GMAC migration regression preserves MAC0, MAC31,
+  frame-filter, address-hash and VLAN registers, then proves that the
+  destination rejects the old backend address and accepts the programmed
+  address without consuming an extra descriptor.  Its destination socket is
+  created separately; queued packets and backend migration are not covered;
+  and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -527,7 +539,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently passes 100 board qtests in the normal build and 99
+The focused gate currently passes 103 board qtests in the normal build and 102
 in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
 difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
 from the minimal configurations.  The four remaining USB tests cover exact
@@ -547,7 +559,7 @@ cover M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passes 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passes.  Dependency-minimal and ASan/UBSan configurations each pass
-99 board tests plus their four available C910 CSR/migration subtests.
+102 board tests plus their four available C910 CSR/migration subtests.
 
 The XTheadVector state milestone adds a second architectural payload.  A
 reserved-EDIV ``th.vsetvl`` regression first failed because the translator
@@ -579,7 +591,7 @@ legality checks, unsafe reduction widths and missing exception-state
 propagation inherited from the public unmerged April 2024 XTheadVector series.
 The three payloads pass as board firmware under the normal,
 dependency-minimal and ASan/UBSan builds.  The complete normal RISC-V TCG
-guest suite and all 17 runnable RISC-V qtest suites, including the 100-case
+guest suite and all 17 runnable RISC-V qtest suites, including the 103-case
 board suite, remain green.  Silicon NaN, exception and stepping-specific
 behavior remains explicitly unverified under ``CPU-006``.
 
@@ -651,8 +663,8 @@ overlapping ratified-RVV encoding.  It passes in the normal,
 dependency-minimal and ASan/UBSan builds together with the older MXSTATUS.MM
 and guarded-priority payloads; generic Zicclsm enabled/disabled coverage also
 remains green.  The complete normal RISC-V TCG suite passes.  The normal qtest
-gate passes 100 board and eleven CSR subtests; minimal and sanitizer each pass
-their 99 available board and four CSR subtests.  QEMU still does not claim
+gate passes 103 board and eleven CSR subtests; minimal and sanitizer each pass
+their 102 available board and four CSR subtests.  QEMU still does not claim
 cache, buffering, shareability, security-bus or actual memory-order effects.
 
 A separate physical-PMA payload uses only an explicitly experimental
@@ -665,9 +677,13 @@ still allowed, PTE precedence and physical fallback.  Normal,
 dependency-minimal and ASan/UBSan focused runs pass.  These values are test
 fixtures, not a proposed TH1520 map.
 
-Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
-both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
-preservation, and a socket-backed packet path.  Four DMAC tests cover
+Seven GMAC-path tests cover the exact DT/clock/APB/MDIO contract, masked APB
+writes, both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS,
+extension-word preservation, and socket-backed packet paths.  They include a
+deterministic positive-barrier rejection regression, a 34-case matrix for
+perfect/hash/source/broadcast/multicast/control/VLAN acceptance and descriptor
+status, and focused same-version migration of filter state followed by an
+old-address drop and new-address accept.  Four DMAC tests cover
 reset/masks, a direct copy and PLIC route, a two-item LLI chain above 4 GiB,
 invalid-descriptor failure and completed-state/IRQ migration; the direct-boot
 test also checks the complete generated binding and AP clock-provider IDs.
@@ -1058,17 +1074,28 @@ Status: in progress.  The legacy storage submilestone is implemented and has
 register, IRQ, PIO, v4 64-bit ADMA2, reset, DT, migration, and mainline-Linux
 probe coverage.  The initial Ethernet submilestone integrates both GMAC cores,
 their APB glue, IRQs, generated DT, GMAC0's backend and generic Clause 22 PHY;
-it has reset/mask/MDIO/IRQ/enhanced-descriptor/socket/migration qtests and a
-successful mainline ``dwmac-thead`` probe.  CQE/ADMA3, eMMC 5.1/HS400 and
-boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring and error
-injection remain open.  The initial general-DMAC submilestone implements the
-four-channel controller's direct/linked memory-copy, descriptor writeback,
+it now filters rejected frames before touching RX DMA state and covers MAC0
+plus 31 additional perfect addresses, address-byte masks and source selection,
+promiscuous/receive-all, broadcast/multicast, destination/source inverse,
+all four control-frame modes, 64-bin address hashing, C-/S-VLAN exact/VID-only/
+inverse matching, and final-descriptor DA/SA/VLAN status.  Seven focused GMAC
+qtests include a deterministic rejection barrier, a 34-case filter matrix and
+same-version filter-state migration with a separately created destination
+socket.  The existing reset/mask/MDIO/IRQ/enhanced-descriptor/socket coverage
+and successful mainline ``dwmac-thead`` probe remain green.  CQE/ADMA3, eMMC
+5.1/HS400 and boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring
+and error injection remain open.  The initial general-DMAC submilestone
+implements the four-channel controller's direct/linked memory-copy, descriptor
+writeback,
 IRQ/reset/migration and exact DT contracts; its qtests and all-channel Linux
 ``dmatest`` pass.  Peripheral handshakes/request routing, dynamic and other
 multi-block modes, detailed errors/timing, the secure/TEE DMAC, complete
-filtering/PTP/MMC/WOL/EEE and PHY behavior, block/network stress, stock-image
-boot, and every remaining P5 acceptance item are still open.  P5 is therefore
-not closed.
+pause/flow-control behavior, checksum corners, PTP/MMC/WOL/EEE and PHY
+behavior, block/network stress, stock-image boot, and every remaining P5
+acceptance item are still open.  The physical 32-entry/64-bin synthesis and
+exact filtering, control-frame and VLAN semantics also require hardware
+validation; VLAN-hash mode remains disabled until its presence is established.
+P5 is therefore not closed.
 
 ### Phase 6 — clocks, reset, power and control I/O
 

@@ -51,7 +51,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Normal build
 
-* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **100/100**.
+* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **103/103**.
 * `build-beaglev-ahead/tests/qtest/riscv-csr-test -q`: **11/11**.
 * Local TCG payloads: **14/14** — XTheadVector smoke/state/FP/reduction,
   standard RVV widening legality, C910 MM/priority/MAEE/physical-PMA/PMU,
@@ -61,7 +61,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Dependency-minimal sanitizer build
 
-* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **99/99**.
+* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **102/102**.
 * `build-sanitize/tests/qtest/riscv-csr-test -q`: **4/4** (C910 CSR and the
   active/inhibited/pending PMU migration cases present in this build).
 * Machine-specific semihosted payloads: **9/9** — C910 MM/priority/MAEE/
@@ -89,9 +89,16 @@ change must add a reproducer and a regression before changing any of them.
   ranges, C910/XTheadVector stepping behavior, PMU event semantics, and
   alignment/vector exception behavior still need silicon comparison.
 * `MIG-001`: storage, GMAC, and USB migration during in-flight DMA or an
-  attached transfer still need phase/ownership tests.  DMAC, I2C, SPI, and
-  PVT are intentionally synchronous today; adding asynchronous timing requires
-  versioned VMState and boundary tests.
+  attached transfer still need phase/ownership tests.  Focused same-version
+  GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
+  registers and proves post-load reject/accept behavior, but creates the
+  destination socket separately and does not migrate queued packets or the
+  backend.  DMAC, I2C, SPI, and PVT are intentionally synchronous today;
+  adding asynchronous timing requires versioned VMState and boundary tests.
+* `GMAC-001`: the receive-filter model follows the current DT contract of 64
+  hash bins and 32 total perfect addresses, but no physical capability dump
+  proves that synthesis.  VLAN-hash mode remains disabled; exact filter,
+  control-frame, pause and VLAN behavior still requires owner-board capture.
 * `USB-002`: the current model is a host-only digital DWC3/xHCI integration
   with synthetic capability values.  PHY/link timing, device/OTG role,
   ID/VBUS, suspend/resume, and reset-domain independence are not modeled.
