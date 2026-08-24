@@ -2504,3 +2504,7 @@ DEF_HELPER_1(ssamoswap_disabled, void, env)
 
 /* Zalrsc SC write probe */
 DEF_HELPER_FLAGS_3(sc_probe_write, TCG_CALL_NO_WG, void, env, tl, tl)
+#ifndef CONFIG_USER_ONLY
+DEF_HELPER_FLAGS_3(thead_maee_amo_check, TCG_CALL_NO_WG,
+                   void, env, tl, tl)
+#endif

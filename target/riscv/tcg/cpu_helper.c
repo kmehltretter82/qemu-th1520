@@ -32,6 +32,7 @@
 #include "tcg/tcg-op.h"
 #include "accel/tcg/cpu-loop.h"
 #include "accel/tcg/cpu-ops.h"
+#include "accel/tcg/probe.h"
 #include "trace.h"
 #include "semihosting/common-semi.h"
 #include "exec/icount.h"
@@ -1002,6 +1003,7 @@ static bool check_svukte_addr(CPURISCVState *env, vaddr addr)
  */
 typedef struct RISCVMmuAttrs {
     uint8_t thead_pma;
+    bool thead_pma_valid;
 } RISCVMmuAttrs;
 
 static int get_physical_address(CPURISCVState *env, hwaddr *physical,
@@ -1532,6 +1534,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
 
         if (mmu_attrs) {
             mmu_attrs->thead_pma = thead_pma;
+            mmu_attrs->thead_pma_valid = true;
         }
     }
     *ret_prot = prot;
@@ -1831,6 +1834,10 @@ bool riscv_cpu_tlb_fill_align(CPUState *cs, CPUTLBEntryFull *out,
             .attrs = MEMTXATTRS_UNSPECIFIED,
             .prot = prot,
             .lg_page_size = ctz64(tlb_size),
+            .extra.riscv = {
+                .thead_pma = attrs.thead_pma,
+                .thead_pma_valid = attrs.thead_pma_valid,
+            },
         };
 
         if (attrs.thead_pma & (PTE_THEAD_SO >> 59)) {
@@ -1874,6 +1881,83 @@ bool riscv_cpu_tlb_fill_align(CPUState *cs, CPUTLBEntryFull *out,
     }
 
     return true;
+}
+
+typedef enum RISCVTHeadMAEEAccess {
+    RISCV_THEAD_MAEE_AMO,
+    RISCV_THEAD_MAEE_VECTOR,
+} RISCVTHeadMAEEAccess;
+
+static bool riscv_thead_maee_check(CPURISCVState *env,
+                                   target_ulong address, unsigned size,
+                                   MMUAccessType access_type,
+                                   RISCVTHeadMAEEAccess kind, bool probe,
+                                   uintptr_t retaddr)
+{
+    CPUTLBEntryFull *full = NULL;
+    void *host;
+    int mmu_idx;
+    bool denied;
+
+    if (!riscv_thead_maee_enabled(env)) {
+        return true;
+    }
+
+    /* Atomic and vector alignment faults precede address translation. */
+    if (address & (size - 1)) {
+        if (probe) {
+            return false;
+        }
+        riscv_cpu_do_unaligned_access(env_cpu(env), address, access_type,
+                                      riscv_env_mmu_index(env, false),
+                                      retaddr);
+    }
+
+    mmu_idx = riscv_env_mmu_index(env, false);
+    probe_access_full(env, address, size, access_type, mmu_idx, probe,
+                      &host, &full, retaddr);
+    if (!full || !full->extra.riscv.thead_pma_valid) {
+        return full != NULL;
+    }
+
+    if (kind == RISCV_THEAD_MAEE_AMO) {
+        denied = !(full->extra.riscv.thead_pma &
+                   (PTE_THEAD_C >> 59));
+    } else {
+        denied = full->extra.riscv.thead_pma &
+                 (PTE_THEAD_SO >> 59);
+    }
+
+    if (!denied) {
+        return true;
+    }
+    if (probe) {
+        return false;
+    }
+
+    /* openC910 reports zero tval for memory-type access faults. */
+    env->badaddr = 0;
+    riscv_raise_exception(env,
+        access_type == MMU_DATA_LOAD ? RISCV_EXCP_LOAD_ACCESS_FAULT
+                                     : RISCV_EXCP_STORE_AMO_ACCESS_FAULT,
+        retaddr);
+}
+
+bool riscv_thead_maee_check_vector(CPURISCVState *env,
+                                   target_ulong address, unsigned size,
+                                   MMUAccessType access_type, bool probe,
+                                   uintptr_t retaddr)
+{
+    return riscv_thead_maee_check(env, address, size, access_type,
+                                  RISCV_THEAD_MAEE_VECTOR, probe, retaddr);
+}
+
+void riscv_thead_maee_check_amo(CPURISCVState *env,
+                                target_ulong address, unsigned size,
+                                uintptr_t retaddr)
+{
+    riscv_thead_maee_check(env, address, size, MMU_DATA_STORE,
+                           RISCV_THEAD_MAEE_AMO, false, retaddr);
 }
 
 static target_ulong riscv_transformed_insn(CPURISCVState *env,

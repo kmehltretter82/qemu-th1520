@@ -300,6 +300,12 @@ void helper_sc_probe_write(CPURISCVState *env, target_ulong addr,
 
 #ifndef CONFIG_USER_ONLY
 
+void helper_thead_maee_amo_check(CPURISCVState *env, target_ulong address,
+                                 target_ulong size)
+{
+    riscv_thead_maee_check_amo(env, address, size, GETPC());
+}
+
 target_ulong helper_sret(CPURISCVState *env)
 {
     uint64_t mstatus;

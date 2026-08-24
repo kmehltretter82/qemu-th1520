@@ -260,6 +260,7 @@ static inline MemOpIdx th_vector_memop_idx(CPURISCVState *env, MemOp memop)
 static inline uint32_t th_ldub_data_ra(CPURISCVState *env, abi_ptr addr,
                                        uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 1, MMU_DATA_LOAD, false, ra);
     return cpu_ldb_mmu(env, addr, th_vector_memop_idx(env, MO_UB), ra);
 }
 
@@ -272,6 +273,7 @@ static inline int th_ldsb_data_ra(CPURISCVState *env, abi_ptr addr,
 static inline uint32_t th_lduw_le_data_ra(CPURISCVState *env, abi_ptr addr,
                                           uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 2, MMU_DATA_LOAD, false, ra);
     return cpu_ldw_mmu(env, addr,
                        th_vector_memop_idx(env, MO_LEUW), ra);
 }
@@ -285,6 +287,7 @@ static inline int th_ldsw_le_data_ra(CPURISCVState *env, abi_ptr addr,
 static inline uint32_t th_ldl_le_data_ra(CPURISCVState *env, abi_ptr addr,
                                          uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 4, MMU_DATA_LOAD, false, ra);
     return cpu_ldl_mmu(env, addr,
                        th_vector_memop_idx(env, MO_LEUL), ra);
 }
@@ -292,6 +295,7 @@ static inline uint32_t th_ldl_le_data_ra(CPURISCVState *env, abi_ptr addr,
 static inline uint64_t th_ldq_le_data_ra(CPURISCVState *env, abi_ptr addr,
                                          uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 8, MMU_DATA_LOAD, false, ra);
     return cpu_ldq_mmu(env, addr,
                        th_vector_memop_idx(env, MO_LEUQ), ra);
 }
@@ -299,12 +303,14 @@ static inline uint64_t th_ldq_le_data_ra(CPURISCVState *env, abi_ptr addr,
 static inline void th_stb_data_ra(CPURISCVState *env, abi_ptr addr,
                                   uint32_t data, uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 1, MMU_DATA_STORE, false, ra);
     cpu_stb_mmu(env, addr, data, th_vector_memop_idx(env, MO_UB), ra);
 }
 
 static inline void th_stw_le_data_ra(CPURISCVState *env, abi_ptr addr,
                                      uint32_t data, uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 2, MMU_DATA_STORE, false, ra);
     cpu_stw_mmu(env, addr, data,
                 th_vector_memop_idx(env, MO_LEUW), ra);
 }
@@ -312,6 +318,7 @@ static inline void th_stw_le_data_ra(CPURISCVState *env, abi_ptr addr,
 static inline void th_stl_le_data_ra(CPURISCVState *env, abi_ptr addr,
                                      uint32_t data, uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 4, MMU_DATA_STORE, false, ra);
     cpu_stl_mmu(env, addr, data,
                 th_vector_memop_idx(env, MO_LEUL), ra);
 }
@@ -319,6 +326,7 @@ static inline void th_stl_le_data_ra(CPURISCVState *env, abi_ptr addr,
 static inline void th_stq_le_data_ra(CPURISCVState *env, abi_ptr addr,
                                      uint64_t data, uintptr_t ra)
 {
+    riscv_thead_maee_check_vector(env, addr, 8, MMU_DATA_STORE, false, ra);
     cpu_stq_mmu(env, addr, data,
                 th_vector_memop_idx(env, MO_LEUQ), ra);
 }
@@ -794,6 +802,15 @@ th_ldff(void *vd, void *v0, target_ulong base,
                 }
                 remain -= offset;
                 addr = adjust_addr(env, addr + offset);
+            }
+        }
+
+        for (k = 0; k < nf; k++) {
+            addr = adjust_addr(env, base + (i * nf + k) * msz);
+            if (!riscv_thead_maee_check_vector(env, addr, msz,
+                                               MMU_DATA_LOAD, i != 0, ra)) {
+                vl = i;
+                goto ProbeSuccess;
             }
         }
     }

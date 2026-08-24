@@ -677,6 +677,22 @@ bool riscv_cpu_tlb_fill_align(CPUState *cs, CPUTLBEntryFull *out,
                               vaddr address, MMUAccessType access_type,
                               int mmu_idx, MemOp memop, int size,
                               bool probe, uintptr_t retaddr);
+#ifndef CONFIG_USER_ONLY
+void riscv_thead_maee_check_amo(CPURISCVState *env,
+                                target_ulong address, unsigned size,
+                                uintptr_t retaddr);
+bool riscv_thead_maee_check_vector(CPURISCVState *env,
+                                   target_ulong address, unsigned size,
+                                   MMUAccessType access_type, bool probe,
+                                   uintptr_t retaddr);
+#else
+static inline bool riscv_thead_maee_check_vector(
+    CPURISCVState *env, target_ulong address, unsigned size,
+    MMUAccessType access_type, bool probe, uintptr_t retaddr)
+{
+    return true;
+}
+#endif
 char *riscv_isa_string(RISCVCPU *cpu);
 int riscv_cpu_max_xlen(RISCVCPUClass *mcc);
 bool riscv_cpu_option_set(RISCVCPU *cpu, const char *optname);

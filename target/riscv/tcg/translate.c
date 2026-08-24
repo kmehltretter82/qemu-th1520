@@ -1185,6 +1185,12 @@ static bool gen_amo(DisasContext *ctx, arg_atomic *a,
 
     decode_save_opc(ctx, RISCV_UW2_ALWAYS_STORE_AMO);
     src1 = get_address(ctx, a->rs1, 0);
+#ifndef CONFIG_USER_ONLY
+    if (ctx->cfg_ptr->ext_xtheadmaee) {
+        gen_helper_thead_maee_amo_check(
+            tcg_env, src1, tcg_constant_tl(memop_size(mop)));
+    }
+#endif
     func(dest, src1, src2, ctx->mem_idx, mop);
 
     gen_set_gpr(ctx, a->rd, dest);

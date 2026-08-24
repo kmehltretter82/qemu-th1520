@@ -267,6 +267,11 @@ struct CPUTLBEntryFull {
             uint8_t shareability;
             bool guarded;
         } arm;
+        /* Cache T-Head PTE[63:59] when supplied by RISC-V translation. */
+        struct {
+            uint8_t thead_pma;
+            bool thead_pma_valid;
+        } riscv;
     } extra;
 };
 
