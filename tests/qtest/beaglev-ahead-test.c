@@ -25,6 +25,9 @@
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
 #define TH1520_AP_RESET_BASE       0xffef014000ULL
+#define TH1520_MISCSYS_BASE        0xffec02c000ULL
+#define TH1520_USB_DRD_BASE        0xffec03f000ULL
+#define TH1520_USB_CORE_BASE       0xffe7040000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
 #define TH1520_UART1_BASE          0xffe7f00000ULL
 #define TH1520_UART2_BASE          0xffec010000ULL
@@ -334,6 +337,7 @@
 #define TH1520_GMAC0_IRQ           66
 #define TH1520_GMAC1_IRQ           67
 #define TH1520_SDIO1_IRQ           71
+#define TH1520_USB_IRQ             68
 
 #define TH1520_CLK_PERI_APB_PCLK   20
 #define TH1520_CLK_PERISYS_APB4    25
@@ -390,6 +394,60 @@
 #define TH1520_PLL_VCO_RST         BIT(29)
 #define TH1520_PLL_LOCK_TIME_NS    21250
 #define TH1520_PLL_RESET_LOCKS     0x0000039a
+
+#define TH1520_MISCSYS_USB_SWRST   0x014
+#define TH1520_MISCSYS_BUS_CLK     0x100
+#define TH1520_MISCSYS_USB_CLK     0x104
+
+#define TH1520_USB_GCTL            0xc110
+#define TH1520_USB_GSNPSID         0xc120
+#define TH1520_USB_GHWPARAMS0      0xc140
+#define TH1520_USB_GHWPARAMS1      0xc144
+#define TH1520_USB_DCTL            0xc704
+#define TH1520_USB_XHCI_CAPLENGTH  0x0000
+#define TH1520_USB_XHCI_HCSPARAMS1 0x0004
+#define TH1520_USB_XHCI_DBOFF      0x0014
+#define TH1520_USB_XHCI_RTSOFF     0x0018
+#define TH1520_USB_XHCI_USB2_PORTS 0x0028
+#define TH1520_USB_XHCI_USB3_PORTS 0x0038
+#define TH1520_USB_XHCI_OPER       0x0040
+#define TH1520_USB_XHCI_USBCMD     (TH1520_USB_XHCI_OPER + 0x00)
+#define TH1520_USB_XHCI_USBSTS     (TH1520_USB_XHCI_OPER + 0x04)
+#define TH1520_USB_XHCI_DNCTRL     (TH1520_USB_XHCI_OPER + 0x14)
+#define TH1520_USB_XHCI_CRCR       (TH1520_USB_XHCI_OPER + 0x18)
+#define TH1520_USB_XHCI_CONFIG     (TH1520_USB_XHCI_OPER + 0x38)
+#define TH1520_USB_XHCI_USB2_PORTSC (TH1520_USB_XHCI_OPER + 0x410)
+#define TH1520_USB_XHCI_RUNTIME    0x1000
+#define TH1520_USB_XHCI_IMAN       (TH1520_USB_XHCI_RUNTIME + 0x20)
+#define TH1520_USB_XHCI_ERSTSZ     (TH1520_USB_XHCI_RUNTIME + 0x28)
+#define TH1520_USB_XHCI_ERSTBA     (TH1520_USB_XHCI_RUNTIME + 0x30)
+#define TH1520_USB_XHCI_ERDP       (TH1520_USB_XHCI_RUNTIME + 0x38)
+#define TH1520_USB_XHCI_DOORBELL   0x2000
+
+#define TH1520_USB_GCTL_RESET      0x30c13004
+#define TH1520_USB_GSNPSID_QEMU    0x5533330a
+#define TH1520_USB_DCTL_RUN_STOP   BIT(31)
+#define TH1520_USB_DCTL_CSFTRST    BIT(30)
+#define TH1520_USB_XHCI_USBCMD_RS  BIT(0)
+#define TH1520_USB_XHCI_USBCMD_INTE BIT(2)
+#define TH1520_USB_XHCI_USBSTS_HCH BIT(0)
+#define TH1520_USB_XHCI_USBSTS_EINT BIT(3)
+#define TH1520_USB_XHCI_IMAN_IP    BIT(0)
+#define TH1520_USB_XHCI_IMAN_IE    BIT(1)
+#define TH1520_USB_XHCI_ERDP_EHB   BIT(3)
+#define TH1520_USB_TRB_CYCLE       BIT(0)
+#define TH1520_USB_TRB_TYPE_SHIFT  10
+#define TH1520_USB_CR_NOOP         23
+#define TH1520_USB_ER_CMD_COMPLETE 33
+#define TH1520_USB_ER_PORT_CHANGE  34
+#define TH1520_USB_CC_SUCCESS      1
+#define TH1520_USB_XHCI_PORTSC_CCS BIT(0)
+#define TH1520_USB_XHCI_PORTSC_CSC BIT(17)
+
+#define TH1520_USB_ERST_ADDR       0x00300000
+#define TH1520_USB_EVENT_RING_ADDR 0x00301000
+#define TH1520_USB_COMMAND_RING_ADDR 0x00302000
+#define TH1520_USB_EVENT_RING_TRBS 16
 
 #define DWMAC_MAC_CONFIG           0x0000
 #define DWMAC_FRAME_FILTER         0x0004
@@ -627,6 +685,52 @@ typedef struct TH1520SPIController {
     uint32_t irq;
     uint32_t clock_id;
 } TH1520SPIController;
+
+typedef struct TH1520USBReg {
+    uint32_t offset;
+    uint32_t reset;
+    uint32_t write_mask;
+} TH1520USBReg;
+
+static const TH1520USBReg th1520_miscsys_regs[] = {
+    { 0x000, 0x00000003, 0x00000003 },
+    { 0x008, 0x00000003, 0x00000003 },
+    { 0x00c, 0x00000001, 0x00000001 },
+    { 0x010, 0x00000001, 0x00000001 },
+    { 0x014, 0x00000001, 0x00000007 },
+    { 0x100, 0x00000001, 0x00000001 },
+    { 0x104, 0x0000000f, 0x0000000f },
+    { 0x108, 0x00000001, 0x00000001 },
+    { 0x10c, 0x00000001, 0x00000001 },
+    { 0x110, 0x00000001, 0x00000001 },
+};
+
+static const TH1520USBReg th1520_usb_drd_regs[] = {
+    { 0x00, 0x00000000, 0x00000000 },
+    { 0x04, 0x00000000, 0x00000000 },
+    { 0x08, 0x00000000, 0x00000000 },
+    { 0x0c, 0x00000000, 0x0000ffff },
+    { 0x10, 0x00000040, 0x00000000 },
+    { 0x14, 0x0003c400, 0x00000000 },
+    { 0x18, 0x00000000, 0x00000000 },
+    { 0x1c, 0x00000020, 0x0000003f },
+    { 0x20, 0x00002a00, 0x1ff7ff7f },
+    { 0x24, 0x00095182, 0x1f1f77f3 },
+    { 0x28, 0x10303344, 0x3331f777 },
+    { 0x2c, 0x01c1c0f0, 0x03f3f3ff },
+    { 0x30, 0x0000047f, 0x00000f7f },
+    { 0x34, 0x00000000, 0x00000001 },
+    { 0x38, 0x00000000, 0x0000000f },
+    { 0x3c, 0x00000000, 0x000001ff },
+    { 0x40, 0x00000000, 0x00000000 },
+    { 0x44, 0x00001101, 0x0333ff7f },
+    { 0x48, 0x00000018, 0x0000003f },
+    { 0x4c, 0x00000000, 0x00000000 },
+    { 0x50, 0x00000000, 0xffffffff },
+    { 0x54, 0x00000000, 0xffffffff },
+    { 0x58, 0xffffffff, 0xffffffff },
+    { 0x5c, 0xffffffff, 0xffffffff },
+};
 
 static const DWCMSHCController dwcmshc_controllers[] = {
     { "emmc",  TH1520_EMMC_BASE,  TH1520_EMMC_IRQ,  8 },
@@ -1469,6 +1573,59 @@ static void assert_wdt_fdt(const void *fdt, const TH1520WDT *wdt,
     g_assert_cmpstr(text, ==, "disabled");
 }
 
+static void assert_usb_fdt(const void *fdt)
+{
+    static const char *const misc_compatibles[] = {
+        "thead,light-misc-sysreg", "syscon"
+    };
+    static const char *const drd_compatibles[] = {
+        "thead,light-usb3-drd", "syscon"
+    };
+    const fdt32_t *cells;
+    const char *text;
+    int node;
+    int len;
+
+    node = fdt_path_offset(fdt, "/soc/syscon@ffec02c000");
+    g_assert_cmpint(node, >=, 0);
+    assert_fdt_stringlist(fdt, node, "compatible", misc_compatibles,
+                          ARRAY_SIZE(misc_compatibles));
+    assert_fdt_mmio(fdt, node, TH1520_MISCSYS_BASE, 0x1000);
+
+    node = fdt_path_offset(fdt, "/soc/syscon@ffec03f000");
+    g_assert_cmpint(node, >=, 0);
+    assert_fdt_stringlist(fdt, node, "compatible", drd_compatibles,
+                          ARRAY_SIZE(drd_compatibles));
+    assert_fdt_mmio(fdt, node, TH1520_USB_DRD_BASE, 0x1000);
+
+    node = fdt_path_offset(fdt, "/soc/usb@ffe7040000");
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dwc3");
+    assert_fdt_mmio(fdt, node, TH1520_USB_CORE_BASE, 0x10000);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, TH1520_USB_IRQ);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    text = fdt_getprop(fdt, node, "interrupt-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "dwc_usb3");
+    text = fdt_getprop(fdt, node, "maximum-speed", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "super-speed");
+    text = fdt_getprop(fdt, node, "dr_mode", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "host");
+    assert_fdt_bool(fdt, node, "snps,usb3_lpm_capable", true);
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "disabled");
+}
+
 static void assert_spi_fdt(const void *fdt,
                            const TH1520SPIController *controller,
                            uint32_t clock_phandle)
@@ -1913,6 +2070,7 @@ static void test_direct_boot_contract(void)
         assert_wdt_fdt(fdt, &th1520_wdts[i], ap_clock_phandle,
                        ap_reset_phandle);
     }
+    assert_usb_fdt(fdt);
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
         gpio_phandles[i] = assert_gpio_fdt(fdt,
@@ -4948,6 +5106,293 @@ static void test_dwcmshc_v4_adma(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_th1520_usb_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_miscsys_regs); i++) {
+        const TH1520USBReg *reg = &th1520_miscsys_regs[i];
+
+        g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE + reg->offset),
+                        ==, reg->reset);
+        qtest_writel(qts, TH1520_MISCSYS_BASE + reg->offset, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE + reg->offset),
+                        ==, (reg->reset & ~reg->write_mask) |
+                            reg->write_mask);
+        qtest_writel(qts, TH1520_MISCSYS_BASE + reg->offset, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE + reg->offset),
+                        ==, reg->reset & ~reg->write_mask);
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_usb_drd_regs); i++) {
+        const TH1520USBReg *reg = &th1520_usb_drd_regs[i];
+
+        g_assert_cmphex(qtest_readl(qts, TH1520_USB_DRD_BASE + reg->offset),
+                        ==, reg->reset);
+        if (!reg->write_mask) {
+            continue;
+        }
+        qtest_writel(qts, TH1520_USB_DRD_BASE + reg->offset, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, TH1520_USB_DRD_BASE + reg->offset),
+                        ==, (reg->reset & ~reg->write_mask) |
+                            reg->write_mask);
+        qtest_writel(qts, TH1520_USB_DRD_BASE + reg->offset, 0);
+        g_assert_cmphex(qtest_readl(qts, TH1520_USB_DRD_BASE + reg->offset),
+                        ==, reg->reset & ~reg->write_mask);
+    }
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GCTL), ==,
+                    TH1520_USB_GCTL_RESET);
+    /* Generic QEMU DWC3 synthesis values are provisional for TH1520. */
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GSNPSID), ==,
+                    TH1520_USB_GSNPSID_QEMU);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GHWPARAMS0), ==,
+                    0x40204049);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GHWPARAMS1), ==,
+                    0x0222493b);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_DCTL), ==, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_DCTL,
+                  TH1520_USB_DCTL_CSFTRST);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_DCTL), ==, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_DCTL,
+                  TH1520_USB_DCTL_RUN_STOP);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_DCTL), ==,
+                    TH1520_USB_DCTL_RUN_STOP);
+
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_CAPLENGTH), ==,
+                    0x01000040);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_HCSPARAMS1), ==,
+                    0x02000102);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_DBOFF), ==,
+                    TH1520_USB_XHCI_DOORBELL);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_RTSOFF), ==,
+                    TH1520_USB_XHCI_RUNTIME);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_USB2_PORTS), ==,
+                    0x00000102);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_USB3_PORTS), ==,
+                    0x00000101);
+    g_assert_true(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                              TH1520_USB_XHCI_USBSTS) &
+                  TH1520_USB_XHCI_USBSTS_HCH);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_DCTL), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_th1520_usb_reset_outputs(void)
+{
+    const uint32_t changed_gctl = TH1520_USB_GCTL_RESET ^ BIT(0) ^ BIT(2);
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    qtest_writel(qts, TH1520_USB_DRD_BASE + 0x50, 0x10203040);
+
+    for (unsigned int reset = 0; reset < 3; reset++) {
+        qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_GCTL,
+                      changed_gctl);
+        g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                    TH1520_USB_GCTL), ==,
+                        changed_gctl);
+
+        qtest_writel(qts,
+                      TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST,
+                      7 & ~BIT(reset));
+        g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                    TH1520_MISCSYS_USB_SWRST), ==,
+                        7 & ~BIT(reset));
+        g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                    TH1520_USB_GCTL), ==,
+                        TH1520_USB_GCTL_RESET);
+        g_assert_true(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                  TH1520_USB_XHCI_USBSTS) &
+                      TH1520_USB_XHCI_USBSTS_HCH);
+        g_assert_cmphex(qtest_readl(qts, TH1520_USB_DRD_BASE + 0x50), ==,
+                        0x10203040);
+
+        qtest_writel(qts,
+                      TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    }
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_BUS_CLK, 0);
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_CLK, 5);
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_SWRST), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_BUS_CLK), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 0xf);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_DRD_BASE + 0x50), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GCTL), ==,
+                    TH1520_USB_GCTL_RESET);
+
+    qtest_quit(qts);
+}
+
+static void test_th1520_usb_host_dma_irq(void)
+{
+    uint32_t erst[4] = {
+        cpu_to_le32(TH1520_USB_EVENT_RING_ADDR),
+        0,
+        cpu_to_le32(TH1520_USB_EVENT_RING_TRBS),
+        0,
+    };
+    uint32_t command[4] = {
+        0,
+        0,
+        0,
+        cpu_to_le32((TH1520_USB_CR_NOOP << TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE),
+    };
+    uint32_t event[4] = { 0 };
+    uint8_t empty_ring[TH1520_USB_EVENT_RING_TRBS * 16] = { 0 };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    qtest_memwrite(qts, TH1520_USB_ERST_ADDR, erst, sizeof(erst));
+    qtest_memwrite(qts, TH1520_USB_EVENT_RING_ADDR, empty_ring,
+                   sizeof(empty_ring));
+    qtest_memwrite(qts, TH1520_USB_COMMAND_RING_ADDR, command,
+                   sizeof(command));
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_USB_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_USB_IRQ, true);
+
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTSZ, 1);
+    /* Linux programs this 64-bit register high half first. */
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA + 4,
+                  0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA,
+                  TH1520_USB_ERST_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                  TH1520_USB_EVENT_RING_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_IMAN,
+                  TH1520_USB_XHCI_IMAN_IE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CRCR,
+                  TH1520_USB_COMMAND_RING_ADDR | TH1520_USB_TRB_CYCLE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CRCR + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USBCMD,
+                  TH1520_USB_XHCI_USBCMD_RS |
+                  TH1520_USB_XHCI_USBCMD_INTE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL, 0);
+
+    qtest_memread(qts, TH1520_USB_EVENT_RING_ADDR, event, sizeof(event));
+    for (size_t i = 0; i < ARRAY_SIZE(event); i++) {
+        event[i] = le32_to_cpu(event[i]);
+    }
+    g_assert_cmphex(event[0], ==, TH1520_USB_COMMAND_RING_ADDR);
+    g_assert_cmphex(event[1], ==, 0);
+    g_assert_cmphex(event[2], ==, TH1520_USB_CC_SUCCESS << 24);
+    g_assert_cmphex(event[3], ==,
+                    (TH1520_USB_ER_CMD_COMPLETE <<
+                     TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE);
+    g_assert_true(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                              TH1520_USB_XHCI_USBSTS) &
+                  TH1520_USB_XHCI_USBSTS_EINT);
+    g_assert_cmphex(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_IMAN), ==,
+                    TH1520_USB_XHCI_IMAN_IP | TH1520_USB_XHCI_IMAN_IE);
+    g_assert_true(c900_plic_pending(qts, TH1520_USB_IRQ));
+    assert_only_irq(qts, 0);
+
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_USB_IRQ);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_IMAN,
+                  TH1520_USB_XHCI_IMAN_IP | TH1520_USB_XHCI_IMAN_IE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                  (TH1520_USB_EVENT_RING_ADDR + 16) |
+                  TH1520_USB_XHCI_ERDP_EHB);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USBSTS,
+                  TH1520_USB_XHCI_USBSTS_EINT);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_USB_IRQ);
+    g_assert_false(c900_plic_pending(qts, TH1520_USB_IRQ));
+    assert_no_irq(qts);
+
+    qtest_quit(qts);
+}
+
+static void test_th1520_usb_hid_hotplug(void)
+{
+    uint32_t erst[4] = {
+        cpu_to_le32(TH1520_USB_EVENT_RING_ADDR),
+        0,
+        cpu_to_le32(TH1520_USB_EVENT_RING_TRBS),
+        0,
+    };
+    uint32_t event[4] = { 0 };
+    uint8_t empty_ring[TH1520_USB_EVENT_RING_TRBS * 16] = { 0 };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    uint32_t portsc;
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    qtest_memwrite(qts, TH1520_USB_ERST_ADDR, erst, sizeof(erst));
+    qtest_memwrite(qts, TH1520_USB_EVENT_RING_ADDR, empty_ring,
+                   sizeof(empty_ring));
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_USB_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_USB_IRQ, true);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTSZ, 1);
+    /* Also preserve the low-half-first programming order. */
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA,
+                  TH1520_USB_ERST_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA + 4,
+                  0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                  TH1520_USB_EVENT_RING_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_IMAN,
+                  TH1520_USB_XHCI_IMAN_IE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USBCMD,
+                  TH1520_USB_XHCI_USBCMD_RS |
+                  TH1520_USB_XHCI_USBCMD_INTE);
+
+    qtest_qmp_device_add(qts, "usb-kbd", "usb-kbd0", "{}");
+    portsc = qtest_readl(qts, TH1520_USB_CORE_BASE +
+                         TH1520_USB_XHCI_USB2_PORTSC);
+    g_assert_true(portsc & TH1520_USB_XHCI_PORTSC_CCS);
+    g_assert_true(portsc & TH1520_USB_XHCI_PORTSC_CSC);
+
+    qtest_memread(qts, TH1520_USB_EVENT_RING_ADDR, event, sizeof(event));
+    for (size_t i = 0; i < ARRAY_SIZE(event); i++) {
+        event[i] = le32_to_cpu(event[i]);
+    }
+    g_assert_cmphex(event[0], ==, 2 << 24);
+    g_assert_cmphex(event[1], ==, 0);
+    g_assert_cmphex(event[2], ==, TH1520_USB_CC_SUCCESS << 24);
+    g_assert_cmphex(event[3], ==,
+                    (TH1520_USB_ER_PORT_CHANGE <<
+                     TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE);
+    g_assert_true(c900_plic_pending(qts, TH1520_USB_IRQ));
+    assert_only_irq(qts, 0);
+
+    qtest_qmp_device_del(qts, "usb-kbd0");
+    qtest_quit(qts);
+}
+
 static void wait_for_migration_complete(QTestState *qts)
 {
     int64_t deadline = g_get_monotonic_time() + 30 * G_USEC_PER_SEC;
@@ -4966,6 +5411,83 @@ static void wait_for_migration_complete(QTestState *qts)
         g_usleep(10000);
     }
     g_error("migration did not complete within 30 seconds");
+}
+
+static void test_th1520_usb_migration(void)
+{
+    const uint32_t changed_gctl = TH1520_USB_GCTL_RESET ^ BIT(0) ^ BIT(2);
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-usb-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    qtest_writel(src,
+                  TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_BUS_CLK, 0);
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_CLK, 5);
+    qtest_writel(src, TH1520_USB_DRD_BASE + 0x0c, 0x5a5a);
+    qtest_writel(src, TH1520_USB_DRD_BASE + 0x50, 0x10203040);
+    qtest_writel(src, TH1520_USB_DRD_BASE + 0x54, 0x89abcdef);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_GCTL,
+                  changed_gctl);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_DCTL,
+                  TH1520_USB_DCTL_RUN_STOP);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DNCTRL,
+                  0x5aa5);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CONFIG, 2);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_SWRST), ==, 7);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_BUS_CLK), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 5);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_DRD_BASE + 0x0c), ==,
+                    0x5a5a);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_DRD_BASE + 0x50), ==,
+                    0x10203040);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_DRD_BASE + 0x54), ==,
+                    0x89abcdef);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GCTL), ==,
+                    changed_gctl);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                                TH1520_USB_DCTL), ==,
+                    TH1520_USB_DCTL_RUN_STOP);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_DNCTRL), ==,
+                    0x5aa5);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_CONFIG), ==, 2);
+
+    qtest_system_reset(dst);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_SWRST), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_DRD_BASE + 0x50), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                                TH1520_USB_GCTL), ==,
+                    TH1520_USB_GCTL_RESET);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_dw_timer_migration(void)
@@ -6422,6 +6944,18 @@ int main(int argc, char **argv)
                        test_mr75203_registers);
         qtest_add_func("/beaglev-ahead/mr75203/migration",
                        test_mr75203_migration);
+        qtest_add_func("/beaglev-ahead/usb/registers",
+                       test_th1520_usb_registers);
+        qtest_add_func("/beaglev-ahead/usb/reset-outputs",
+                       test_th1520_usb_reset_outputs);
+        qtest_add_func("/beaglev-ahead/usb/host-dma-irq",
+                       test_th1520_usb_host_dma_irq);
+        if (qtest_has_device("usb-kbd")) {
+            qtest_add_func("/beaglev-ahead/usb/hid-hotplug",
+                           test_th1520_usb_hid_hotplug);
+        }
+        qtest_add_func("/beaglev-ahead/usb/migration",
+                       test_th1520_usb_migration);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
