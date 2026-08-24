@@ -32,8 +32,8 @@ The current conservative tally is:
   not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **8 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L008`), which must not be reported as existing
+* **9 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L009`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -161,6 +161,14 @@ reduction wrongly rejected an LMUL=8 vector source despite scalar input/output
 operands.  The combined architectural guests pass normal, dependency-minimal
 and ASan/UBSan board builds; the standard RVV guest passes on `rv64,v=true`.
 The conservative proposed-report tally is therefore 12.
+
+The subsequent XTheadVector mask-query audit leaves that upstream tally at
+12.  It found `UQ-L009`: `th.vmfirst.m` executed at nonzero `vstart`, although
+the inherited Vector 0.7.1 rule requires an illegal-instruction exception.
+The code exists only in the public unmerged XTheadVector series and this
+branch, so it is a patch-series review finding rather than a bug in current
+upstream QEMU.  A fail-before regression and translator fix now cover the
+exception and the legal hit/no-hit boundaries.
 
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
@@ -1280,6 +1288,30 @@ The source was imported from Alibaba/XuanTie QEMU commit
 Current upstream QEMU ``master`` does not contain this extension, so retain it
 as a review item for a revived XTheadVector series or a vendor fork.  The
 analogous standard-RVV table-read is separately tracked as `UQ-013`.
+
+### UQ-L009: th.vmfirst.m accepted nonzero vstart
+
+Status: **FIXED PUBLIC PATCH-SERIES DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The frozen XTheadVector specification inherits Vector 0.7.1 mask-query
+semantics.  `th.vmfirst.m` is not restartable: nonzero `vstart` must raise an
+illegal-instruction exception, and the faulting instruction must leave its
+destination and `vstart` unchanged.  The imported translator checked general
+vector legality but omitted the zero-`vstart` condition, unlike its adjacent
+`th.vmpopc.m` translator.
+
+The fail-before state guest set `vstart` to one and a sentinel scalar
+destination, then exited at stage 11 because `th.vmfirst.m` executed instead
+of trapping.  The translator now requires `s->vstart_eq_zero`.  The regression
+proves the illegal exception, unchanged destination and preserved `vstart`,
+then clears `vstart` and checks both a first-set result of two and the no-set
+result of minus one.  It passes normal, dependency-minimal and ASan/UBSan
+builds together with the broader 14-target C910/RISC-V TCG set.
+
+The affected source came from the public unmerged XTheadVector work; current
+upstream QEMU has no XTheadVector translator.  Keep this as a required review
+item for any revived submission or vendor fork, not as a current upstream
+GitLab report.
 
 The following are also not counted as upstream QEMU bugs at present:
 

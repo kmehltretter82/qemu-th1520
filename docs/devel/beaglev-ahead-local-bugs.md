@@ -7,16 +7,18 @@ work in this branch.  These findings are not claims about pre-existing
 upstream QEMU, and must not be filed as upstream bugs without an independent
 baseline reproducer.
 
-Audit checkpoint: 2026-08-24  
-Branch: `beaglev-ahead`  
-Workspace HEAD: `531dd2dc08`  
-Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
+* Audit checkpoint: 2026-08-24
+* Branch: `beaglev-ahead`
+* Pre-fix workspace HEAD: `81058b22df`
+* Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
 
 ## Current disposition
 
-The eight local findings recorded during implementation (`UQ-L001` through
-`UQ-L008`) are fixed and have focused regressions.  The current normal and
-sanitizer validation pass found no additional reproducible local defect.
+The nine local findings recorded during implementation (`UQ-L001` through
+`UQ-L009`) are fixed and have focused regressions.  The latest audit found
+that `th.vmfirst.m` accepted a nonzero `vstart`; the fail-before guest reached
+stage 11 because the instruction executed instead of trapping.  The focused
+normal, dependency-minimal and sanitizer runs pass after the translator fix.
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
 establishes the expected behavior.
@@ -37,6 +39,7 @@ is the short review index and current test checkpoint.
 | UQ-L006 | XTheadVector CSR | Illegal `th.vsetvl` used the source register as scratch and changed it. | Fixed with a temporary operand; register and immediate WARL tests pass. |
 | UQ-L007 | XTheadVector FP/status | FP and reduction paths missed FS/VS legality, FS-Dirty updates, exception flags, or unsupported widths. | Fixed before helper dispatch and around FP helpers; the FP/status payload passes. |
 | UQ-L008 | XTheadVector reductions | `vl=0`, nonzero `vstart`, LMUL=8 widening, and widening-dispatch bounds were mishandled. | Fixed in helpers and dispatch validation; the reduction and standard-RVV bounds payloads pass. |
+| UQ-L009 | XTheadVector mask query | `th.vmfirst.m` executed when `vstart` was nonzero instead of raising an illegal-instruction exception. | Fixed by requiring zero `vstart` in the translator; the state payload proves the trap, destination and `vstart` preservation, first-set index and no-hit result. |
 
 ## Audit evidence
 
@@ -53,6 +56,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 * Local TCG payloads: **14/14** — XTheadVector smoke/state/FP/reduction,
   standard RVV widening legality, C910 MM/priority/MAEE/physical-PMA/PMU,
   Zicclsm on/off, and C900 CLINT/PLIC.
+  The state payload includes the `th.vmfirst.m` nonzero-`vstart` regression.
 * `git diff --check`: clean.
 
 ### Dependency-minimal sanitizer build
@@ -64,6 +68,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
   physical-PMA, C900 CLINT/PLIC, four-hart SMP, DW UART, and DW timer.
 * XTheadVector smoke/state/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **4/4**.
+  The extended state payload also passes the dependency-minimal build.
 * The generic `test-thead-c910-pmu` and `test-rvv-widen-illegal` invocations
   are not counted in this sanitizer result: their normal harness requires the
   `virt` machine and a generic `rv64` CPU, which this intentionally

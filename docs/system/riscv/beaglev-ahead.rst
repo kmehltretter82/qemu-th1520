@@ -217,7 +217,10 @@ The XTheadVector engine covers the frozen instruction set, CSR/status layout,
 debug register file, reset, and migration state.  Architectural guests cover
 illegal ``th.vsetvl`` WARL and source preservation, ``vstart`` prestart and
 early-exit behavior, mask-undisturbed and tail-zero results, sticky saturation
-and all four fixed-point rounding modes.  A floating-point state guest covers
+and all four fixed-point rounding modes.  The state guest also requires
+``th.vmfirst.m`` to trap at nonzero ``vstart`` without changing its scalar
+destination or ``vstart``, and checks its legal first-set and no-set results.
+A floating-point state guest covers
 FS-Off legality across every decoder family, VS-Off reduction legality,
 unsupported reduction widths and exception-driven ``fflags``/FS-Dirty updates
 through all six helper-loop families; it also proves an exact operation does

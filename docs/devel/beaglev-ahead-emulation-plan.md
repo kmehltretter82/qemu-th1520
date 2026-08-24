@@ -557,9 +557,12 @@ illegal RVV-format value.  Register and immediate forms both produce
 ``vill``, zero ``vl`` and ``vstart`` without source corruption.  The separate
 state payload proves the 128-bit ``vstart`` write mask, prestart preservation,
 the ``vstart >= vl`` no-write rule, mask-undisturbed and tail-zero behavior,
-sticky unsigned saturation, and all four fixed-point rounding modes.  These
-are specification regressions.  Both payloads park secondary harts and pass
-as firmware ELFs on the four-hart machine under the normal,
+sticky unsigned saturation, and all four fixed-point rounding modes.  It also
+proves that ``th.vmfirst.m`` traps without changing its destination or
+``vstart`` when ``vstart`` is nonzero, then checks the legal first-set and
+no-set results.  The mask-query translator now enforces that legality rule.
+These are specification regressions.  Both payloads park secondary harts and
+pass as firmware ELFs on the four-hart machine under the normal,
 dependency-minimal and ASan/UBSan builds; the complete normal TCG suite also
 passes.  Physical C910 stepping behavior remains under the hardware ledger.
 
@@ -985,8 +988,11 @@ smoke test are present.  Illegal register-form ``th.vsetvl`` now preserves its
 source while producing the required ``vill``/zero-``vl`` state.  A second
 payload covers ``vstart`` WARL/prestart/early-exit behavior, mask-undisturbed
 and tail-zero results, sticky saturation and all four fixed-point rounding
-modes.  A third payload covers FS-Off legality across every floating-point
-decode-check family, exception-driven ``fflags``/FS-Dirty propagation through
+modes.  It also requires ``th.vmfirst.m`` to trap at nonzero ``vstart`` while
+preserving the scalar destination and ``vstart``, and covers its legal
+first-set and no-set results.  A third payload covers FS-Off legality across
+every floating-point decode-check family, exception-driven
+``fflags``/FS-Dirty propagation through
 all six helper-loop families, no-exception state preservation, VS-Off
 reduction legality and unsupported floating-point reduction widths.  A fourth
 payload covers integer/FP reduction ``vl=0`` whole-register preservation,
