@@ -265,7 +265,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   uses instruction counting so its near-wrap deadline is independent of host
   speed.  A generic duplicate-selector regression proves counters 3 and 4 can
   count the same event and that clearing one selector preserves the other; it
-  fails freshly fetched upstream `master` and passes this branch.
+  fails freshly fetched upstream `master` and passes this branch.  Generic and
+  C910 migration guests cover fixed and programmable counter continuity,
+  Smcntrpmf filters, selector routing, active and inhibited counters, near-wrap
+  and already-pending overflow state, standard and vendor overflow bits,
+  `mip.LCOFIP`, acknowledgement and rearming.  A separate
+  `rv64,pmu-mask=0` case proves fixed counters are preserved even when no HPM
+  counters exist.
   Microarchitectural event values remain an explicit hardware-differential
   task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
@@ -831,8 +837,12 @@ the initial custom CSR/PMU/MAEE state, scalar XThead decode, Zfh/Zfhmin, and
 MXSTATUS/SXSTATUS.MM scalar alignment behavior are implemented and covered by
 CSR, migration and guest-executed tests.  Generic and C910 PMU migration
 payloads now preserve Smcntrpmf configuration, fixed and programmable counter
-continuity, rebuild selector routing and rearm a near-wrap overflow deadline
-without guest reprogramming on the destination.  The alignment tests are
+continuity, rebuild selector routing and restore active, inhibited, near-wrap
+and already-pending states without guest reprogramming on the destination.
+They verify exact inhibited values, standard and vendor overflow state,
+`mip.LCOFIP`, acknowledgement and a second overflow after rearming.  A
+fixed-only `rv64,pmu-mask=0` payload uses privilege filtering to prove the
+callbacks run when no programmable counters exist.  The alignment tests are
 grounded in pinned openC910 RTL and distinguish scalar, atomic and vector
 behavior across M/S/U privilege, delegated traps and a mapped/unmapped page
 boundary.  MAEE tests additionally distinguish normal, non-cacheable,

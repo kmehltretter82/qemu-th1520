@@ -21,6 +21,7 @@ The current conservative tally is:
 
 * **12 proposed new upstream report units** (`UQ-001` through `UQ-012`);
 * **1 matching public upstream report** (`UQ-K001`), which is not new;
+* **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
 * **5 defects confined to this not-yet-upstream board/CPU implementation**
   (`UQ-L001` through `UQ-L005`), which must not be reported as existing
@@ -49,11 +50,24 @@ required current-`master` duplicate search remains outstanding.
 The subsequent generic PMU migration audit adds `UQ-012`.  Architectural
 event selectors and counter bases were present in the stream, but the runtime
 event map, fixed-counter clock snapshots and overflow deadline were not
-reconstructed, while `mcyclecfg` and `minstretcfg` were omitted entirely.  A
-single deterministic migration guest now distinguishes configuration loss,
-source-value loss, destination counter stoppage and missing overflow rearming.
-The current conservative tally is therefore 12.  A focused GitLab/qemu-devel
-search on 2026-08-24 found no match; a human duplicate search is still required.
+reconstructed, while `mcyclecfg` and `minstretcfg` were omitted entirely.
+Follow-up coverage also found that the migration callbacks were skipped when
+`pmu-mask=0`, although fixed counters and Smcntrpmf filtering still exist in
+that configuration.  Deterministic migration guests now distinguish
+configuration loss, source-value loss, destination counter stoppage, missing
+overflow rearming, inhibited state and already-pending overflow state.  These
+are additional symptoms of the same migration defect, not a thirteenth report
+unit.  The current conservative tally is therefore 12.  A focused
+GitLab/qemu-devel search on 2026-08-24 found no match; a human duplicate search
+is still required.
+
+The sanitizer follow-up found that each RISC-V TCG CPU initialization replaced
+two process-global user-option hash-table pointers without releasing their old
+tables.  A four-hart BeagleV Ahead process leaked 960 bytes in 18 allocations.
+Exact current `master` contains the assignments, but a public June 2026 v3
+no-TCG build series already carries the broader equivalent lifetime fix.  This
+is recorded as `UQ-K002`; local commit `79dd49c99b` is a backport, and the
+conservative new-report tally does not change.
 
 The 2026-08-24 MR75203 PVT milestone did not add a report unit.  Its missing
 alarm, timer, conversion-latency and interrupt behavior is new-model scope,
@@ -671,7 +685,11 @@ The migration stream carries `mhpmevent_val`, `mhpmcounter_val` and
   not migrated or reconstructed, so an armed near-wrap counter does not set
   its overflow state on the destination; and
 * the architectural Smcntrpmf `mcyclecfg` and `minstretcfg` CSRs are absent
-  from VMState altogether.
+  from VMState altogether; and
+* both migration callbacks are gated by the programmable-counter `pmu_mask`,
+  and the post-load path returns when the event map is absent, even though
+  fixed `mcycle`/`minstret` counters and their filters remain active when the
+  mask is zero.
 
 The generic qtest uses `virt` with
 `rv64,pmu-mask=0x8,sscofpmf=true,smcntrpmf=true` and deterministic
@@ -687,9 +705,20 @@ destination, it requires:
 * counter 3 to cross its wrap point; and
 * `mhpmevent3.OF` to become set by the reconstructed timer.
 
-An equivalent BeagleV Ahead variant selects C910 event 22 and checks the
-vendor `MCOUNTEROF` bit instead of standard `mhpmevent3.OF`.  Both branch tests
-pass.  Exact QEMU `master` commit
+An independent fixed-only guest uses
+`rv64,pmu-mask=0,smcntrpmf=true`, excludes a long U-mode interval with
+`mcyclecfg`/`minstretcfg`, and requires the destination delta to remain within
+a tight bound.  Parent commit `5222c7bc47` fails it with guest status
+`0xdead1003`; commit `2d237bdfde` makes the migration hooks unconditional for
+TCG CPUs and always rebases fixed counters, so the test passes.
+
+Equivalent BeagleV Ahead variants select C910 event 22 and check the vendor
+`MCOUNTEROF` bit instead of standard `mhpmevent3.OF`.  Separate generic and
+C910 guests also migrate an inhibited counter at an exact frozen value, verify
+its selector and inhibit state, and restart it on the destination.  Already-
+pending overflow guests preserve the standard OF or vendor `MCOUNTEROF` bit
+and `mip.LCOFIP`, clear both, reprogram the counter and observe a second
+overflow.  All branch tests pass.  Exact QEMU `master` commit
 `bde2492aace2b5acb755a5b057013e915163a77f` fails the strengthened generic
 test first with guest status `0xdead0005` because the Smcntrpmf configuration
 is lost.  Before that check was added, the same revision failed with
@@ -700,22 +729,25 @@ source materialization is disabled, `0xdead0001` when event-map reconstruction
 is disabled, and `0xdead0002` when timer rearming is disabled.  The complete
 fix returns status 3.
 
-Branch commit `aff489d2f7` (`target/riscv: Reconstruct PMU state after
-migration`):
+Branch commits `aff489d2f7` (`target/riscv: Reconstruct PMU state after
+migration`) and `2d237bdfde` (`target/riscv: Migrate fixed counters without
+HPM counters`) together:
 
-* materializes instruction/cycle-derived values in a CPU `pre_save` callback
+* materialize instruction/cycle-derived values in a CPU `pre_save` callback
   while rebasing the source snapshots so a cancelled migration can continue;
-* serializes nonzero `mcyclecfg` and `minstretcfg` in an optional VMState
+* serialize nonzero `mcyclecfg` and `minstretcfg` in an optional VMState
   subsection;
-* clears and rebuilds the destination event map from the migrated selectors;
-* rebases process-local fixed-counter snapshots to the destination clock; and
-* recomputes all eligible non-pending overflow deadlines from the migrated
-  architectural counter values.
+* clear and rebuild the destination event map from the migrated selectors;
+* rebase process-local fixed-counter snapshots to the destination clock;
+* recompute all eligible non-pending overflow deadlines from the migrated
+  architectural counter values; and
+* run the fixed-counter materialization and rebase paths even when no
+  programmable HPM counters are implemented.
 
 The complete normal RISC-V qtest suite passes 17 test binaries with one skip,
-including 98 BeagleV Ahead and five CSR/PMU subtests.  The dependency-minimal
+including 98 BeagleV Ahead and ten CSR/PMU subtests.  The dependency-minimal
 and ASan/UBSan suites each pass ten binaries with three expected skips,
-including 97 board and two CSR/PMU subtests.  The complete normal RISC-V TCG
+including 97 board and four CSR/PMU subtests.  The complete normal RISC-V TCG
 guest suite also passes.
 
 Run the focused generic regression with:
@@ -723,6 +755,9 @@ Run the focused generic regression with:
 ```sh
 QTEST_QEMU_BINARY=build/qemu-system-riscv64 \
   build/tests/qtest/riscv-csr-test -p /riscv64/cpu/pmu-migration
+
+QTEST_QEMU_BINARY=build/qemu-system-riscv64 \
+  build/tests/qtest/riscv-csr-test -p /riscv64/cpu/fixed-pmu-migration
 ```
 
 A 2026-08-24 quick search of QEMU GitLab and qemu-devel for RISC-V PMU
@@ -733,7 +768,7 @@ manually, rerun the test against then-current `master`, decide whether
 maintainers prefer the missing Smcntrpmf fields split from derived-state
 reconstruction, and disclose the agent-assisted discovery.
 
-## Already reported upstream
+## Already reported or addressed upstream
 
 ### UQ-K001: NPCM GMAC transmit buffer integer truncation
 
@@ -748,6 +783,24 @@ Commit `95af4a301b` independently changes the allocation size to `size_t`,
 checks accumulated frame length before addition/copy, and bounds descriptor
 walks.  Before proposing any subset, compare it with the issue's current patch
 and coordinate rather than sending a competing duplicate fix.
+
+### UQ-K002: RISC-V TCG user-option tables leak during multi-hart initialization
+
+Status: **PUBLIC PATCH DUPLICATE; do not create a new issue or competing patch**
+
+Exact QEMU `master` commit
+`bde2492aace2b5acb755a5b057013e915163a77f` assigns newly allocated
+`multi_ext_user_opts` and `misa_ext_user_opts` tables every time
+`riscv_tcg_cpu_instance_init()` runs.  Those pointers are process-global, so
+each hart except the last loses both previous tables.  LeakSanitizer reports
+960 bytes in 18 allocations after a four-hart BeagleV Ahead qtest process.
+
+Local commit `79dd49c99b` clears and reuses the existing tables and makes the
+sanitizer gate clean.  The public June 2026 v3
+[target/riscv no-TCG build series](https://patchew.org/QEMU/20260602091753.3209261-1-fritchleybohrer%40gmail.com/20260602091753.3209261-2-fritchleybohrer%40gmail.com/)
+already uses a broader clear-and-reallocate fix.  Rebase onto that series when
+it lands, or coordinate with its author if a smaller backport is needed; do not
+file a duplicate report from this project.
 
 ## Investigation candidates not included in the twelve-report tally
 
