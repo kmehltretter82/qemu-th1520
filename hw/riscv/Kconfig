@@ -31,6 +31,7 @@ config BEAGLEV_AHEAD
     select TH1520_MISCSYS
     select TH1520_USB
     select MR75203
+    select XGENE_RTC
     select THEAD_C900_CLINT
     select THEAD_C900_PLIC
 

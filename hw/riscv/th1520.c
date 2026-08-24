@@ -90,6 +90,7 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_PVT_TS]     = { 0xfffff4e080, 0x00000100 },
     [TH1520_DEV_PVT_PD]     = { 0xfffff4e180, 0x00000680 },
     [TH1520_DEV_PVT_VM]     = { 0xfffff4e800, 0x00000600 },
+    [TH1520_DEV_RTC]        = { 0xfffff40000, 0x00001000 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -445,6 +446,10 @@ static void th1520_soc_init(Object *obj)
     s->pvt_clk = clock_new(obj, "pvt-clock");
     clock_set_hz(s->pvt_clk, TH1520_PVT_INPUT_FREQ);
     qdev_connect_clock_in(DEVICE(&s->pvt), "clock", s->pvt_clk);
+    object_initialize_child(obj, "rtc", &s->rtc, TYPE_XGENE_RTC);
+    s->rtc_clk = clock_new(obj, "rtc-clock");
+    clock_set_hz(s->rtc_clk, TH1520_RTC_INPUT_FREQ);
+    qdev_connect_clock_in(DEVICE(&s->rtc), "rtc", s->rtc_clk);
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
                          TH1520_DMAC_CHANNELS);
@@ -734,6 +739,15 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                     th1520_memmap[TH1520_DEV_PVT_PD].base);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->pvt), MR75203_WINDOW_VM,
                     th1520_memmap[TH1520_DEV_PVT_VM].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->rtc), 0,
+                    th1520_memmap[TH1520_DEV_RTC].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->rtc), 0,
+                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                              TH1520_RTC_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
         return;
@@ -1084,6 +1098,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t plic_phandle;
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
+    uint32_t rtc_clock_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[TH1520_PADCTRL_COUNT];
@@ -1214,6 +1229,18 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "phandle",
                           aonsys_clock_phandle);
 
+    rtc_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/clock-32768");
+    qemu_fdt_setprop_string(ms->fdt, "/clock-32768", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "clock-frequency",
+                          TH1520_RTC_INPUT_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/clock-32768",
+                            "clock-output-names", "rtc_clk");
+    qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "phandle",
+                          rtc_clock_phandle);
+
     ap_clock_phandle = phandle++;
     qemu_fdt_add_subnode(ms->fdt,
                          "/soc/clock-controller@ffef010000");
@@ -1286,6 +1313,30 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000",
                           "moortec,ts-coeff-cal5",
                           TH1520_PVT_TS_COEFF_CAL5);
+
+    /*
+     * The public vendor tree establishes this X-Gene-compatible block and
+     * its 32.768 kHz prescaler extension.  Mainline's generic X-Gene driver
+     * does not program that extension, so leave the node disabled until a
+     * TH1520-specific compatible/driver contract is upstream.
+     */
+    qemu_fdt_add_subnode(ms->fdt, "/soc/rtc@fffff40000");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/rtc@fffff40000", "compatible",
+                            "apm,xgene-rtc");
+    qemu_fdt_setprop_sized_cells(
+        ms->fdt, "/soc/rtc@fffff40000", "reg",
+        2, th1520_memmap[TH1520_DEV_RTC].base,
+        2, th1520_memmap[TH1520_DEV_RTC].size);
+    qemu_fdt_setprop_cells(ms->fdt, "/soc/rtc@fffff40000", "interrupts",
+                           TH1520_RTC_IRQ, 4);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/rtc@fffff40000", "clocks",
+                          rtc_clock_phandle);
+    qemu_fdt_setprop_string(ms->fdt, "/soc/rtc@fffff40000", "clock-names",
+                            "rtc");
+    qemu_fdt_setprop(ms->fdt, "/soc/rtc@fffff40000", "wakeup-source",
+                     NULL, 0);
+    qemu_fdt_setprop_string(ms->fdt, "/soc/rtc@fffff40000", "status",
+                            "disabled");
 
     for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
         const TH1520GPIOInfo *info = &th1520_gpio_info[i];

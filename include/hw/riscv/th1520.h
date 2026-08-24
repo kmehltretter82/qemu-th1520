@@ -21,6 +21,7 @@
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/rtc/xgene_rtc.h"
 #include "hw/sd/dwcmshc.h"
 #include "hw/sensor/mr75203.h"
 #include "hw/ssi/dw_apb_ssi.h"
@@ -57,6 +58,8 @@ struct TH1520SoCState {
     TH1520MboxState mbox;
     MR75203State pvt;
     Clock *pvt_clk;
+    XGeneRTCState rtc;
+    Clock *rtc_clk;
     DWAPBUARTState uart[TH1520_UART_COUNT];
     DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
     TH1520PadCtrlState padctrl[TH1520_PADCTRL_COUNT];
@@ -129,6 +132,7 @@ enum {
     TH1520_DEV_PVT_TS,
     TH1520_DEV_PVT_PD,
     TH1520_DEV_PVT_VM,
+    TH1520_DEV_RTC,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
@@ -244,6 +248,9 @@ enum {
 #define TH1520_PVT_TS_COEFF_H 220500
 #define TH1520_PVT_TS_COEFF_J (-160)
 #define TH1520_PVT_TS_COEFF_CAL5 4094
+
+#define TH1520_RTC_IRQ 74
+#define TH1520_RTC_INPUT_FREQ 32768
 
 #define BEAGLEV_AHEAD_EEPROM_ADDRESS 0x50
 #define BEAGLEV_AHEAD_EEPROM_SIZE 4096
