@@ -5,10 +5,9 @@ found while implementing BeagleV Ahead support.  It is a reviewer handoff,
 not a claim that an issue has been accepted by QEMU or assigned a CVE.
 
 The audit baseline is QEMU `staging` commit
-`bde2492aace2b5acb755a5b057013e915163a77f` from 2026-08-23.  A fetch on
-2026-08-23 confirmed that this was still the tip of the configured `upstream`
-remote.  Recheck every item against current `master` immediately before
-reporting it.
+`2be159078ea26feac4c9c9902acf8906f1a05c2a` fetched on 2026-08-24 and merged
+into this workspace by `2d7bb62c70`.  Recheck every item against current
+`master` immediately before reporting it.
 
 ## Snapshot and counting rules
 
@@ -17,9 +16,21 @@ The current conservative tally is:
 * **10 proposed new upstream report units** (`UQ-001` through `UQ-010`);
 * **1 matching public upstream report** (`UQ-K001`), which is not new;
 * **2 additional investigation candidates** (`UQ-C001` and `UQ-C002`);
-* **1 defect confined to this not-yet-upstream board implementation**
-  (`UQ-L001`), which must not be reported as an existing upstream bug; and
+* **3 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L003`), which must not be reported as existing
+  upstream bugs; and
 * **0 reports filed by this project so far**.
+
+A source-path audit of the 97 upstream commits between the prior
+`bde2492aace2b5acb755a5b057013e915163a77f` snapshot and the baseline above
+found changes only in `target/riscv/cpu.c` and `target/riscv/tcg/pmu.c` among
+the files implicated by UQ-001 through UQ-010.  The incoming Zicclsm CPU-option
+work and `minstret` exception-accounting fixes do not address the zero-ID,
+duplicate-event-map or overflow-width findings.  None of the SDHCI, AT24C,
+NPCM GMAC, DWC3 or xHCI candidate paths changed in that range.  The
+conservative report tally therefore remains 10 after the staging merge; this
+path audit is not a substitute for the required current-master reproducer and
+duplicate search.
 
 The 2026-08-24 MR75203 PVT milestone did not add a report unit.  Its missing
 alarm, timer, conversion-latency and interrupt behavior is new-model scope,
@@ -57,6 +68,15 @@ pause/resume behavior for the branch's PWM, timer and watchdog integrations
 are new-board fidelity work under ``CLK-002``.  Focused normal and migration
 tests found no independent defect in a pre-existing upstream machine.  The
 conservative QEMU tally remains 10.
+
+The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
+two real implementation defects: the branch's new C910 definition exposed
+Zfh while losing its Zfhmin dependency, and its imported XTheadVector helpers
+accepted misaligned loads/stores.  Because neither the C910 model nor that
+XTheadVector implementation exists at the upstream baseline, both are local
+patch-series defects (`UQ-L002` and `UQ-L003`) rather than bugs in released
+upstream QEMU.  The generic scalar Zicclsm implementation remains independent
+and passes its enabled/disabled tests.
 
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
@@ -99,20 +119,22 @@ already cited in the BeagleV Ahead hardware-validation ledger.
 
 ### UQ-001: static RISC-V CPU definitions cannot preserve a zero `marchid`
 
-Status: **REPORTABLE; high confidence; regression exists on this branch**
+Status: **REPORTABLE; high-confidence generic API defect; downstream reproducer**
 
 Affected upstream code:
 
 * `target/riscv/cpu.c`, `riscv_cpu_cfg_merge()` and `riscv_cpu_init()`;
 * `target/riscv/cpu_cfg_fields.h.inc`; and
-* the upstream `thead-c910` CPU definition.
+* any static CPU definition that needs an architecturally valid zero ID.
 
 Upstream initializes every RISC-V CPU's `marchid` to QEMU's allocated value
 42.  The typed configuration merge treats zero as “unspecified”, so a static
 CPU definition cannot override that default with the architecturally valid
-value zero.  Consequently upstream `thead-c910` reports `marchid == 42`
-instead of the C910 value zero.  `mimpid` happens to remain zero because the
-generic default is also zero.
+value zero.  Consequently the branch's new static `thead-c910` definition
+would report `marchid == 42` instead of the C910 value zero.  The baseline does
+not yet contain a C910 CPU definition; the new downstream definition is the
+concrete reproducer for this generic configuration limitation.  `mimpid`
+happens to remain zero because the generic default is also zero.
 
 Branch fix and evidence:
 
@@ -548,6 +570,42 @@ actually handed to the guest.
 Because the BeagleV Ahead machine is not yet in upstream QEMU, this belongs in
 the board patch series and must not be presented as a defect in a released
 upstream machine.
+
+### UQ-L002: the local C910 model advertised Zfh but rejected Zfhmin operations
+
+Status: **FIXED LOCAL CPU-MODEL DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The new C910 definition enabled `Zfh` on its Privileged-1.10 baseline, but the
+required `Zfhmin` execution flag remained false and the generic privileged
+version filter did not permit that implied dependency.  As a result, valid
+`flh` and `fsh` instructions trapped illegally even though the model and its
+generated ISA string claimed Zfh.
+
+The current worktree enables Zfhmin explicitly for C910, treats both Zfh and
+Zfhmin as legacy C910 extensions independent of QEMU's newer generic
+registration floor, and executes half-precision misaligned loads/stores in the
+MXSTATUS.MM payload.  Upstream's existing CPU models do not reproduce this
+C910-only configuration, and the baseline has no C910 definition, so this is a
+patch-series review finding rather than an upstream report unit.  A reviewer
+may still audit generic implied-extension/version filtering separately, but it
+must have an upstream reproducer before promotion.
+
+### UQ-L003: the local XTheadVector port allowed misaligned loads and stores
+
+Status: **FIXED LOCAL CPU-MODEL DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The imported XTheadVector element helpers used unaligned QEMU data-access
+functions directly.  Misaligned vector loads and stores therefore completed,
+contrary to the pinned openC910 LSU rule that forces vector memory accesses to
+trap independently of MXSTATUS.MM.  The current worktree applies `MO_ALIGN`
+at the memory element width to the shared unit-stride, strided, indexed,
+segmented and fault-only-first callbacks.  The C910 payload requires
+misaligned word-vector load/store traps while scalar MM remains enabled.
+
+Neither XTheadVector nor these imported helpers exist in the upstream baseline.
+This must be fixed and reviewed in the eventual XTheadVector series, not filed
+as a defect in released upstream QEMU.  XTheadZvamo remains disabled and is a
+separate hardware-availability question under ledger item `CPU-013`.
 
 The following are also not counted as upstream QEMU bugs at present:
 

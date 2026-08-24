@@ -4,7 +4,9 @@ Status: active implementation plan, 2026-08-24
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
-QEMU baseline: bde2492aace2b5acb755a5b057013e915163a77f
+QEMU baseline: 2be159078ea26feac4c9c9902acf8906f1a05c2a
+
+Workspace integration commit: 2d7bb62c70 (merge of the baseline above)
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -236,14 +238,17 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   OpenSBI/kernel boot;
 * C910 scalar identity, including the T-Head vendor ID and exact zero
   architecture/implementation IDs, 40-bit physical-address constraints, the
-  TH1520 no-PMP configuration, the initial custom CSR bank, migration state,
-  and provisional MAEE PTE acceptance;
+  TH1520 no-PMP configuration, Zfh and its Zfhmin dependency, the initial
+  custom CSR bank, migration state, provisional MAEE PTE acceptance, and
+  dynamic MXSTATUS/SXSTATUS ``MM`` control of standard integer/FP plus every
+  modeled scalar XThead memory path;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
   machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
   event maps, and focused CSR/fixed-counter overflow tests; microarchitectural
   event values remain an explicit hardware-differential task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
-  and CSR behavior, debugger/migration integration, and focused qtest/TCG
+  and CSR behavior, debugger/migration integration, naturally aligned vector
+  load/store enforcement independent of MXSTATUS.MM, and focused qtest/TCG
   smoke coverage; and
 * a reusable C900 CLINT derived from pinned openC910 RTL and OpenSBI behavior,
   with exact M/S software and timer banks, four-hart wiring, a 3 MHz time CSR,
@@ -469,6 +474,19 @@ for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, all three misc-system reset outputs and isolated reset effects,
 configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23 with a
 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
+
+The 2026-08-24 C910 alignment milestone also passes the complete normal-build
+RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
+MXSTATUS.MM and the SXSTATUS.MM alias across TB boundaries; exercises
+misaligned integer, double/word/half floating-point, XTheadMemIdx indexed and
+incrementing, XTheadMemPair and XTheadFMemIdx loads/stores; and requires
+standard atomics plus XTheadVector loads/stores to remain naturally aligned.
+The same payload and the board-specific CLINT, PLIC, UART, timer and four-hart
+payloads pass in the dependency-minimal and ASan/UBSan builds.  The aggregate
+minimal TCG target is intentionally inapplicable because it begins with tests
+for the omitted generic ``virt`` machine; the explicitly enumerated
+board-compatible subset is the pruning gate.
+
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
 preservation, and a socket-backed packet path.  Four DMAC tests cover
@@ -731,6 +749,16 @@ Gate P2:
 * differential results match a reference interpreter or hardware for every
   software-visible case in the test corpus.
 
+Status: in progress.  CPU identity, the TH1520 no-PMP/40-bit configuration,
+the initial custom CSR/PMU/MAEE state, scalar XThead decode, Zfh/Zfhmin, and
+MXSTATUS/SXSTATUS.MM scalar alignment behavior are implemented and covered by
+CSR, migration and guest-executed tests.  The MM test is grounded in pinned
+openC910 RTL and distinguishes scalar, atomic and vector behavior.  P2 remains
+open for exhaustive scalar/illegal decode, all custom-CSR and privilege
+combinations, complete MAEE memory types and exception priority, cache/CMO and
+ordering effects, reset-vector/security behavior, randomized differential
+testing and physical comparison.
+
 ### Phase 3 — XTheadVector / Vector 0.7.1
 
 Deliver:
@@ -750,6 +778,14 @@ Gate P3:
 * Linux context switch, ptrace, signal and process tests preserve full vector
   state;
 * known C910 vector binaries run unchanged and match hardware/reference output.
+
+Status: in progress.  The vendor-derived execution engine, 128-bit state,
+custom CSRs, migration/debug integration and a discriminating architectural
+smoke test are present.  Vector loads/stores now enforce natural alignment
+independently of MXSTATUS.MM, matching the pinned openC910 LSU rule.  P3 is not
+closed: per-instruction boundaries, randomized differential testing,
+fault-only-first/page-priority cases, OS context/signal/ptrace coverage,
+XTheadZvamo availability and physical-silicon comparison remain open.
 
 ### Phase 4 — authentic reset and boot
 
