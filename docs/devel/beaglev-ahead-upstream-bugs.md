@@ -16,8 +16,8 @@ The current conservative tally is:
 * **11 proposed new upstream report units** (`UQ-001` through `UQ-011`);
 * **1 matching public upstream report** (`UQ-K001`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **3 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L003`), which must not be reported as existing
+* **4 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L004`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -99,6 +99,17 @@ baseline.  Moving RISC-V from the legacy TLB-fill callback to QEMU's existing
 alignment-aware callback is required to express that behavior on a first TLB
 miss; focused C910 and generic Zicclsm regressions found no independent defect
 in an existing upstream CPU.  The proposed-report tally remains 11.
+
+The MAEE atomic/vector continuation likewise leaves the proposed-report tally
+at 11.  It did uncover `UQ-L004`: ratified RVV translation accepted an
+overlapping vector-store encoding before the branch's XTheadVector decoder.
+The generic decoder's missing explicit Zve32x gate is concrete and fixed, but
+the upstream baseline forces VILL when no standard vector extension exists;
+only this branch's not-yet-upstream XTheadVector state made the collision
+reachable.  It is therefore a local patch-series defect, not a defect that can
+be reproduced on released upstream QEMU.  Parking secondary harts in the
+three board payloads also fixed test-data races; that is test hygiene rather
+than another emulator report unit.
 
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
@@ -718,6 +729,32 @@ Neither XTheadVector nor these imported helpers exist in the upstream baseline.
 This must be fixed and reviewed in the eventual XTheadVector series, not filed
 as a defect in released upstream QEMU.  XTheadZvamo remains disabled and is a
 separate hardware-availability question under ledger item `CPU-013`.
+
+### UQ-L004: standard RVV translation stole overlapping XTheadVector stores
+
+Status: **FIXED LOCAL CPU-MODEL INTEGRATION DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The generic RISC-V decoder runs before the branch's XTheadVector decoder.
+Several legacy encodings overlap ratified RVV, including the C910 word-vector
+store used by the MAEE payload.  `require_rvv()` checked only the dynamic VS
+state.  Because XTheadVector makes vector state valid without enabling Zve32x,
+the standard `vse32.v` translation accepted the word first and bypassed the
+legacy helper.  A strong-order vector load consequently faulted as intended,
+while the adjacent store completed and the payload exited at stage 13.
+
+The worktree now requires Zve32x before any ratified-RVV translation.  Full V
+implies Zve32x through QEMU's existing extension rules, so standard V/Zve CPUs
+retain their decoder.  The strong-order store now reaches XTheadVector and
+raises the RTL-derived zero-`tval` store/AMO access fault.  The same payload
+also proves that an allowed non-cacheable store still completes, and the
+complete normal RISC-V TCG suite keeps the standard Zicclsm/vector cases green.
+
+This collision is not independently reachable on the audited upstream
+baseline: without a standard vector extension, upstream sets VILL in the TB
+state, and upstream does not yet contain this XTheadVector implementation.
+Treat the gate as a required part of the future XTheadVector patch series and
+do not file it as a released-upstream defect unless a baseline-only reproducer
+is found.
 
 The following are also not counted as upstream QEMU bugs at present:
 

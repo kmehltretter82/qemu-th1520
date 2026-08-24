@@ -204,12 +204,16 @@ is an architectural smoke test rather than the exhaustive and differential
 coverage needed to claim silicon equivalence.  MAEE PTE bits 63:59 are carried
 through translation.  A strong-order page enforces post-translation natural
 alignment for ordinary scalar accesses and rejects instruction fetches;
-non-cacheable instruction fetch remains valid.  Cacheability, buffering,
-shareability, security-bus and actual ordering effects are not modeled, and
-the RTL's non-cacheable atomic and strong-order vector access faults remain
-open.  Some custom CSRs remain placeholders.  Fixed counters, TLB-miss events
-and the C9xx overflow protocol are implemented, but cache, branch, pipeline and
-other microarchitectural performance events are not yet hardware-accurate.  The
+non-cacheable instruction fetch remains valid.  AMO read-modify-write
+operations require a cacheable mapping, while LR/SC remains valid there.
+XTheadVector loads and stores reject strong-order mappings; fault-only-first
+loads trap on element zero and shorten ``vl`` for a later denied element.
+Ratified-RVV translation is gated off on this XTheadVector-only CPU even where
+the instruction encodings overlap.  Cacheability, buffering, shareability,
+security-bus and actual ordering effects are not modeled.  Some custom CSRs
+remain placeholders.  Fixed counters, TLB-miss events and the C9xx overflow
+protocol are implemented, but cache, branch, pipeline and other
+microarchitectural performance events are not yet hardware-accurate.  The
 TH1520 integration exposes no writable PMP entries,
 matching public physical-board boot captures, although generic C910
 documentation describes optional PMP configurations.  These uncertainties

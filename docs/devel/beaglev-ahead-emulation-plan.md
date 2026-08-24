@@ -244,9 +244,12 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   modeled scalar XThead memory path.  The MAEE page attributes survive the
   page walk: strong-order mappings require post-translation scalar alignment
   and reject instruction fetches with an access fault, while non-cacheable
-  mappings remain executable.  Guarded Sv39 coverage checks these rules plus
+  mappings remain executable.  Atomic read-modify-write operations reject a
+  non-cacheable mapping while LR/SC remains valid, and XTheadVector accesses
+  reject strong-order mappings, including fault-only-first truncation after a
+  valid first element.  Guarded Sv39 coverage checks these rules plus
   alignment-versus-page-fault priority in S and U modes, including delegated
-  traps and the distinct scalar, atomic and vector rules;
+  traps;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
   machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
   event maps, and focused CSR/fixed-counter overflow tests.  The overflow test
@@ -514,13 +517,20 @@ instruction access fault.  A new payload constructs normal, non-cacheable,
 strong-order and non-shareable aliases and checks M-owned MAEE transitions,
 S-mode traps, delegated U-mode traps, exact trap values, first/second-page
 attribute asymmetry, data-to-instruction TLB reuse and MAEE-disabled reserved
-PTE behavior.  It passes in the normal, dependency-minimal and ASan/UBSan
-builds, as do the older MXSTATUS.MM and guarded-priority payloads; generic
-Zicclsm enabled/disabled coverage also remains green.  The complete normal
-RISC-V TCG suite, 98 normal board qtests and three normal CSR qtests pass; the
-minimal and sanitizer board gates each pass their 97 available tests and their
-available CSR subsets.  QEMU still does not claim cache, buffering,
-shareability, security-bus or actual memory-order effects.
+PTE behavior.  The continuation carries the attributes in full TLB entries,
+requires C=1 for AMO read-modify-write operations without changing LR/SC,
+and rejects strong-order XTheadVector loads and stores.  Fault-only-first
+loads trap on a denied element zero and otherwise shorten ``vl`` before a
+later strong-order element.  The payload parks secondary harts, now checks 16
+exact traps and also distinguishes the legacy vector-store encoding from its
+overlapping ratified-RVV encoding.  It passes in the normal,
+dependency-minimal and ASan/UBSan builds together with the older MXSTATUS.MM
+and guarded-priority payloads; generic Zicclsm enabled/disabled coverage also
+remains green.  The complete normal RISC-V TCG suite passes in parallel after
+all three board payloads were made hart-0-only.  The normal qtest gate passes
+98 board and three CSR subtests; minimal and sanitizer each pass their 97
+available board and one CSR subtest.  QEMU still does not claim cache,
+buffering, shareability, security-bus or actual memory-order effects.
 
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
@@ -792,12 +802,12 @@ pinned openC910 RTL and distinguish scalar, atomic and vector behavior across
 M/S/U privilege, delegated traps and a mapped/unmapped page boundary.  MAEE
 tests additionally distinguish normal, non-cacheable, strong-order and
 non-shareable mappings, enforce post-translation scalar alignment on the
-strong-order type and require a strong-order instruction access fault.  P2
-remains open for exhaustive scalar/illegal decode, all custom-CSR and privilege
-combinations, MAEE atomic/vector restrictions and B/SH/SEC effects, every
-access width/form, cache/CMO and actual ordering effects, physical-map PMAs,
-reset-vector/security behavior, randomized differential testing and physical
-comparison.
+strong-order type, require a strong-order instruction access fault, reject
+AMO RMW on C=0 while allowing LR/SC, and reject strong-order vector accesses.
+P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
+privilege combinations, B/SH/SEC effects, every access width/form, cache/CMO
+and actual ordering effects, physical-map PMAs, reset-vector/security behavior,
+randomized differential testing and physical comparison.
 
 ### Phase 3 — XTheadVector / Vector 0.7.1
 
@@ -823,8 +833,11 @@ Status: in progress.  The vendor-derived execution engine, 128-bit state,
 custom CSRs, migration/debug integration and a discriminating architectural
 smoke test are present.  Vector loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
-guarded-page vector load/store priority is covered in S and U modes.  P3 is not
-closed: per-instruction boundaries, randomized differential testing,
+guarded-page vector load/store priority is covered in S and U modes.  Standard
+RVV translation is explicitly gated on Zve32x so overlapping store encodings
+reach the legacy decoder, and MAEE coverage includes strong-order unit-stride
+faults plus a fault-only-first page crossing that shortens ``vl``.  P3 is not
+closed: per-instruction boundaries, randomized differential testing, broader
 fault-only-first/segment page-priority cases, OS context/signal/ptrace
 coverage, XTheadZvamo availability and physical-silicon comparison remain
 open.
