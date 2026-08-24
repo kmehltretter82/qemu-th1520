@@ -68,9 +68,9 @@ remains an open release blocker in the ledger.
 
 ## Current progress estimate
 
-As of 2026-08-24, this branch is approximately **47% complete (plus or minus
+As of 2026-08-24, this branch is approximately **48% complete (plus or minus
 5 percentage points)** against the strict definition above and approximately
-**82% complete for practical C910 Linux and driver development**.  These are
+**83% complete for practical C910 Linux and driver development**.  These are
 weighted engineering estimates, not a ratio of files or register blocks.  The
 strict number remains dominated by authentic boot/reset, exhaustive CPU
 differential validation, USB device/OTG and PHY behavior, display/GPU,
@@ -92,6 +92,14 @@ pinned-mainline Linux proof all pass.  Exact component identity, prescaler and
 wrap edges, calibration, battery/reset retention, suspend wake and physical
 comparison remain open.  Mainline Linux also needs a TH1520-specific binding
 and prescaler contract before the generated node can safely be enabled.
+
+The board-LED submilestone is about **85% complete**: five active-high blue
+user LEDs are connected to GPIO4 pins 8-12, the green power LED is always on,
+their intensity is observable through QOM, and reset, migration and pinned
+Linux ``gpio-leds`` tests pass.  The schematic and BOM strongly establish the
+wiring and colors, but first-power-up state, polarity, brightness and reset
+behavior still require comparison with the owner's exact assembly.  Buttons
+remain unwired.
 
 The pinned mainline and vendor device trees plus the board schematic expose no
 PCIe controller, endpoint or routed connector for BeagleV Ahead.  PCIe is
@@ -179,7 +187,7 @@ validation.
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  It uses a provisional fixed 125 MHz QEMU input, exposes test-only QOM outputs, and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, clock rate/gating, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
-| GPIO/pinctrl | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets and electrical effects on hardware; add GPIO consumer wiring, mux-driven signal routing and deterministic header/device backends |
+| GPIO/pinctrl/LEDs | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  Five blue user-LED objects consume GPIO4 pins 8-12 and one green power LED remains on; QOM, reset, migration and Linux ``gpio-leds`` tests cover them.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing plus pad resets, LED polarity/brightness/defaults and electrical effects on hardware; add remaining GPIO consumers, buttons, mux-driven signal routing and deterministic header/device backends |
 | APB timers | A reusable four-counter DesignWare model and both TH1520 components now provide eight 125 MHz countdown channels, PLIC sources 16-23, local/aggregate EOI and status, reset and VMState; either known APB/core reset bit immediately resets its corresponding component; all eight upstream-DT nodes remain board-disabled | Validate component synthesis, clocks, access widths, reload/zero/enable edges, cascade/PWM and reset-domain behavior on hardware; couple clock gates and remaining resets |
 | PVT/thermal/voltage | A reusable MR75203 model maps the exact TH1520 common, temperature, process and voltage apertures, synthesis identity, 2 temperature sensors, 11 process detectors and 16 voltage channels.  It implements the Linux SDIF programming path, deterministic QOM environment inputs, reset and VMState; pinned Linux binds and reads all advertised temperature and voltage channels | Validate physical samples and calibration across temperature/voltage, conversion latency and DONE behavior, sample-counter edges, alarm/timer/register semantics, any interrupt route, access widths, clock/reset coupling and actual rail-to-channel names on the owner board |
 | RTC/watchdog | A reusable X-Gene-compatible RTC model provides counter/match/delayed-load, interrupt/mask/EOI, wrap, optional prescaler, reset and VMState at the TH1520 address with a 32.768 kHz input and PLIC source 74.  Its disabled DT node and a test-only prescaler-aware module let pinned Linux set/read at 1 Hz and receive an alarm.  A reusable fixed-TOP Synopsys DW APB watchdog model and both TH1520 AP instances provide countdown/restart, direct and two-stage interrupt/reset behavior, PLIC sources 24/25, independent AP resets, VMState and conservative disabled DT nodes; pinned Linux binds, starts, pings and reset-stops both through an external enabling DT.  AO/audio watchdogs remain absent | Validate RTC component identity, exact prescaler/CPCVR/wrap/load edges, calibration, wake and battery/reset retention; establish a mainline TH1520 RTC compatible/driver contract.  Validate watchdog identities, clock/reset scope and edge behavior, couple AP gates and add remaining watchdog domains from public or measured evidence |
@@ -189,7 +197,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing and add USB transfers active across migration |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing and add USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -300,9 +308,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   reset and VMState.  All six TH1520 banks are integrated at their upstream
   Linux addresses and PLIC sources with exact ``ngpios`` widths and AP clock
   IDs where applicable.  The generated DT provides gpio0-5 aliases and the
-  five board LEDs on GPIO4 pins 8-12.  Focused qtests cover every bank, pin
-  I/O, both interrupt modes and pending-edge migration; the pinned Linux
-  driver binds all six controllers; and
+  five board LEDs on GPIO4 pins 8-12.  Five active-high blue QEMU LED objects
+  consume those lines, and an always-on green object represents the power LED.
+  Their intensity is available as a read-only QOM property.  Focused qtests
+  cover every bank, pin I/O, both interrupt modes, user-LED direction/data,
+  reset and migration; the pinned Linux driver binds all six controllers and
+  its standard ``gpio-leds`` driver switches all five user LEDs through sysfs;
+  and
 * a TH1520 pad-controller model with the three always-on and application-domain
   instances at their exact apertures and clocks.  It preserves the documented
   digital PADCFG/MUXCFG reset words, reserved-bit masks, system reset and
@@ -361,8 +373,9 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * a whole-machine migration test that moves DRAM, SRAM, per-hart base and
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
   CLINT, PLIC, AP clock/reset state, distinct state in all six UARTs and all
-  six I2C and GPIO controllers, the board EEPROM, SPI0, both APB timer
-  components, X-Gene RTC, TH1520 mailbox state, all three pad controllers and
+  six I2C and GPIO controllers, the board EEPROM, five user-LED intensities,
+  SPI0, both APB timer components, X-Gene RTC, TH1520 mailbox state, all three
+  pad controllers and
   all three storage controllers, both GMAC cores, PHY banks and both GMAC APB-glue
   instances, plus TH1520 USB misc/DRD, DWC3 and xHCI state together; and
 * a minimal device build that excludes unrelated boards and most unused
@@ -397,7 +410,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently passes 89 board qtests in the normal build and 88
+The focused gate currently passes 90 board qtests in the normal build and 89
 in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
 difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
 from the minimal configurations.  The four remaining USB tests cover exact
@@ -547,6 +560,18 @@ the six driver links in sysfs after all four harts start.  This establishes
 the mainline binding and modeled register/IRQ contract; it does not establish
 physical pulls, pinmux, electrical routing, debounce timing, synthesis IDs or
 GPIO-connected peripheral reset/wake behavior.
+
+The same Linux commit, rebuilt with ``CONFIG_LEDS_GPIO=y``, binds the five
+generated ``gpio-leds`` children as ``led1`` through ``led5``.  A freestanding
+initramfs first confirms that every brightness value is zero, turns all five
+on, then selects the alternating 1/3/5 pattern through sysfs.  QEMU's LED
+trace records the corresponding five blue ``USR0``-``USR4`` transitions and
+the guest reports:
+
+``LEDTEST_INIT: PASS Linux gpio-leds drove five blue user LEDs through GPIO4[8:12]``
+
+This proves the end-to-end Linux DT, GPIO-driver and QEMU LED connection.  It
+does not replace the owner-board comparison required by ``BOARD-002``.
 
 ## Intended source architecture
 

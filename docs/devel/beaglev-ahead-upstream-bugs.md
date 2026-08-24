@@ -36,6 +36,14 @@ implementation has no pre-existing QEMU regression to report.  Mainline
 Linux's missing TH1520 node and 32.768 kHz prescaler setup are Linux
 integration gaps, not QEMU bugs.  The conservative QEMU tally remains 10.
 
+The 2026-08-24 board-LED milestone did not add a QEMU report unit either.
+Upstream's generic LED device already accepts GPIO input and migrates its
+intensity; exposing that intensity read-only through QOM and wiring board
+consumers are feature work.  An older vendor Linux DTS calls the five user
+LEDs green, while the schematic, BOM and pinned mainline DTS identify them as
+blue.  That stale cross-project label is recorded under ``BOARD-002`` and is
+not a defect in pre-existing QEMU.  The conservative QEMU tally remains 10.
+
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
 xHCI models and were independently exposed by an upstream Linux host driver.

@@ -484,6 +484,23 @@ Focused qtests cover all bank widths, addresses, PLIC sources, AP clock IDs,
 DT aliases, five LED descriptions, pin input/output, interrupt modes and a
 pending edge across migration.
 
+The board model connects five active-high blue user LEDs to GPIO4 pins 8-12
+and represents the green power LED as continuously lit.  The schematic routes
+LED1-LED5 through DMG1012T transistors from those five GPIOs, and the pinned BOM
+identifies their fitted parts as blue while LED6 is green.  Their QOM paths are
+``/machine/usr0`` through ``/machine/usr4`` and ``/machine/power``; each has a
+read-only ``intensity-percent`` property.  GPIO data has no visible effect
+until its direction bit selects output.  Guest reset extinguishes the five
+user LEDs and leaves the power LED on, and user-LED intensity migrates with the
+GPIO state.
+
+Linux commit ``2709dd5ae32f0828f386327c76bba9f39f63a1c6``, rebuilt with its
+standard ``gpio-leds`` driver, exposes ``led1`` through ``led5`` in sysfs.  A
+freestanding initramfs turned all five on and then selected LEDs 1, 3 and 5;
+the matching QEMU trace recorded blue ``USR0``-``USR4`` intensity changes.
+This validates the software path but not the exact brightness or first-power-
+up behavior of the owner's board.
+
 Several GPIO details remain deliberately provisional.  QEMU follows the Linux
 driver convention that a set direction bit means output, despite ambiguous
 wording in the publicly hosted TH1520 manual.  Debounce selection is retained
@@ -569,8 +586,9 @@ A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
 APB timer components, both AP watchdogs, the RTC, TH1520 mailbox, MR75203 PVT,
-all six GPIO controllers, all three pad controllers, storage, GMAC, the USB
-miscellaneous and DRD wrappers, DWC3 and xHCI state in one stream.
+all six GPIO controllers, five user-LED intensities, all three pad controllers,
+storage, GMAC, the USB miscellaneous and DRD wrappers, DWC3 and xHCI state in
+one stream.
 Focused migration tests additionally preserve an in-flight I2C read and
 EEPROM address pointer, two running watchdogs at different stages, a running
 APB timer with a latched interrupt, a running TH1520 PWM phase with a pending
@@ -579,8 +597,8 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 89 tests in the normal build and
-88 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
+device tests, the complete board gate passes 90 tests in the normal build and
+89 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
 omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
