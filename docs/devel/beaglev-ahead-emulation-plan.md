@@ -533,6 +533,23 @@ as firmware ELFs on the four-hart machine under the normal,
 dependency-minimal and ASan/UBSan builds; the complete normal TCG suite also
 passes.  Physical C910 stepping behavior remains under the hardware ledger.
 
+The XTheadVector floating-point state milestone adds a third architectural
+payload.  It requires one representative from all 18 floating-point
+decode-check families to trap while FS is Off and then proves those same raw
+encodings decode with FS enabled.  It also rejects the unsupported e8
+single-width and e64 widening reductions, and independently checks that an
+integer reduction traps with VS Off.  Functional divide, square-root,
+comparison and reduction cases cover all six exception-producing helper-loop
+families: new DZ, NV and OF+NX flags make FS Dirty, while an exact division
+leaves both ``fflags`` and FS unchanged.  This exposed and fixed missing FS/VS
+legality checks, unsafe reduction widths and missing exception-state
+propagation inherited from the public unmerged April 2024 XTheadVector series.
+The three payloads pass as board firmware under the normal,
+dependency-minimal and ASan/UBSan builds.  The complete normal RISC-V TCG
+guest suite and all 17 runnable RISC-V qtest suites, including the 100-case
+board suite, remain green.  Silicon NaN, exception and stepping-specific
+behavior remains explicitly unverified under ``CPU-006``.
+
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
 MXSTATUS.MM and the SXSTATUS.MM alias across TB boundaries; exercises
@@ -923,7 +940,11 @@ smoke test are present.  Illegal register-form ``th.vsetvl`` now preserves its
 source while producing the required ``vill``/zero-``vl`` state.  A second
 payload covers ``vstart`` WARL/prestart/early-exit behavior, mask-undisturbed
 and tail-zero results, sticky saturation and all four fixed-point rounding
-modes.  Vector loads/stores now enforce natural alignment
+modes.  A third payload covers FS-Off legality across every floating-point
+decode-check family, exception-driven ``fflags``/FS-Dirty propagation through
+all six helper-loop families, no-exception state preservation, VS-Off
+reduction legality and unsupported floating-point reduction widths.  Vector
+loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
 RVV translation is explicitly gated on Zve32x so overlapping store encodings
@@ -933,6 +954,7 @@ paths, plus segment fault-only-first crossings that distinguish element-zero
 traps from later-element ``vl`` truncation.  P3 is not closed:
 the remaining per-instruction/mask/``vstart`` combinations, randomized
 differential testing, broader segment/index/fault-only-first page-priority
+combinations, corresponding scalar floating-point extension/property
 combinations, OS context/signal/ptrace coverage, XTheadZvamo availability and
 physical-silicon comparison remain open.
 

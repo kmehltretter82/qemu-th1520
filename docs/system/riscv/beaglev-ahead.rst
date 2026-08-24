@@ -217,8 +217,13 @@ The XTheadVector engine covers the frozen instruction set, CSR/status layout,
 debug register file, reset, and migration state.  Architectural guests cover
 illegal ``th.vsetvl`` WARL and source preservation, ``vstart`` prestart and
 early-exit behavior, mask-undisturbed and tail-zero results, sticky saturation
-and all four fixed-point rounding modes.  This is still not the exhaustive,
-randomized differential coverage needed to claim silicon equivalence.  MAEE
+and all four fixed-point rounding modes.  A floating-point state guest covers
+FS-Off legality across every decoder family, VS-Off reduction legality,
+unsupported reduction widths and exception-driven ``fflags``/FS-Dirty updates
+through all six helper-loop families; it also proves an exact operation does
+not spuriously dirty FS.  Physical C910 NaN, exception and stepping behavior
+has not yet been compared.  This is still not the exhaustive, randomized
+differential coverage needed to claim silicon equivalence.  MAEE
 PTE bits 63:59 are carried
 through translation while MAEE is enabled.  When MAEE is clear, C910 ignores
 those PTE bits and obtains attributes from its physical system map; QEMU

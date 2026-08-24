@@ -27,8 +27,8 @@ The current conservative tally is:
   not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **6 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L006`), which must not be reported as existing
+* **7 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L007`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -129,6 +129,18 @@ patch-series review finding, not a released-upstream GitLab report unit.  A
 guest reproducer now proves source preservation plus register/immediate WARL
 state, and a separate state payload covers ``vstart``, mask/tail, saturation
 and rounding boundaries.
+
+The following XTheadVector floating-point state audit also leaves the proposed
+report tally at 11.  It found ``UQ-L007`` in code imported from the public,
+unmerged April 2024 XTheadVector series: floating-point instructions ignored
+``mstatus.FS=Off``; newly accrued ``fflags`` did not make FS Dirty; the shared
+reduction check ignored VS=Off; and floating-point reductions admitted element
+widths for which no helper exists.  Audited upstream ``master`` has no
+XTheadVector translator, so this is a review finding for a revived series or
+vendor fork, not a released-upstream QEMU bug.  A third architectural payload
+now covers every floating-point decode-check family, all six exception-producing
+helper-loop families, exact/no-exception state and the unsupported reduction
+widths.
 
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
@@ -1058,6 +1070,57 @@ and ``vl`` to become zero, ``vtype.vill`` to be the only readable type bit and
 ``vstart`` to reset.  The immediate form checks the same WARL state.  The
 translator now copies the operand to a temporary before replacing the
 temporary on the illegal path.
+
+### UQ-L007: XTheadVector FP and reduction paths bypassed status rules
+
+Status: **FIXED PUBLIC PATCH-SERIES DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The frozen vector 0.7.1 contract inherited by XTheadVector requires a vector
+floating-point instruction to trap when ``mstatus.FS`` is Off.  When such an
+instruction newly accrues a floating-point exception, it modifies ``fflags``
+and therefore must make FS Dirty.  XTheadVector reductions are still vector
+instructions and must also trap when VS is Off.  Finally, the extension has no
+8-bit floating-point reduction type and no 64-to-128-bit widening reduction.
+
+The imported translator used the ordinary ``require_xtheadvector`` predicate
+for every floating-point decode-check family, so all of them ran with FS Off.
+Six floating-point helper-loop families updated ``env->fp_status`` without
+calling ``riscv_cpu_check_fflags``, leaving FS Initial even when ``fflags``
+changed.  The shared reduction predicate omitted ``require_xtheadvector``
+entirely.  It also allowed single-width floating-point reduction at SEW=8 and
+widening floating-point reduction at SEW=64, selecting outside their helper
+dispatch tables.
+
+The affected implementation was ported from Alibaba/XuanTie QEMU commit
+``3287d345c7f5d60d5c8774d90752f5f710744f85`` and is represented by the
+[April 2024 qemu-devel 65-patch XTheadVector series](https://lists.nongnu.org/archive/html/qemu-riscv/2024-04/msg00059.html),
+including its floating-point arithmetic/reduction and scalar-move patches.
+That series was not merged.  Audited upstream QEMU ``master`` commit
+``bde2492aace2b5acb755a5b057013e915163a77f`` has no XTheadVector translator,
+so none of these paths can be reproduced there.  Upstream commit
+``66e4d3517bc71d5df22803880ff5be09a0269543`` independently fixed the analogous
+``fflags``/FS-Dirty omission in the ratified RVV helper loops in June 2026;
+that is supporting precedent, not evidence that XTheadVector was merged.
+
+The fix gives every XTheadVector floating-point predicate a common FS-enabled
+gate, makes the reduction predicate require VS, rejects unsupported reduction
+widths before helper selection, and snapshots/checks exception flags around
+all six floating-point helper-loop families.  A fail-before prototype first
+stopped at stage 1 because ``th.vfdiv.vv`` executed with FS Off.  With only the
+decode gate applied it advanced to stage 6, where divide-by-zero set DZ but
+left FS Initial.  The final freestanding payload requires 18 representative
+floating-point encodings to trap with FS Off, proves each same encoding is
+otherwise legal, checks the two invalid reduction widths, and exercises
+vector-vector, vector-scalar, unary, both comparison and reduction helper
+families.  It verifies DZ/NV/OF+NX and FS Dirty, while an exact division proves
+that a no-exception operation does not spuriously dirty FS.  The ordinary
+vector payload independently proves an integer reduction traps with VS Off.
+
+Keep this as a patch review item in any revived XTheadVector submission and as
+a vendor-fork issue candidate.  Do not file it as a current QEMU GitLab bug
+unless an independent reproducer is found in code present on upstream
+``master``.  Physical C910 conformance, including stepping-specific exception
+and NaN behavior, remains unverified under ``CPU-006``.
 
 The following are also not counted as upstream QEMU bugs at present:
 
