@@ -73,6 +73,14 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_PWM]   = { 0xffec01c000, 0x00004000 },
     [TH1520_DEV_TIMER0_3] = { 0xffefc32000, 0x00001000 },
     [TH1520_DEV_TIMER4_7] = { 0xffffc33000, 0x00001000 },
+    [TH1520_DEV_MBOX_LOCAL] = { 0xffffc38000,
+                                 TH1520_MBOX_LOCAL_MMIO_SIZE },
+    [TH1520_DEV_MBOX_REMOTE0] = { 0xffffc40000,
+                                   TH1520_MBOX_REMOTE0_MMIO_SIZE },
+    [TH1520_DEV_MBOX_REMOTE1] = { 0xffffc4c000,
+                                   TH1520_MBOX_REMOTE1_MMIO_SIZE },
+    [TH1520_DEV_MBOX_REMOTE2] = { 0xffffc54000,
+                                   TH1520_MBOX_REMOTE2_MMIO_SIZE },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -363,6 +371,7 @@ static void th1520_soc_init(Object *obj)
                              TH1520_TIMER_COMPONENT_VERSION);
         qdev_connect_clock_in(DEVICE(&s->timer[i]), "timer", s->timer_clk);
     }
+    object_initialize_child(obj, "mbox", &s->mbox, TYPE_TH1520_MBOX);
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
                          TH1520_DMAC_CHANNELS);
@@ -585,6 +594,21 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
             TH1520_AP_RESET_TIMER0_3 + i,
             qdev_get_gpio_in_named(DEVICE(timer), "reset", 0));
     }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->mbox), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->mbox), 0,
+                    th1520_memmap[TH1520_DEV_MBOX_LOCAL].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->mbox), 1,
+                    th1520_memmap[TH1520_DEV_MBOX_REMOTE0].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->mbox), 2,
+                    th1520_memmap[TH1520_DEV_MBOX_REMOTE1].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->mbox), 3,
+                    th1520_memmap[TH1520_DEV_MBOX_REMOTE2].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->mbox), 0,
+                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                              TH1520_MBOX_IRQ));
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
         return;
@@ -910,6 +934,13 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     };
     static const char *const spi_compat[] = {
         "thead,th1520-spi", "snps,dw-apb-ssi"
+    };
+    static const char *const mbox_reg_names[] = {
+        "local", "remote-icu0", "remote-icu1", "remote-icu2"
+    };
+    static const char *const mbox_clock_names[] = {
+        "clk-local", "clk-remote-icu0", "clk-remote-icu1",
+        "clk-remote-icu2"
     };
     MachineState *ms = MACHINE(s);
     uint32_t intc_phandles[TH1520_C910_HARTS];
@@ -1288,6 +1319,36 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
         }
     }
+
+    qemu_fdt_add_subnode(ms->fdt, "/soc/mailbox@ffffc38000");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/mailbox@ffffc38000",
+                            "compatible", "thead,th1520-mbox");
+    qemu_fdt_setprop_sized_cells(
+        ms->fdt, "/soc/mailbox@ffffc38000", "reg",
+        2, th1520_memmap[TH1520_DEV_MBOX_LOCAL].base,
+        2, th1520_memmap[TH1520_DEV_MBOX_LOCAL].size,
+        2, th1520_memmap[TH1520_DEV_MBOX_REMOTE0].base,
+        2, th1520_memmap[TH1520_DEV_MBOX_REMOTE0].size,
+        2, th1520_memmap[TH1520_DEV_MBOX_REMOTE1].base,
+        2, th1520_memmap[TH1520_DEV_MBOX_REMOTE1].size,
+        2, th1520_memmap[TH1520_DEV_MBOX_REMOTE2].base,
+        2, th1520_memmap[TH1520_DEV_MBOX_REMOTE2].size);
+    qemu_fdt_setprop_string_array(ms->fdt, "/soc/mailbox@ffffc38000",
+                                  "reg-names", (char **)&mbox_reg_names,
+                                  ARRAY_SIZE(mbox_reg_names));
+    qemu_fdt_setprop_cells(ms->fdt, "/soc/mailbox@ffffc38000", "clocks",
+                           ap_clock_phandle, TH1520_CLK_MBOX0,
+                           ap_clock_phandle, TH1520_CLK_MBOX1,
+                           ap_clock_phandle, TH1520_CLK_MBOX2,
+                           ap_clock_phandle, TH1520_CLK_MBOX3);
+    qemu_fdt_setprop_string_array(ms->fdt, "/soc/mailbox@ffffc38000",
+                                  "clock-names",
+                                  (char **)&mbox_clock_names,
+                                  ARRAY_SIZE(mbox_clock_names));
+    qemu_fdt_setprop_cells(ms->fdt, "/soc/mailbox@ffffc38000",
+                           "interrupts", TH1520_MBOX_IRQ, 4);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/mailbox@ffffc38000",
+                          "#mbox-cells", 1);
 
     dmac_name = g_strdup_printf("/soc/dma-controller@%" HWADDR_PRIx,
                                 th1520_memmap[TH1520_DEV_DMAC0].base);

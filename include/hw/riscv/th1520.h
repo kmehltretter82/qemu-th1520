@@ -15,6 +15,7 @@
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_mbox.h"
 #include "hw/misc/th1520_pinctrl.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
@@ -46,6 +47,7 @@ struct TH1520SoCState {
     THeadC900PLICState plic;
     TH1520APClockState ap_clock;
     TH1520APResetState ap_reset;
+    TH1520MboxState mbox;
     DWAPBUARTState uart[TH1520_UART_COUNT];
     DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
     TH1520PadCtrlState padctrl[TH1520_PADCTRL_COUNT];
@@ -103,6 +105,10 @@ enum {
     TH1520_DEV_PWM,
     TH1520_DEV_TIMER0_3,
     TH1520_DEV_TIMER4_7,
+    TH1520_DEV_MBOX_LOCAL,
+    TH1520_DEV_MBOX_REMOTE0,
+    TH1520_DEV_MBOX_REMOTE1,
+    TH1520_DEV_MBOX_REMOTE2,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
@@ -188,6 +194,12 @@ enum {
 #define TH1520_TIMER_INPUT_FREQ 125000000
 #define TH1520_TIMER_CHANNEL_STRIDE 0x14
 #define TH1520_TIMER_COMPONENT_VERSION 0x3231322a
+
+#define TH1520_MBOX_IRQ 28
+#define TH1520_CLK_MBOX0 72
+#define TH1520_CLK_MBOX1 73
+#define TH1520_CLK_MBOX2 74
+#define TH1520_CLK_MBOX3 75
 
 #define BEAGLEV_AHEAD_EEPROM_ADDRESS 0x50
 #define BEAGLEV_AHEAD_EEPROM_SIZE 4096
