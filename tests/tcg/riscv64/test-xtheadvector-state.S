@@ -22,6 +22,7 @@ _start:
     csrw    mtvec, t0
     li      t0, MSTATUS_FS_INITIAL | MSTATUS_VS_THEAD
     csrs    mstatus, t0
+    li      s11, 0
 
     /* Load mask, source and old destination with the full 16-byte VLEN. */
     li      t1, 16
@@ -93,6 +94,43 @@ _start:
     addi    t1, t1, 1
     addi    t2, t2, -1
     bnez    t2, 2b
+
+    /*
+     * th.vmfirst.m cannot restart: Vector v0.7.1 requires an illegal
+     * instruction exception when th.vstart is nonzero.  The exception must
+     * leave both the scalar destination and th.vstart unchanged.
+     */
+    lla     t2, vmfirst_input
+    .word   0x12038087      /* th.vlb.v v1, (t2) */
+    li      t0, 1
+    csrw    0x008, t0       /* th.vstart */
+    li      t5, 0x55
+    li      s11, 1
+    .word   0x56102f57      /* th.vmfirst.m t5, v1 */
+    li      t0, 2
+    bne     s11, t0, fail_11
+    li      t0, 0x55
+    bne     t5, t0, fail_12
+    csrr    t0, 0x008
+    li      t1, 1
+    bne     t0, t1, fail_13
+
+    /* Legal execution finds the first set mask element and clears vstart. */
+    csrw    0x008, zero
+    .word   0x56102f57      /* th.vmfirst.m t5, v1 */
+    li      t0, 2
+    bne     t5, t0, fail_14
+    csrr    t0, 0x008
+    bnez    t0, fail_15
+
+    /* With no set element, the architectural result is -1. */
+    lla     t2, vmfirst_empty
+    .word   0x12038087      /* th.vlb.v v1, (t2) */
+    .word   0x56102f57      /* th.vmfirst.m t5, v1 */
+    li      t0, -1
+    bne     t5, t0, fail_16
+    csrr    t0, 0x008
+    bnez    t0, fail_17
 
     /* Unsigned saturation sets a sticky vxsat only on overflowing lanes. */
     lla     t2, saturation_input
@@ -195,8 +233,16 @@ _start:
     j       exit
 
 trap:
-    li      a0, 12
-    j       exit
+    li      t0, 1
+    bne     s11, t0, fail_unexpected_trap
+    csrr    t0, mcause
+    li      t1, 2
+    bne     t0, t1, fail_18
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    li      s11, 2
+    mret
 
 fail_1:  li a0, 1;  j exit
 fail_2:  li a0, 2;  j exit
@@ -208,8 +254,19 @@ fail_7:  li a0, 7;  j exit
 fail_8:  li a0, 8;  j exit
 fail_9:  li a0, 9;  j exit
 fail_10: li a0, 10; j exit
+fail_11: li a0, 11; j exit
+fail_12: li a0, 12; j exit
+fail_13: li a0, 13; j exit
+fail_14: li a0, 14; j exit
+fail_15: li a0, 15; j exit
+fail_16: li a0, 16; j exit
+fail_17: li a0, 17; j exit
+fail_18: li a0, 18; j exit
+fail_unexpected_trap:
+    li      a0, 19
+    j       exit
 fail_rounding:
-    li      a0, 75          /* 11 + (64 - remaining byte count). */
+    li      a0, 84          /* 20 + (64 - remaining byte count). */
     sub     a0, a0, t2
     j       exit
 
@@ -241,6 +298,11 @@ add_input:
 old_dest:
     .byte   0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7
     .byte   0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf
+vmfirst_input:
+    .byte   0, 0, 1, 0, 0, 1, 0, 0
+    .byte   0, 0, 0, 0, 0, 0, 0, 0
+vmfirst_empty:
+    .zero   16
 masked_expected:
     .byte   0xa0, 0xa1, 0xa2, 0xa3, 43, 0xa5, 63, 0xa7
     .byte   83, 0xa9, 103, 0xab, 0, 0, 0, 0

@@ -2585,7 +2585,8 @@ static bool trans_th_vmpopc_m(DisasContext *s, arg_rmr *a)
 static bool trans_th_vmfirst_m(DisasContext *s, arg_rmr *a)
 {
     if (require_xtheadvector(s) &&
-        vext_check_isa_ill(s)) {
+        vext_check_isa_ill(s) &&
+        s->vstart_eq_zero) {
         TCGv_ptr src2, mask;
         TCGv dst;
         TCGv_i32 desc;
