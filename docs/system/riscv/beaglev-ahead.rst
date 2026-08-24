@@ -51,6 +51,11 @@ The machine currently provides:
   ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
   sources 16 through 23.  All eight individual timer nodes remain disabled in
   the board device tree, matching upstream Linux;
+* two Synopsys DesignWare APB watchdogs at ``0xffefc30000`` and
+  ``0xffefc31000``.  They count at 125 MHz, connect to PLIC sources 24 and 25,
+  and use AP clock IDs 76/77 and reset IDs 3/4.  Both generated nodes remain
+  board-disabled because current upstream Linux has not added them to the
+  TH1520 device tree;
 * one TH1520 mailbox controller with its 24 KiB local aperture at
   ``0xffffc38000`` and remote-ICU resources at ``0xffffc40000``,
   ``0xffffc4c000`` and ``0xffffc54000``.  Its generated binding uses AP clock
@@ -89,8 +94,9 @@ The machine currently provides:
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
 SPI0, PWM, APB timer, PVT, GPIO, pinctrl, storage, memory, and cache topology
 bindings as upstream Linux's TH1520 device tree, augmented with the
-schematic-established board EEPROM.  It advertises ``xtheadvector`` and
-``thead,vlenb = <16>`` for every C910 hart.
+schematic-established board EEPROM and two disabled generic DesignWare
+watchdog nodes.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for
+every C910 hart.
 
 Boot options
 ------------
@@ -309,6 +315,47 @@ freestanding init.  Interrupt delivery is independently exercised by a
 bare-metal payload through PLIC source 16.  These test-only Linux changes are
 not part of QEMU or a proposed Linux fix.
 
+The two application-domain watchdogs use a reusable Synopsys DesignWare APB
+model.  It implements aligned 32-bit control, timeout-range, current-count,
+restart, interrupt-status and read-to-clear EOI registers, plus configurable
+component-parameter, version and type registers.  Enable is sticky until
+reset.  Fixed timeout ranges count exact input-clock ticks; ``TOP_INIT`` is
+used only for the first period after enable, while later stages and valid
+``0x76`` restart writes use ``TOP``.  Reset mode invokes QEMU's configured
+watchdog action on the first expiry.  Interrupt mode asserts the PLIC on the
+first expiry and invokes that action after a second uncleared period.  Reading
+EOI clears the interrupt without restarting the counter.  Register, timer,
+IRQ and stage state migrates.
+
+Both TH1520 instances use a provisional fixed 125 MHz input, level-high PLIC
+sources 24/25, and the active-low AP reset bits at ``0xffef014034`` and
+``0xffef014038``.  Asserting either reset affects only its corresponding
+watchdog in QEMU.  The generated nodes use ``snps,dw-wdt``, AP clock IDs 76/77
+and reset IDs 3/4, but remain disabled because the pinned upstream TH1520 DTS
+contains no watchdog nodes.  A controlled external-DT test enabled both nodes
+on Linux commit ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` with
+``CONFIG_DW_WATCHDOG`` and ``CONFIG_RESET_TH1520``.  Both watchdog-class
+devices bound, started, reported positive time left, accepted a keepalive and
+stopped through their reset controls.
+
+The DesignWare component type ``0x44570120`` and fixed-TOP capability are
+represented.  The TH1520 component version and the remaining synthesis
+parameters have not been observed, so they deliberately read zero.  QEMU
+currently selects ``0x0000ffff`` for the reset current-count value because
+the available integration material conflicts with its field description.
+Exact AP clock programming, timeout edge convention, reset pulse/scope and
+retention, component identities, access behavior outside aligned 32-bit
+words, and the additional AO/audio watchdogs remain owner-hardware validation
+items.
+
+The RTC is deliberately not modeled yet.  A public vendor kernel describes an
+``apm,xgene-rtc``-compatible block at ``0xfffff40000`` on PLIC source 74, but
+its locally modified driver programs a 32.768 kHz prescaler and an additional
+enable bit that are absent from the mainline X-Gene driver.  Current mainline
+TH1520 device trees omit the node.  QEMU therefore does not claim that an
+unmodified X-Gene RTC model has the correct TH1520 epoch, rate, alarm, wake or
+retention behavior.
+
 The TH1520 mailbox matches the public upstream Linux binding: one 24 KiB local
 resource plus three remote-ICU resources, AP clock IDs 72 through 75 and
 level-high PLIC source 28.  The Linux driver accesses four 4 KiB local channel
@@ -449,17 +496,17 @@ the silicon reset sequence.
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
-APB timer components, TH1520 mailbox and MR75203 PVT state, all six GPIO
-controllers, all three pad controllers, storage and GMAC state in one stream.
-Focused migration
-tests additionally preserve an in-flight I2C read and EEPROM address pointer,
-a running APB timer with a latched interrupt, a running TH1520 PWM phase with a
-pending update, a mailbox event and remote-window data, plus completed
-AXI-DMAC data/register/interrupt state.  The PVT migration test preserves
-guest registers, sample counters, temperature/voltage inputs and their
-resulting conversions.  Together with the focused device tests, the complete
-75-test board gate runs
-in the full, dependency-minimal and ASan/UBSan builds.  The
+APB timer components, both AP watchdogs, TH1520 mailbox and MR75203 PVT state,
+all six GPIO controllers, all three pad controllers, storage and GMAC state in
+one stream.
+Focused migration tests additionally preserve an in-flight I2C read and
+EEPROM address pointer, two running watchdogs at different stages, a running
+APB timer with a latched interrupt, a running TH1520 PWM phase with a pending
+update, a mailbox event and remote-window data, plus completed AXI-DMAC
+data/register/interrupt state.  The PVT migration test preserves guest
+registers, sample counters, temperature/voltage inputs and their resulting
+conversions.  Together with the focused device tests, the complete 82-test
+board gate runs in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
@@ -468,7 +515,7 @@ warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
 QSPI/XIP, board SPI peripherals and timer PWM outputs, PVT alarm/timer/IRQ and
-analog timing fidelity, RTC/watchdog, USB,
+analog timing fidelity, RTC and non-application watchdogs, USB,
 PCIe, display, audio, camera, video codecs, GPU, NPU, the C906 and E902
 auxiliary cores, DSPs, security blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.

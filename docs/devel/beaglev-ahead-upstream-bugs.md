@@ -25,6 +25,11 @@ The 2026-08-24 MR75203 PVT milestone did not add a report unit.  Its missing
 alarm, timer, conversion-latency and interrupt behavior is new-model scope,
 not a defect in pre-existing upstream QEMU.
 
+The 2026-08-24 DesignWare watchdog milestone likewise did not add a report
+unit.  Upstream had no reusable DW APB watchdog model to regress, and the
+TH1520 integration, provisional synthesis values and hardware uncertainties
+are new-board scope rather than defects in pre-existing QEMU code.
+
 A report unit groups symptoms that have the same subsystem, reproducer, and
 likely fix.  A maintainer may reasonably split `UQ-003`, `UQ-004`, or
 `UQ-007`, so the eventual issue count can increase without discovering a new
