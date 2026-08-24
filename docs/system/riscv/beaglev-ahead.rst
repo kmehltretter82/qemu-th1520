@@ -148,6 +148,18 @@ after it, generates the device tree, and installs a small reset trampoline in
 the mask-ROM aperture.  ``-bios none`` is also accepted for low-level tests
 that load all code explicitly.
 
+A bare M-mode ELF should instead be supplied as firmware so the reset
+trampoline jumps to its ELF entry point.  For example:
+
+.. code-block:: bash
+
+   qemu-system-riscv64 -M beaglev-ahead \
+       -bios test.elf -display none -semihosting
+
+``-bios none -kernel test.elf`` is not equivalent: without firmware the reset
+trampoline jumps to the start of DRAM and the ``-kernel`` entry is an SBI
+next-stage address.
+
 Passing ``-dtb file.dtb`` replaces the generated tree and passes that external
 tree through the same firmware handoff.  This is useful for controlled driver
 experiments; the supplied tree remains responsible for describing the real
@@ -202,9 +214,12 @@ as a distinct optional extension and is conservatively disabled for C910
 pending physical-board confirmation.
 
 The XTheadVector engine covers the frozen instruction set, CSR/status layout,
-debug register file, reset, and migration state.  Current regression coverage
-is an architectural smoke test rather than the exhaustive and differential
-coverage needed to claim silicon equivalence.  MAEE PTE bits 63:59 are carried
+debug register file, reset, and migration state.  Architectural guests cover
+illegal ``th.vsetvl`` WARL and source preservation, ``vstart`` prestart and
+early-exit behavior, mask-undisturbed and tail-zero results, sticky saturation
+and all four fixed-point rounding modes.  This is still not the exhaustive,
+randomized differential coverage needed to claim silicon equivalence.  MAEE
+PTE bits 63:59 are carried
 through translation while MAEE is enabled.  When MAEE is clear, C910 ignores
 those PTE bits and obtains attributes from its physical system map; QEMU
 matches the ignore behavior but does not yet model the unknown TH1520 physical

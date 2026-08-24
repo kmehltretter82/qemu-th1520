@@ -27,8 +27,8 @@ The current conservative tally is:
   not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **5 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L005`), which must not be reported as existing
+* **6 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L006`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -118,6 +118,17 @@ therefore feature and patch-series review work, not regressions in an existing
 upstream QEMU device.  Focused tests found no independent defect in QEMU's
 generic ``ptimer`` engine.  The conservative tally remains 11 proposed new
 reports.
+
+The XTheadVector state milestone likewise leaves the proposed-report tally at
+11.  It found ``UQ-L006``: the illegal-``vtype`` path in ``th_vsetvl`` used its
+input ``TCGv`` as scratch, changing a register-form instruction's guest
+``rs2`` to ``0xff``.  The same code appears in the public April 2024
+qemu-devel XTheadVector patch 7/65, but that series was not merged and current
+upstream QEMU has no XTheadVector translator.  This is therefore a public
+patch-series review finding, not a released-upstream GitLab report unit.  A
+guest reproducer now proves source preservation plus register/immediate WARL
+state, and a separate state payload covers ``vstart``, mask/tail, saturation
+and rounding boundaries.
 
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
@@ -1017,6 +1028,36 @@ The upstream baseline has no C910 CPU or XTheadMaee implementation, so it
 cannot reproduce this defect.  Keep the fix and corrected test in the future
 C910 series.  Do not file it as an upstream QEMU bug unless an independent
 problem is found in a pre-existing CPU's standard Sv39 handling.
+
+### UQ-L006: illegal th.vsetvl changed its source register
+
+Status: **FIXED PUBLIC PATCH-SERIES DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The XTheadVector translator accepted the raw ``vtype`` operand as a ``TCGv``.
+On RV64, register-form ``th.vsetvl`` passed the guest ``rs2`` global directly.
+When reserved EDIV or upper bits made the type illegal, the translator wrote
+``0xff`` into that input while constructing a value that the reusable RVV
+helper would reject.  The instruction consequently set ``vill`` and zeroed
+``vl`` as intended but also changed a source-only guest register.  Immediate
+form passed a TCG constant through the same write-as-scratch path.
+
+The defect is present verbatim in the public
+[April 2024 qemu-devel patch 7/65](https://www.mail-archive.com/qemu-devel@nongnu.org/msg1035937.html)
+and Alibaba/XuanTie QEMU commit
+``3287d345c7f5d60d5c8774d90752f5f710744f85``, from which this branch was
+ported.  That XTheadVector series was not merged, and audited upstream QEMU
+``master`` commit ``bde2492aace2b5acb755a5b057013e915163a77f`` has no
+equivalent translator.  The appropriate handoff is a review note on a revived
+series or a vendor-fork issue, not a GitLab report claiming a released QEMU
+regression.
+
+The freestanding regression programs reserved EDIV through distinct ``rd``,
+``rs1`` and ``rs2`` registers.  Before the fix it exits at stage 20 because
+``rs2`` becomes ``0xff``.  It now requires ``rs2`` to remain ``0x20``, ``rd``
+and ``vl`` to become zero, ``vtype.vill`` to be the only readable type bit and
+``vstart`` to reset.  The immediate form checks the same WARL state.  The
+translator now copies the operand to a temporary before replacing the
+temporary on the illegal path.
 
 The following are also not counted as upstream QEMU bugs at present:
 

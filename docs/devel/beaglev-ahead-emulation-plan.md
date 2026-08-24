@@ -207,7 +207,7 @@ validation.
 | C910 identity | Missing | New thead-c910 CPU model and exact reset/ID configuration |
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
-| C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
+| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
@@ -282,8 +282,9 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
   and CSR behavior, debugger/migration integration, naturally aligned vector
-  load/store enforcement independent of MXSTATUS.MM, and focused qtest/TCG
-  smoke coverage; and
+  load/store enforcement independent of MXSTATUS.MM, source-preserving
+  illegal ``th.vsetvl`` handling, and focused qtest/TCG coverage for WARL,
+  ``vstart``, mask/tail, saturation and rounding behavior; and
 * a reusable C900 CLINT derived from pinned openC910 RTL and OpenSBI behavior,
   with exact M/S software and timer banks, four-hart wiring, a 3 MHz time CSR,
   reset and migration state, qtests for every output, and a TCG privilege/CSR
@@ -496,7 +497,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently passes 98 board qtests in the normal build and 97
+The focused gate currently passes 100 board qtests in the normal build and 99
 in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
 difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
 from the minimal configurations.  The four remaining USB tests cover exact
@@ -516,7 +517,21 @@ cover M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passes 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passes.  Dependency-minimal and ASan/UBSan configurations each pass
-their four available BeagleV Ahead CSR/migration subtests.
+99 board tests plus their four available C910 CSR/migration subtests.
+
+The XTheadVector state milestone adds a second architectural payload.  A
+reserved-EDIV ``th.vsetvl`` regression first failed because the translator
+used its source ``TCGv`` as scratch and changed the guest ``rs2`` register to
+``0xff``.  The translator now copies the operand before synthesizing an
+illegal RVV-format value.  Register and immediate forms both produce
+``vill``, zero ``vl`` and ``vstart`` without source corruption.  The separate
+state payload proves the 128-bit ``vstart`` write mask, prestart preservation,
+the ``vstart >= vl`` no-write rule, mask-undisturbed and tail-zero behavior,
+sticky unsigned saturation, and all four fixed-point rounding modes.  These
+are specification regressions.  Both payloads park secondary harts and pass
+as firmware ELFs on the four-hart machine under the normal,
+dependency-minimal and ASan/UBSan builds; the complete normal TCG suite also
+passes.  Physical C910 stepping behavior remains under the hardware ledger.
 
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
@@ -531,9 +546,9 @@ checks 23 exact traps, trap values, mapped misaligned scalar success, aligned
 missing-page faults, second-page scalar fault priority with MM set,
 misalignment priority with MM clear, atomic/vector priority independent of MM,
 and no visible first-page bytes from the tested faulting word store.  The full
-normal TCG suite, 98 board qtests and three CSR qtests pass.  Both alignment
-payloads pass in the dependency-minimal build; the new guarded-page payload
-also passes ASan/UBSan with only QEMU's expected coroutine warning.  The
+normal TCG suite passes.  Both alignment payloads pass in the
+dependency-minimal build; the new guarded-page payload also passes ASan/UBSan
+with only QEMU's expected coroutine warning.  The
 aggregate minimal TCG target is intentionally inapplicable because it begins
 with tests for the omitted generic ``virt`` machine; the explicitly enumerated
 board-compatible subset is the pruning gate.
@@ -904,7 +919,11 @@ Gate P3:
 
 Status: in progress.  The vendor-derived execution engine, 128-bit state,
 custom CSRs, migration/debug integration and a discriminating architectural
-smoke test are present.  Vector loads/stores now enforce natural alignment
+smoke test are present.  Illegal register-form ``th.vsetvl`` now preserves its
+source while producing the required ``vill``/zero-``vl`` state.  A second
+payload covers ``vstart`` WARL/prestart/early-exit behavior, mask-undisturbed
+and tail-zero results, sticky saturation and all four fixed-point rounding
+modes.  Vector loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
 RVV translation is explicitly gated on Zve32x so overlapping store encodings
@@ -912,10 +931,10 @@ reach the legacy decoder.  MAEE coverage includes strong-order faults at every
 element width through unit-stride, strided, indexed and two-field segment
 paths, plus segment fault-only-first crossings that distinguish element-zero
 traps from later-element ``vl`` truncation.  P3 is not closed:
-per-instruction/mask/``vstart`` boundaries, randomized differential testing,
-broader segment/index/fault-only-first page-priority combinations, OS
-context/signal/ptrace coverage, XTheadZvamo availability and physical-silicon
-comparison remain open.
+the remaining per-instruction/mask/``vstart`` combinations, randomized
+differential testing, broader segment/index/fault-only-first page-priority
+combinations, OS context/signal/ptrace coverage, XTheadZvamo availability and
+physical-silicon comparison remain open.
 
 ### Phase 4 — authentic reset and boot
 
