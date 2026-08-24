@@ -51,6 +51,12 @@ The machine currently provides:
   ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
   sources 16 through 23.  All eight individual timer nodes remain disabled in
   the board device tree, matching upstream Linux;
+* one TH1520 mailbox controller with its 24 KiB local aperture at
+  ``0xffffc38000`` and remote-ICU resources at ``0xffffc40000``,
+  ``0xffffc4c000`` and ``0xffffc54000``.  Its generated binding uses AP clock
+  IDs 72 through 75 and level-high PLIC source 28.  Only the C910-visible
+  local-side register contract is modeled; no remote CPU or firmware endpoint
+  is attached;
 * six DesignWare APB GPIO controllers at ``0xffec005000``, ``0xffec006000``,
   ``0xffe7f34000``, ``0xffe7f38000``, ``0xfffff52000``, and
   ``0xfffff41000``.  Their 157 Linux-described GPIO lines support input,
@@ -298,6 +304,24 @@ freestanding init.  Interrupt delivery is independently exercised by a
 bare-metal payload through PLIC source 16.  These test-only Linux changes are
 not part of QEMU or a proposed Linux fix.
 
+The TH1520 mailbox matches the public upstream Linux binding: one 24 KiB local
+resource plus three remote-ICU resources, AP clock IDs 72 through 75 and
+level-high PLIC source 28.  The Linux driver accesses four 4 KiB local channel
+windows and maps remote ICU0 16 KiB into its declared resource; QEMU preserves
+that sparse layout.  It implements aligned 32-bit INFO0 through INFO7 and
+generate registers for all used channels, along with the C910-local
+status/clear/mask registers.  A remote event input is available only for a
+future endpoint model and qtests; it raises the matching local event after
+that endpoint has populated the local channel window.  System reset and VM
+migration preserve the modeled state and recompute the PLIC output.
+
+The E902, C906 and C910R endpoints, their interrupt-controller behavior, AON
+RPC firmware protocol, remote acknowledgment timing, clock-gate/reset effects,
+access widths outside the driver-used 32-bit registers and all power/wake
+semantics remain unmodeled.  The generated mailbox node therefore describes a
+bounded CPU-visible transport, not a working AON or auxiliary-processor
+service.
+
 The six GPIO controllers use a reusable one-port DesignWare APB model.  The
 model implements software data and direction, external pin sampling, combined
 edge/level interrupt generation, polarity, enable/mask, edge EOI, synchronous
@@ -387,12 +411,13 @@ the silicon reset sequence.
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
-APB timer components, all six GPIO controllers, all three pad controllers,
-storage and GMAC state in one stream.  Focused migration tests additionally preserve
-an in-flight I2C read and EEPROM address pointer, a running APB timer with a
-latched interrupt, a running TH1520 PWM phase with a pending update, plus
-completed AXI-DMAC data/register/interrupt state.  Together with the focused
-device tests, the complete 71-test board gate runs
+APB timer components, TH1520 mailbox state, all six GPIO controllers, all
+three pad controllers, storage and GMAC state in one stream.  Focused migration
+tests additionally preserve an in-flight I2C read and EEPROM address pointer,
+a running APB timer with a latched interrupt, a running TH1520 PWM phase with a
+pending update, a mailbox event and remote-window data, plus completed
+AXI-DMAC data/register/interrupt state.  Together with the focused device
+tests, the complete 73-test board gate runs
 in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the

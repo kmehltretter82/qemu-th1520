@@ -151,12 +151,12 @@ validation.
 | APB timers | A reusable four-counter DesignWare model and both TH1520 components now provide eight 125 MHz countdown channels, PLIC sources 16-23, local/aggregate EOI and status, reset and VMState; either known APB/core reset bit immediately resets its corresponding component; all eight upstream-DT nodes remain board-disabled | Validate component synthesis, clocks, access widths, reload/zero/enable edges, cascade/PWM and reset-domain behavior on hardware; couple clock gates and remaining resets |
 | RTC/watchdog | Timer framework exists; no matching TH1520 set | New register models and clock/reset behavior |
 | AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; the TH1520 general instance has exact mainline-DT wiring and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential validation |
-| Mailbox/system control | Missing | New C910/C906/E902/DSP handoff and control-plane models |
+| Mailbox/system control | A bounded TH1520 mailbox model maps the four upstream-Linux resources, CPU-visible channel data/generate registers, local status/clear/mask, PLIC source 28, system reset and VMState; it deliberately has no remote CPU or firmware response | Validate the register/pulse/reset/gate behavior and add E902/C906/C910R/DSP endpoints plus their documented handoff/control protocols |
 | GPU/DPU/HDMI/DSI | Matching models missing | New software-visible register/queue/display pipelines |
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, TH1520 mailbox, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
 
 ## Workspace implementation status
 
@@ -165,8 +165,8 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 
 * a dependency-minimal ``beaglev-ahead`` machine with four ``thead-c910``
   harts, the physical RAM/SRAM/ROM map, PLIC, CLINT, all six UARTs and I2C
-  controllers, both four-channel APB timer components, generated DT, and
-  direct OpenSBI/kernel boot;
+  controllers, both four-channel APB timer components, the bounded local-side
+  TH1520 mailbox interface, generated DT, and direct OpenSBI/kernel boot;
 * C910 scalar identity, including the T-Head vendor ID and exact zero
   architecture/implementation IDs, 40-bit physical-address constraints, the
   TH1520 no-PMP configuration, the initial custom CSR bank, migration state,
@@ -240,6 +240,14 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   while a TCG payload checks access faults and masked/unmasked interrupt
   delivery through the PLIC.  The generated nodes remain disabled like
   upstream Linux; and
+* a TH1520 mailbox controller at ``0xffffc38000`` with the four exact
+  upstream-Linux resources, clock IDs 72-75 and level-high PLIC source 28.
+  It preserves the four channel INFO0-INFO7 and generate registers, plus the
+  C910-local status/clear/mask behavior used by the upstream driver.  The
+  remote-ICU0 offset quirk and the other two remote ICU windows are represented
+  without inventing an E902, C906, C910R or AON firmware response.  Two focused
+  qtests cover the generated DT, local register/IRQ/reset behavior and
+  migration; and
 * a reusable one-port DesignWare APB GPIO model with software data/direction,
   external pin sampling, edge/level interrupt control, polarity, masking, EOI,
   reset and VMState.  All six TH1520 banks are integrated at their upstream
@@ -295,8 +303,9 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
   CLINT, PLIC, AP clock/reset state, distinct state in all six UARTs and all
   six I2C and GPIO controllers, the board EEPROM, SPI0, both APB timer
-  components, all three pad controllers, all three storage controllers, both
-  GMAC cores, PHY banks and both GMAC APB-glue instances together; and
+  components, TH1520 mailbox state, all three pad controllers, all three
+  storage controllers, both GMAC cores, PHY banks and both GMAC APB-glue
+  instances together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -329,7 +338,7 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 71 board qtests in the normal,
+The focused gate currently comprises 73 board qtests in the normal,
 dependency-minimal and ASan/UBSan builds.  These include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
@@ -667,7 +676,15 @@ four-counter blocks and all eight PLIC routes, implements the documented
 countdown/status/EOI/reset/migration contract at a fixed 125 MHz, and emits
 eight disabled upstream-compatible DT nodes.  Four qtests, a bare-metal
 access/interrupt payload and the controlled Linux clocksource probe pass.  The
-SPI0 submilestone maps a reusable DW APB SSI controller at the exact Linux
+mailbox submilestone maps the upstream driver's 24 KiB local resource and its
+three remote-ICU resources, including remote ICU0's documented 16 KiB offset,
+and emits the exact ``thead,th1520-mbox`` binding with clock IDs 72-75 and PLIC
+source 28.  It models the driver's 32-bit status/clear/mask, generate and
+INFO0-INFO7 accesses, system reset and migration.  Its remote events are only
+an explicit QEMU endpoint hook: no E902, C906, C910R, DSP or AON firmware
+protocol is inferred.  Two focused qtests cover the register/PLIC/reset and
+migration contracts.  The SPI0 submilestone maps a reusable DW APB SSI
+controller at the exact Linux
 address, PLIC source and AP clock ID, and emits the disabled ``spi0`` alias and
 compatible strings used upstream.  It supplies a generic synchronous FIFO
 master, loopback, error/threshold interrupts and migration without inventing a
