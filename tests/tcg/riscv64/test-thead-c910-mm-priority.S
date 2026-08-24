@@ -98,6 +98,12 @@
 	.text
 	.global	_start
 _start:
+	csrr	t0, mhartid
+	beqz	t0, 1f
+0:
+	wfi
+	j	0b
+1:
 	lla	t0, mtrap
 	csrw	mtvec, t0
 	lla	t0, strap

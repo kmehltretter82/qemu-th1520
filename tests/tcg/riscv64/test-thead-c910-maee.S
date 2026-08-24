@@ -5,7 +5,9 @@
  * scalar accesses remain unaligned on normal, non-cacheable and non-shareable
  * pages when MXSTATUS.MM is set, but a strong-order page requires natural
  * alignment after translation.  Instruction fetch from a strong-order page
- * raises an access fault.  With MAEE disabled, all five PTE bits are reserved.
+ * raises an access fault.  AMO read-modify-write operations require a
+ * cacheable page, while LR/SC do not; vector accesses reject strong-order
+ * pages.  With MAEE disabled, all five PTE bits are reserved.
  *
  * This test covers those architecturally visible rules in S and U mode.  M
  * mode owns MAEE and checks both reset state and the on/off transition.  It
@@ -25,6 +27,8 @@
 #define MSTATUS_MPP_MASK	(3 << 11)
 #define MSTATUS_MPP_S		(1 << 11)
 #define MSTATUS_MPP_M		(3 << 11)
+#define MSTATUS_FS_INITIAL	(1 << 13)
+#define MSTATUS_VS_THEAD	(1 << 23)
 
 #define PTE_V			0x001
 #define PTE_S_RWX_AD		0x0cf
@@ -55,11 +59,13 @@
 
 #define CAUSE_INST_ACCESS	1
 #define CAUSE_LOAD_MISALIGNED	4
+#define CAUSE_LOAD_ACCESS	5
 #define CAUSE_STORE_MISALIGNED	6
+#define CAUSE_STORE_ACCESS	7
 #define CAUSE_ECALL_U		8
 #define CAUSE_ECALL_S		9
 #define CAUSE_LOAD_PAGE_FAULT	13
-#define DELEGATED_EXCEPTIONS	0xb052
+#define DELEGATED_EXCEPTIONS	0xb0f2
 
 /*
  * Persistent registers:
@@ -121,6 +127,12 @@
 	.text
 	.global	_start
 _start:
+	csrr	t0, mhartid
+	beqz	t0, 1f
+0:
+	wfi
+	j	0b
+1:
 	lla	t0, mtrap
 	csrw	mtvec, t0
 	lla	t0, strap
@@ -198,11 +210,19 @@ _start:
 	sw	t1, 4(t0)
 	li	t1, 0x8877665544332211
 	sd	t1, 16(t0)
+	li	t1, 5
+	sw	t1, 32(t0)
+	li	t1, 7
+	sw	t1, 40(t0)
+	li	t1, 0x12345678
+	sw	t1, 48(t0)
+	sw	zero, 52(t0)
 	.word	0x0000100f	/* fence.i */
 
 	lla	t0, cross_page_a
 	li	t1, 4093
 	add	t0, t0, t1
+	sb	zero, -1(t0)
 	li	t1, 0x11
 	sb	t1, 0(t0)
 	li	t1, 0x22
@@ -219,6 +239,8 @@ _start:
 	or	t0, t0, t1
 	csrw	satp, t0
 	sfence.vma
+	li	t0, MSTATUS_FS_INITIAL | MSTATUS_VS_THEAD
+	csrs	mstatus, t0
 
 	/* First exercise MAEE-enabled mappings in S mode. */
 	li	s6, 2
@@ -259,7 +281,7 @@ after_s_maee_off:
 
 after_u_maee_on:
 	li	s6, 40
-	li	t0, 9
+	li	t0, 16
 	bne	s3, t0, fail
 	li	t0, MXSTATUS_MAEE | MXSTATUS_MM
 	csrr	t1, CSR_TH_MXSTATUS
@@ -336,6 +358,90 @@ s_mode_maee_on:
 	j	lower_fail
 s_after_strong_fetch:
 	CHECK_TRAP
+
+	/* Only AMO RMWs, not LR/SC, require a cacheable mapping. */
+	li	s6, 9
+	li	s0, S_NORMAL_VA
+	addi	t4, s0, 32
+	lw	a2, 0(t4)
+	li	t0, 5
+	bne	a2, t0, lower_fail
+	li	t6, 1
+	amoadd.w a2, t6, (t4)
+	li	t0, 5
+	bne	a2, t0, lower_fail
+	lw	a2, 0(t4)
+	li	t0, 6
+	bne	a2, t0, lower_fail
+	li	s6, 10
+	li	s0, S_NONCACHE_VA
+	addi	t4, s0, 32
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	amoadd.w a2, t6, (t4)
+	CHECK_TRAP
+	lw	a2, 0(t4)
+	li	t0, 6
+	bne	a2, t0, lower_fail
+	li	s6, 11
+	addi	t4, s0, 40
+	lr.w	a2, (t4)
+	li	t0, 7
+	bne	a2, t0, lower_fail
+	li	t6, 9
+	sc.w	a3, t6, (t4)
+	bnez	a3, lower_fail
+	lw	a2, 0(t4)
+	bne	a2, t6, lower_fail
+
+	/* Non-cacheable vector data is valid. */
+	/* Strong-order vector data is not valid. */
+	li	s6, 12
+	li	t1, 1
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	bne	t0, t1, lower_fail
+	li	s0, S_NONCACHE_VA
+	addi	t2, s0, 48
+	.word	0x1203e087	/* th.vlw.v v1, (t2) */
+	addi	t2, s0, 52
+	.word	0x0203e0a7	/* th.vsw.v v1, (t2) */
+	lw	a2, 52(s0)
+	li	t0, 0x12345678
+	bne	a2, t0, lower_fail
+	li	s6, 13
+	li	s0, S_STRONG_VA
+	addi	t2, s0, 48
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x1203e087	/* th.vlw.v v1, (t2) */
+	CHECK_TRAP
+	li	s6, 14
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0203e0a7	/* th.vsw.v v1, (t2) */
+	CHECK_TRAP
+
+	/* Fault-only-first traps on element zero, then truncates on SO. */
+	li	s6, 15
+	li	t1, 2
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	bne	t0, t1, lower_fail
+	li	t2, S_STRONG_VA + 48
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x1303e087	/* th.vlwff.v v1, (t2) */
+	CHECK_TRAP
+	li	s6, 16
+	li	t1, 2
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	li	t2, S_CROSS_NORMAL_VA + 4092
+	mv	s4, s3
+	.word	0x1303e087	/* th.vlwff.v v1, (t2) */
+	CHECK_NO_TRAP
+	csrr	t0, 0xc20	/* th.vl */
+	li	t1, 1
+	bne	t0, t1, lower_fail
+	li	t2, S_NONCACHE_VA + 56
+	.word	0x0203e0a7	/* th.vsw.v v1, (t2) */
+	lw	a2, 0(t2)
+	li	t0, 0x33221100
+	bne	a2, t0, lower_fail
 	li	s9, 1
 	ecall
 	j	lower_fail
@@ -411,6 +517,26 @@ u_mode_maee_on:
 	jalr	ra, t4, 0
 	j	lower_fail
 u_after_strong_fetch:
+	CHECK_TRAP
+
+	/* Repeat the new access-fault causes through U-to-S delegation. */
+	li	s6, 36
+	li	s0, U_NONCACHE_VA
+	addi	t4, s0, 32
+	li	t6, 1
+	EXPECT	1, CAUSE_STORE_ACCESS, zero
+	amoadd.w a2, t6, (t4)
+	CHECK_TRAP
+	li	t1, 1
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	bne	t0, t1, lower_fail
+	li	s0, U_STRONG_VA
+	addi	t2, s0, 48
+	EXPECT	1, CAUSE_LOAD_ACCESS, zero
+	.word	0x1203e087	/* th.vlw.v v1, (t2) */
+	CHECK_TRAP
+	EXPECT	1, CAUSE_STORE_ACCESS, zero
+	.word	0x0203e0a7	/* th.vsw.v v1, (t2) */
 	CHECK_TRAP
 	li	s9, 1
 	ecall
