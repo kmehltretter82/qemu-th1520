@@ -51,6 +51,13 @@ scope and remaining hardware unknowns are new-board fidelity work under
 ``RST-001``, not defects in QEMU's pre-existing machines or reusable devices.
 The conservative QEMU tally remains 10.
 
+The 2026-08-24 clock-gate milestone did not add a QEMU report unit.  Exporting
+TH1520 leaf-gate state, wiring new SoC clock links and defining provisional
+pause/resume behavior for the branch's PWM, timer and watchdog integrations
+are new-board fidelity work under ``CLK-002``.  Focused normal and migration
+tests found no independent defect in a pre-existing upstream machine.  The
+conservative QEMU tally remains 10.
+
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
 xHCI models and were independently exposed by an upstream Linux host driver.

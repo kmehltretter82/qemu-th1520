@@ -33,7 +33,10 @@ The machine currently provides:
   groups for currently modeled AP peripherals: watchdogs, PWM, timer groups,
   UART0-5, I2C0-5, SPI0, GPIO0-3, both application pad controllers, DMAC0,
   both GMACs and their shared AXI domain.  Output state is derived from the
-  active-low register members and reconstructed after migration;
+  active-low register members and reconstructed after migration.  The clock
+  provider exports 33 active-high leaf-gate levels for modeled AP consumers;
+  PWM, timer0/1 and WDT0/1 also receive 125 MHz while enabled and zero while
+  gated;
 * six DesignWare APB UARTs at their TH1520 addresses, including the 16550
   register banks, DesignWare status/reset/probe registers, busy detection,
   and PLIC interrupts 36 through 41.  UART0 at ``0xffe7014000`` is the board
@@ -46,8 +49,9 @@ The machine currently provides:
 * the TH1520 miscellaneous clock/reset bank at ``0xffec02c000`` and USB DRD
   wrapper at ``0xffec03f000``.  Their modeled reset values, writable masks,
   three active-low storage outputs, three active-low USB outputs, reset and
-  migration state follow the recorded TH1520 software contract; clock-gate
-  bits are visible state only;
+  migration state follow the recorded TH1520 software contract.  Its eight
+  leaf-gate bits have observable, migratable outputs but are not yet connected
+  to storage or USB engine behavior;
 * one DWC3/xHCI USB 3 host controller at ``0xffe7040000`` on PLIC source 68,
   with one paired USB2/USB3 connector.  Host DMA, interrupts, a USB keyboard,
   hotplug, system reset and migration are exercised; the generated generic
@@ -59,18 +63,20 @@ The machine currently provides:
   ``thead,th1520-pwm`` binding, AP clock ID 51 and ``#pwm-cells = <3>``.  It
   models the aligned 32-bit control/period/falling-point register subset used
   by Linux, continuous normal/inverted waveforms, staged period-boundary
-  updates, reset and migration.  Its fixed 125 MHz QEMU input and six QOM
-  output lines are provisional test facilities; no board pin or consumer is
-  wired;
+  updates, reset and migration.  Its AP gate supplies a provisional 125 MHz
+  QEMU input or stops it at zero; a gated channel holds its phase/output and
+  resumes on re-enable.  Six QOM output lines are test facilities; no board pin
+  or consumer is wired;
 * two four-counter DesignWare APB timer components at ``0xffefc32000`` and
   ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
-  sources 16 through 23.  All eight individual timer nodes remain disabled in
-  the board device tree, matching upstream Linux;
+  sources 16 through 23.  Their AP leaf gates freeze and resume enabled
+  counters.  All eight individual timer nodes remain disabled in the board
+  device tree, matching upstream Linux;
 * two Synopsys DesignWare APB watchdogs at ``0xffefc30000`` and
   ``0xffefc31000``.  They count at 125 MHz, connect to PLIC sources 24 and 25,
-  and use AP clock IDs 76/77 and reset IDs 3/4.  Both generated nodes remain
-  board-disabled because current upstream Linux has not added them to the
-  TH1520 device tree;
+  and use AP clock IDs 76/77 and reset IDs 3/4.  Each AP leaf gate freezes and
+  resumes its enabled countdown.  Both generated nodes remain board-disabled
+  because current upstream Linux has not added them to the TH1520 device tree;
 * one X-Gene-compatible DesignWare APB RTC at ``0xfffff40000`` with a
   32.768 kHz input, programmable prescaler and level-high PLIC source 74.
   Counter, load/match, interrupt, wrap, reset and migration behavior are
@@ -242,8 +248,10 @@ cover all 28 AP outputs and all three storage outputs.  Physical pulse versus
 level behavior, split-member scope, minimum assertion/release ordering,
 retention and held-reset bus behavior remain unverified.  The C910 and mailbox
 reset words remain register-only pending authentic hart-release and
-per-channel-retention evidence; other reset/power domains are absent, and AP
-clock-gate writes still do not stop child devices.
+per-channel-retention evidence; other reset/power domains are absent.  AP
+clock-gate writes stop only the PWM, timer and watchdog timed engines described
+below; the other 28 AP leaves and all eight miscellaneous leaves currently
+export raw state without changing child engines or MMIO access.
 
 The six UARTs use a reusable DesignWare APB wrapper around QEMU's 16550 core.
 It
@@ -346,15 +354,19 @@ in-tree Linux driver: six channels at a 0x20-byte stride, CTRL/PERIOD/FP at
 and FPOUT phase selection.  Period and falling-point writes are shadowed until
 the next period boundary.  The model drives six QOM ``pwm`` outputs so qtests
 can check normal and inverted phases, staged updates and migration; there is
-no virtual header/pad connection.  Its source is fixed at a provisional
-125 MHz and only the first 0xb0 bytes used by Linux are mapped, even though the
-DT aperture is 16 KiB.
+no virtual header/pad connection.  AP clock offset ``0x204`` bit 18 supplies a
+provisional 125 MHz input while set and a zero-frequency gate while clear.
+Gating preserves the remaining edge delay and holds the current output level;
+re-enabling resumes that phase, including across migration.  This deterministic
+rule is not yet a claim about silicon.  Only the first 0xb0 bytes used by Linux
+are mapped, even though the DT aperture is 16 KiB.
 
 The documented active-low AP reset pair at ``0xffef0140c0`` resets the PWM
 model immediately when either of its APB/counter bits is clear.  This is a
 QEMU software contract, not a claim about physical pulse width, held-reset
 accesses, retention or ordering.  The exact reset/readback and reserved-
-register behavior, clock rate/gating, one-shot/inactive-output semantics,
+register behavior, physical clock rate and gate phase/output behavior,
+one-shot/inactive-output semantics,
 physical pinmux/header routing and electrical effects are deliberately not
 claimed.  The generated node has no ``status`` property, matching upstream
 Linux, but the board DTS has no PWM consumer and this documentation does not
@@ -365,20 +377,25 @@ Each counter has load, current-value, control, EOI and interrupt-status
 registers at the 0x14-byte hardware stride.  Periodic and free-running
 countdown, interrupt masking, raw and masked aggregate status, per-counter and
 aggregate EOI, the component-version register, reset and migration are
-modeled.  The TH1520 integration uses a common fixed 125 MHz input, component
-version ``0x3231322a`` and eight independent level-high PLIC routes.
+modeled.  The TH1520 integration uses separate timer-group AP leaves at clock
+offset ``0x208`` bits 1/0.  Each supplies 125 MHz while set and zero while
+clear, freezing enabled counters and resuming them when restored.  Component
+version ``0x3231322a`` and eight independent level-high PLIC routes are used.
 
 The model retains the four second-load and protection registers and preserves
 the PWM control bit, but it does not infer cascade wiring or drive a physical
-PWM output.  The second-load value consequently has no waveform effect.
+PWM output.  The second-load value consequently has no waveform effect.  The
+freeze/resume gate behavior is a deterministic QEMU convention pending
+physical comparison.
+
 The documented active-low APB/core pairs at ``0xffef01403c`` and
 ``0xffef014040`` immediately reset timer components 0-3 and 4-7 respectively
 when either bit is clear.  This is likewise a QEMU software contract rather
-than a measured reset waveform.  Per-counter synthesized clocks, AP clock-gate
-coupling, pulse-versus-level synthesis choices, exact enable/reload/zero-count
-edges, wider bus transactions and cold/warm reset-domain behavior remain
-hardware-validation items.  Only aligned 32-bit accesses are currently
-accepted.
+than a measured reset waveform.  Per-counter synthesized clocks, physical
+clock-gate phase/reset effects, pulse-versus-level synthesis choices, exact
+enable/reload/zero-count edges, wider bus transactions and cold/warm
+reset-domain behavior remain hardware-validation items.  Only aligned 32-bit
+accesses are currently accepted.
 
 Upstream Linux leaves all eight TH1520 nodes disabled.  Its generic
 ``dw_apb_timer_of`` path also tries to create a PLIC-backed clockevent during
@@ -403,12 +420,16 @@ first expiry and invokes that action after a second uncleared period.  Reading
 EOI clears the interrupt without restarting the counter.  Register, timer,
 IRQ and stage state migrates.
 
-Both TH1520 instances use a provisional fixed 125 MHz input, level-high PLIC
-sources 24/25, and the active-low AP reset bits at ``0xffef014034`` and
-``0xffef014038``.  Asserting either reset affects only its corresponding
-watchdog in QEMU.  The generated nodes use ``snps,dw-wdt``, AP clock IDs 76/77
-and reset IDs 3/4, but remain disabled because the pinned upstream TH1520 DTS
-contains no watchdog nodes.  A controlled external-DT test enabled both nodes
+Both TH1520 instances use independent AP leaves at clock offset ``0x208`` bits
+3/2, supplying a provisional 125 MHz while set and zero while clear.  Gating
+freezes an enabled count and re-enabling resumes it, including across
+migration.  This is a deterministic QEMU convention pending physical
+comparison.  They use level-high PLIC sources 24/25 and the active-low AP reset
+bits at ``0xffef014034`` and ``0xffef014038``.  Asserting either reset affects
+only its corresponding watchdog in QEMU.  The generated nodes use
+``snps,dw-wdt``, AP clock IDs 76/77 and reset IDs 3/4, but remain disabled
+because the pinned upstream TH1520 DTS contains no watchdog nodes.  A
+controlled external-DT test enabled both nodes
 on Linux commit ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` with
 ``CONFIG_DW_WATCHDOG`` and ``CONFIG_RESET_TH1520``.  Both watchdog-class
 devices bound, started, reported positive time left, accepted a keepalive and
@@ -419,10 +440,10 @@ represented.  The TH1520 component version and the remaining synthesis
 parameters have not been observed, so they deliberately read zero.  QEMU
 currently selects ``0x0000ffff`` for the reset current-count value because
 the available integration material conflicts with its field description.
-Exact AP clock programming, timeout edge convention, reset pulse/scope and
-retention, component identities, access behavior outside aligned 32-bit
-words, and the additional AO/audio watchdogs remain owner-hardware validation
-items.
+Exact physical clock rate, gate phase/reset behavior, timeout edge convention,
+reset pulse/scope and retention, component identities, access behavior outside
+aligned 32-bit words, and the additional AO/audio watchdogs remain
+owner-hardware validation items.
 
 The RTC follows the DesignWare APB programming interface used by the Linux
 ``apm,xgene-rtc`` driver.  It implements the 32-bit counter, match and delayed
@@ -618,13 +639,15 @@ one stream.
 Focused migration tests additionally preserve an in-flight I2C read and
 EEPROM address pointer, two running watchdogs at different stages, a running
 APB timer with a latched interrupt, a running TH1520 PWM phase with a pending
-update, a mailbox event and remote-window data, plus completed AXI-DMAC
+update, AP and miscellaneous raw clock-gate levels, gated timer/watchdog
+counts and a gated PWM phase/output, a mailbox event and remote-window data,
+plus completed AXI-DMAC
 data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 92 tests in the normal build and
-91 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
+device tests, the complete board gate passes 98 tests in the normal build and
+97 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
 omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
