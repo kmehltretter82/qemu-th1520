@@ -431,7 +431,7 @@ The quick search found unrelated AT24C issue 1485, but no migration report.
 
 ### UQ-006: NPCM GMAC receive FCS handling reads beyond the host packet
 
-Status: **REPORTABLE SECURITY CANDIDATE; do not file publicly first**
+Status: **CONFIDENTIAL TRIAGE READY; do not file publicly first**
 
 Affected upstream code:
 
@@ -454,32 +454,42 @@ Branch fix and evidence:
 
 Required next action:
 
-* reproduce the pre-fix access with current upstream under ASan using the
-  smallest NPCM qtest;
-* verify ownership and lifetime guarantees of every network backend buffer;
-* treat the four-byte disclosure as security-sensitive even if ASan allocator
-  padding makes one run silent; and
+* have a human reviewer verify the minimal queued-packet trigger and repeat it
+  on a clean current-master ASan build;
+* verify ownership and lifetime guarantees of every network backend buffer and
+  determine whether the four bytes can contain host data of security value;
+* treat the confirmed host heap over-read as security-sensitive even though
+  the exact disclosure impact still needs triage; and
 * create a confidential GitLab work item before any public patch or detailed
   mailing-list discussion, following QEMU's security process.
 
 The 2026-08-23 public search found issue 3202 for a different NPCM GMAC
 **transmit** overflow, but no matching receive/FCS report.
 
-2026-08-24 triage rechecked the data-buffer contract before recommending any
-submission.  The current upstream network queue allocates exactly the packet
-length (`net/queue.c:qemu_net_queue_append()`), and the socket backend receives
-into a `NET_BUFSIZE` stack buffer but reports only the bytes returned by
-`recv()`.  The NPCM callback therefore reads four bytes beyond the supplied
-packet whenever it appends the FCS length.  This is sufficient to keep UQ-006
-as the highest-priority *new* candidate.  A disposable ASan/UBSan
-`aarch64-softmmu` build from `eea8fe61b8` (the affected paths are unchanged
-from current master `bde2492aace`) ran the smallest receive qtest: it copied
-the packet plus four zero bytes and emitted no sanitizer diagnostic.  This is
-expected for the direct socket path because ASan sees the whole
-`NET_BUFSIZE` stack object, and this build deliberately zero-initializes
-automatic variables.  The run proves the wrong FCS but does not by itself
-prove host-data disclosure; a queued exact-size heap path or a backend with a
-strict packet allocation is still needed.  The closest public item,
+2026-08-24 triage rechecked the data-buffer contract and then exercised both
+delivery paths.  The current upstream network queue allocates exactly the
+packet length (`net/queue.c:qemu_net_queue_append()`), and the socket backend
+receives into a `NET_BUFSIZE` stack buffer but reports only the bytes returned
+by `recv()`.  The direct path copied the packet plus four zero bytes in the
+sanitizer build because ASan sees the whole stack object and the build
+zero-initializes automatic variables.  The decisive queued path sets MAC RX
+enable while leaving DMA RX stopped, injects one 64-byte packet, then writes
+`DMA_CONTROL.START_RX`, which calls `qemu_flush_queued_packets()`.  A
+disposable ASan/UBSan `aarch64-softmmu` build from `eea8fe61b8` (the affected
+paths are unchanged from current master `bde2492aace`) reports:
+
+```
+AddressSanitizer: heap-buffer-overflow
+READ of size 68
+gmac_rx_transfer_frame_to_buffer ... hw/net/npcm_gmac.c:293
+gmac_receive ... hw/net/npcm_gmac.c:390
+allocation: qemu_net_queue_append ... net/queue.c:105
+allocated region: 104 bytes; read ends at its boundary
+```
+
+This is a current-upstream, guest-reachable host heap over-read.  The exact
+four-byte disclosure impact still needs security-team triage, and the closest
+public item,
 [QEMU #3202](https://gitlab.com/qemu-project/qemu/-/work_items/3202), is a
 different transmit-side integer-truncation overflow.  No report has been
 filed from this project.  Do not submit UQ-006 until a human reviewer has
