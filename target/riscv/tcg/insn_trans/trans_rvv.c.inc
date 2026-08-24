@@ -29,7 +29,9 @@ static inline bool is_overlapped(const int8_t astart, int8_t asize,
 
 static bool require_rvv(DisasContext *s)
 {
-    return s->mstatus_vs != EXT_STATUS_DISABLED;
+    /* XTheadVector shares VS state and encodings, but is not ratified RVV. */
+    return s->cfg_ptr->ext_zve32x &&
+           s->mstatus_vs != EXT_STATUS_DISABLED;
 }
 
 static bool require_rvf(DisasContext *s)
