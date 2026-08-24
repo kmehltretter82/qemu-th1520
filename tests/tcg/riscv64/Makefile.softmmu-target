@@ -28,6 +28,13 @@ EXTRA_RUNS += run-test-minstret-ecall
 run-test-minstret-ecall: test-minstret-ecall
 	$(call run-test, $<, $(QEMU) -icount shift=1 $(QEMU_OPTS)$<)
 
+CLEANFILES += test-riscv-pmu-duplicates
+EXTRA_RUNS += run-test-riscv-pmu-duplicates
+test-riscv-pmu-duplicates: test-riscv-pmu-duplicates.o
+run-test-riscv-pmu-duplicates: test-riscv-pmu-duplicates
+	$(call run-test, $<, $(QEMU) -icount shift=0 -smp 1 \
+	  -cpu rv64$(comma)pmu-mask=0x18 $(QEMU_OPTS)$<)
+
 EXTRA_RUNS += run-plugin-doubletrap
 run-plugin-doubletrap: doubletrap
 	$(call run-test, $<, \
