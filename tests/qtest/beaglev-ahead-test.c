@@ -50,6 +50,8 @@
 #define TH1520_PWM_BASE            0xffec01c000ULL
 #define TH1520_TIMER0_3_BASE       0xffefc32000ULL
 #define TH1520_TIMER4_7_BASE       0xffffc33000ULL
+#define TH1520_WDT0_BASE           0xffefc30000ULL
+#define TH1520_WDT1_BASE           0xffefc31000ULL
 #define TH1520_MBOX_LOCAL_BASE      0xffffc38000ULL
 #define TH1520_MBOX_REMOTE0_BASE    0xffffc40000ULL
 #define TH1520_MBOX_REMOTE1_BASE    0xffffc4c000ULL
@@ -171,6 +173,29 @@
 #define DW_TIMER_PERIODIC          BIT(1)
 #define DW_TIMER_INT_MASK          BIT(2)
 #define DW_TIMER_PWM               BIT(3)
+
+#define DW_WDT_CR                  0x00
+#define DW_WDT_TORR                0x04
+#define DW_WDT_CCVR                0x08
+#define DW_WDT_CRR                 0x0c
+#define DW_WDT_STAT                0x10
+#define DW_WDT_EOI                 0x14
+#define DW_WDT_COMP_PARAM_5        0xe4
+#define DW_WDT_COMP_PARAM_4        0xe8
+#define DW_WDT_COMP_PARAM_3        0xec
+#define DW_WDT_COMP_PARAM_2        0xf0
+#define DW_WDT_COMP_PARAM_1        0xf4
+#define DW_WDT_COMP_VERSION        0xf8
+#define DW_WDT_COMP_TYPE           0xfc
+
+#define DW_WDT_ENABLE              BIT(0)
+#define DW_WDT_RMOD                BIT(1)
+#define DW_WDT_RESTART             0x76
+#define DW_WDT_FIXED_TOP           BIT(6)
+#define DW_WDT_COMPONENT_TYPE      0x44570120
+#define DW_WDT_TICK_NS             8
+#define DW_WDT_TOP0_COUNT          BIT(16)
+#define DW_WDT_TOP0_NS             (DW_WDT_TOP0_COUNT * DW_WDT_TICK_NS)
 
 #define TH1520_MBOX_STATUS         0x000
 #define TH1520_MBOX_CLEAR          0x004
@@ -300,6 +325,8 @@
 #define TH1520_I2C5_IRQ            49
 #define TH1520_SPI0_IRQ            54
 #define TH1520_TIMER0_IRQ          16
+#define TH1520_WDT0_IRQ            24
+#define TH1520_WDT1_IRQ            25
 #define TH1520_MBOX_IRQ            28
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
@@ -338,6 +365,8 @@
 #define TH1520_CLK_MBOX1           73
 #define TH1520_CLK_MBOX2           74
 #define TH1520_CLK_MBOX3           75
+#define TH1520_CLK_WDT0            76
+#define TH1520_CLK_WDT1            77
 #define TH1520_CLK_UART_SCLK       85
 
 #define TH1520_I2C_COMP_PARAM1     0x000f0fee
@@ -584,6 +613,15 @@ typedef struct TH1520Timer {
     uint32_t irq;
 } TH1520Timer;
 
+typedef struct TH1520WDT {
+    const char *name;
+    uint64_t base;
+    uint32_t irq;
+    uint32_t clock_id;
+    uint32_t reset_id;
+    uint32_t reset_offset;
+} TH1520WDT;
+
 typedef struct TH1520SPIController {
     uint64_t base;
     uint32_t irq;
@@ -671,6 +709,13 @@ static const TH1520Timer th1520_timers[] = {
       TH1520_TIMER4_7_BASE, 2, TH1520_TIMER0_IRQ + 6 },
     { "timer7", TH1520_TIMER4_7_BASE + 3 * DW_TIMER_STRIDE,
       TH1520_TIMER4_7_BASE, 3, TH1520_TIMER0_IRQ + 7 },
+};
+
+static const TH1520WDT th1520_wdts[] = {
+    { "wdt0", TH1520_WDT0_BASE, TH1520_WDT0_IRQ, TH1520_CLK_WDT0,
+      3, 0x034 },
+    { "wdt1", TH1520_WDT1_BASE, TH1520_WDT1_IRQ, TH1520_CLK_WDT1,
+      4, 0x038 },
 };
 
 static const C900PLICContext c900_plic_contexts[] = {
@@ -1382,6 +1427,48 @@ static void assert_timer_fdt(const void *fdt, const TH1520Timer *timer,
     g_assert_cmpstr(text, ==, "disabled");
 }
 
+static void assert_wdt_fdt(const void *fdt, const TH1520WDT *wdt,
+                           uint32_t clock_phandle,
+                           uint32_t reset_phandle)
+{
+    g_autofree char *path =
+        g_strdup_printf("/soc/watchdog@%" PRIx64, wdt->base);
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, path);
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "snps,dw-wdt");
+    assert_fdt_mmio(fdt, node, wdt->base, 0x1000);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, wdt->irq);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, wdt->clock_id);
+    text = fdt_getprop(fdt, node, "clock-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "tclk");
+
+    cells = fdt_getprop(fdt, node, "resets", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, reset_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, wdt->reset_id);
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "disabled");
+}
+
 static void assert_spi_fdt(const void *fdt,
                            const TH1520SPIController *controller,
                            uint32_t clock_phandle)
@@ -1694,6 +1781,7 @@ static void test_direct_boot_contract(void)
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
     uint32_t ap_clock_phandle;
+    uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[ARRAY_SIZE(th1520_padctrls)];
     uint32_t led_pins_phandle;
     uint32_t gmac0_pins_phandle;
@@ -1784,7 +1872,8 @@ static void test_direct_boot_contract(void)
     g_assert_cmpstr(compatible, ==, "thead,th1520-reset-ap");
     g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#reset-cells"), ==, 1);
     assert_fdt_mmio(fdt, clock_offset, TH1520_AP_RESET_BASE, 0x1000);
-    g_assert_cmphex(fdt_get_phandle(fdt, clock_offset), !=, 0);
+    ap_reset_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(ap_reset_phandle, !=, 0);
 
     assert_dmac_fdt(fdt, ap_clock_phandle);
 
@@ -1819,6 +1908,10 @@ static void test_direct_boot_contract(void)
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
         assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
+    }
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_wdts); i++) {
+        assert_wdt_fdt(fdt, &th1520_wdts[i], ap_clock_phandle,
+                       ap_reset_phandle);
     }
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gpio_controllers); i++) {
@@ -4129,6 +4222,178 @@ static void test_dw_timer_interrupt_routes(void)
     qtest_quit(qts);
 }
 
+static void assert_dw_wdt_reset_state(QTestState *qts, uint64_t base)
+{
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_CR), ==, DW_WDT_RMOD);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_TORR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_CCVR), ==, 0xffff);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_CRR), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_STAT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_EOI), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_PARAM_5), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_PARAM_4), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_PARAM_3), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_PARAM_2), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_PARAM_1), ==,
+                    DW_WDT_FIXED_TOP);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_VERSION), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_WDT_COMP_TYPE), ==,
+                    DW_WDT_COMPONENT_TYPE);
+}
+
+static void test_dw_wdt_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_wdts); i++) {
+        uint64_t base = th1520_wdts[i].base;
+
+        assert_dw_wdt_reset_state(qts, base);
+        qtest_writel(qts, base + DW_WDT_TORR, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, base + DW_WDT_TORR), ==, 0xff);
+        qtest_writel(qts, base + DW_WDT_CR, UINT32_MAX);
+        g_assert_cmphex(qtest_readl(qts, base + DW_WDT_CR), ==, 0x1f);
+
+        /* WDT_EN is sticky until a reset input or system reset. */
+        qtest_writel(qts, base + DW_WDT_CR, 0);
+        g_assert_cmphex(qtest_readl(qts, base + DW_WDT_CR), ==,
+                        DW_WDT_ENABLE);
+    }
+
+    qtest_system_reset(qts);
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_wdts); i++) {
+        assert_dw_wdt_reset_state(qts, th1520_wdts[i].base);
+    }
+    qtest_quit(qts);
+}
+
+static void test_dw_wdt_timing(void)
+{
+    const TH1520WDT *wdt = &th1520_wdts[0];
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none");
+    QDict *event;
+    QDict *data;
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+
+    /* TOP_INIT=1 is used at enable; later stages and kicks use TOP=0. */
+    qtest_writel(qts, wdt->base + DW_WDT_TORR, 0x10);
+    qtest_writel(qts, wdt->base + DW_WDT_CR,
+                  DW_WDT_RMOD | DW_WDT_ENABLE);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_CCVR), ==,
+                    2 * DW_WDT_TOP0_COUNT);
+    qtest_clock_step(qts, 2 * DW_WDT_TOP0_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT);
+
+    /* EOI deasserts the interrupt but does not restart the second period. */
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_EOI), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT);
+    qtest_clock_step(qts, DW_WDT_TOP0_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 1);
+
+    /* Only the documented magic value clears and reloads the watchdog. */
+    qtest_writel(qts, wdt->base + DW_WDT_CRR, DW_WDT_RESTART - 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 1);
+    qtest_writel(qts, wdt->base + DW_WDT_CRR, DW_WDT_RESTART);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT);
+
+    /* An uncleared first-stage interrupt makes the next expiry reset. */
+    qtest_clock_step(qts, DW_WDT_TOP0_NS);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 1);
+    qtest_clock_step(qts, DW_WDT_TOP0_NS);
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    data = qdict_get_qdict(event, "data");
+    g_assert_cmpstr(qdict_get_str(data, "action"), ==, "none");
+    qobject_unref(event);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_STAT), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_CCVR), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_dw_wdt_interrupt_route(const void *opaque)
+{
+    const TH1520WDT *wdt = opaque;
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none");
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(wdt->irq), 5);
+    c900_plic_set_enable(qts, 1, wdt->irq, true);
+
+    qtest_writel(qts, wdt->base + DW_WDT_TORR, 0);
+    qtest_writel(qts, wdt->base + DW_WDT_CR,
+                  DW_WDT_RMOD | DW_WDT_ENABLE);
+    qtest_clock_step(qts, DW_WDT_TOP0_NS);
+    g_assert_true(c900_plic_pending(qts, wdt->irq));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==, wdt->irq);
+    assert_no_irq(qts);
+    g_assert_cmphex(qtest_readl(qts, wdt->base + DW_WDT_EOI), ==, 1);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), wdt->irq);
+    g_assert_false(c900_plic_pending(qts, wdt->irq));
+    assert_no_irq(qts);
+
+    qtest_quit(qts);
+}
+
+static void test_dw_wdt_reset_outputs(void)
+{
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_wdts); i++) {
+        const TH1520WDT *wdt = &th1520_wdts[i];
+        const TH1520WDT *other = &th1520_wdts[1 - i];
+
+        qtest_writel(qts, wdt->base + DW_WDT_TORR, 0x21 + i);
+        qtest_writel(qts, wdt->base + DW_WDT_CR, DW_WDT_ENABLE);
+        qtest_writel(qts, other->base + DW_WDT_TORR, 0x43 + i);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + wdt->reset_offset, 0);
+        assert_dw_wdt_reset_state(qts, wdt->base);
+        g_assert_cmphex(qtest_readl(qts, other->base + DW_WDT_TORR), ==,
+                        0x43 + i);
+        qtest_writel(qts, TH1520_AP_RESET_BASE + wdt->reset_offset, 1);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_dw_wdt_action_reset(void)
+{
+    const TH1520WDT *wdt = &th1520_wdts[0];
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action reset");
+    QDict *event;
+    QDict *data;
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+    qtest_writel(qts, wdt->base + DW_WDT_TORR, 0);
+    qtest_writel(qts, wdt->base + DW_WDT_CR, DW_WDT_ENABLE);
+    qtest_clock_step(qts, DW_WDT_TOP0_NS);
+
+    event = qtest_qmp_eventwait_ref(qts, "WATCHDOG");
+    data = qdict_get_qdict(event, "data");
+    g_assert_cmpstr(qdict_get_str(data, "action"), ==, "reset");
+    qobject_unref(event);
+    qtest_qmp_eventwait(qts, "RESET");
+    assert_dw_wdt_reset_state(qts, wdt->base);
+
+    qtest_quit(qts);
+}
+
 static void assert_padctrl_reset_state(QTestState *qts,
                                        const TH1520PadCtrl *controller)
 {
@@ -4804,6 +5069,83 @@ static void test_dw_timer_migration(void)
     g_assert_cmphex(qtest_readl(dst,
                                 running->base + DW_TIMER_INT_STATUS), ==,
                     1);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_dw_wdt_migration(void)
+{
+    const TH1520WDT *pending = &th1520_wdts[0];
+    const TH1520WDT *running = &th1520_wdts[1];
+    const uint64_t half_period = DW_WDT_TOP0_NS / 2;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    QDict *event;
+    QDict *data;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-wdt-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none");
+    dst = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none "
+        "-incoming defer");
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    qtest_writel(src, pending->base + DW_WDT_TORR, 0);
+    qtest_writel(src, pending->base + DW_WDT_CR,
+                  DW_WDT_RMOD | DW_WDT_ENABLE);
+    qtest_clock_step(src, DW_WDT_TOP0_NS);
+    g_assert_cmphex(qtest_readl(src, pending->base + DW_WDT_STAT), ==, 1);
+
+    qtest_writel(src, running->base + DW_WDT_TORR, 0);
+    qtest_writel(src, running->base + DW_WDT_CR,
+                  DW_WDT_RMOD | DW_WDT_ENABLE);
+    qtest_clock_step(src, half_period);
+    /* At an exact tick boundary ptimer reports the not-yet-decremented tick. */
+    g_assert_cmphex(qtest_readl(src, pending->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT / 2 + 1);
+    g_assert_cmphex(qtest_readl(src, running->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT / 2 + 1);
+
+    /* Both ptimers retain their absolute virtual deadlines and stage. */
+    g_assert_cmpint(qtest_clock_set(dst, DW_WDT_TOP0_NS + half_period), ==,
+                    DW_WDT_TOP0_NS + half_period);
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, pending->base + DW_WDT_STAT), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, running->base + DW_WDT_STAT), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, pending->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT / 2 + 1);
+    g_assert_cmphex(qtest_readl(dst, running->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT / 2 + 1);
+    g_assert_true(c900_plic_pending(dst, pending->irq));
+    g_assert_false(c900_plic_pending(dst, running->irq));
+
+    qtest_clock_step(dst, half_period + 1);
+    event = qtest_qmp_eventwait_ref(dst, "WATCHDOG");
+    data = qdict_get_qdict(event, "data");
+    g_assert_cmpstr(qdict_get_str(data, "action"), ==, "none");
+    qobject_unref(event);
+    g_assert_cmphex(qtest_readl(dst, pending->base + DW_WDT_STAT), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, pending->base + DW_WDT_CCVR), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, running->base + DW_WDT_STAT), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, running->base + DW_WDT_CCVR), ==,
+                    DW_WDT_TOP0_COUNT);
 
     qtest_quit(dst);
     qtest_quit(src);
@@ -6088,6 +6430,24 @@ int main(int argc, char **argv)
                        test_dw_timer_interrupt_routes);
         qtest_add_func("/beaglev-ahead/dw-timer/migration",
                        test_dw_timer_migration);
+        qtest_add_func("/beaglev-ahead/dw-wdt/registers",
+                       test_dw_wdt_registers);
+        qtest_add_func("/beaglev-ahead/dw-wdt/timing",
+                       test_dw_wdt_timing);
+        for (size_t i = 0; i < ARRAY_SIZE(th1520_wdts); i++) {
+            g_autofree char *name =
+                g_strdup_printf("/beaglev-ahead/dw-wdt/%s-interrupt",
+                                th1520_wdts[i].name);
+
+            qtest_add_data_func(name, &th1520_wdts[i],
+                                test_dw_wdt_interrupt_route);
+        }
+        qtest_add_func("/beaglev-ahead/dw-wdt/reset-outputs",
+                       test_dw_wdt_reset_outputs);
+        qtest_add_func("/beaglev-ahead/dw-wdt/action-reset",
+                       test_dw_wdt_action_reset);
+        qtest_add_func("/beaglev-ahead/dw-wdt/migration",
+                       test_dw_wdt_migration);
         qtest_add_func("/beaglev-ahead/dmac/registers",
                        test_dmac_registers);
         qtest_add_func("/beaglev-ahead/dmac/direct-transfer",
