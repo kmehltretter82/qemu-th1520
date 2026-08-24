@@ -113,6 +113,11 @@ test-xtheadvector: test-xtheadvector.o
 run-test-xtheadvector: test-xtheadvector
 	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
 
+EXTRA_RUNS += run-test-xtheadvector-state
+test-xtheadvector-state: test-xtheadvector-state.o
+run-test-xtheadvector-state: test-xtheadvector-state
+	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
+
 EXTRA_RUNS += run-test-thead-c910-pmu
 test-thead-c910-pmu: test-thead-c910-pmu.o
 run-test-thead-c910-pmu: test-thead-c910-pmu
