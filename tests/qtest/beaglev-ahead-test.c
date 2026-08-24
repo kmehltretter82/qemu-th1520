@@ -63,6 +63,7 @@
 #define TH1520_PVT_TS_BASE          0xfffff4e080ULL
 #define TH1520_PVT_PD_BASE          0xfffff4e180ULL
 #define TH1520_PVT_VM_BASE          0xfffff4e800ULL
+#define TH1520_RTC_BASE             0xfffff40000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -199,6 +200,26 @@
 #define DW_WDT_TICK_NS             8
 #define DW_WDT_TOP0_COUNT          BIT(16)
 #define DW_WDT_TOP0_NS             (DW_WDT_TOP0_COUNT * DW_WDT_TICK_NS)
+
+#define XGENE_RTC_CCVR             0x00
+#define XGENE_RTC_CMR              0x04
+#define XGENE_RTC_CLR              0x08
+#define XGENE_RTC_CCR              0x0c
+#define XGENE_RTC_STAT             0x10
+#define XGENE_RTC_RSTAT            0x14
+#define XGENE_RTC_EOI              0x18
+#define XGENE_RTC_VER              0x1c
+#define XGENE_RTC_CPSR             0x20
+#define XGENE_RTC_CPCVR            0x24
+
+#define XGENE_RTC_IE               BIT(0)
+#define XGENE_RTC_MASK             BIT(1)
+#define XGENE_RTC_EN               BIT(2)
+#define XGENE_RTC_WEN              BIT(3)
+#define XGENE_RTC_PSCLR_EN         BIT(4)
+#define XGENE_RTC_PRESCALER        32768
+#define XGENE_RTC_SECOND_NS        1000000000LL
+#define XGENE_RTC_TEST_EPOCH       946684800
 
 #define TH1520_MBOX_STATUS         0x000
 #define TH1520_MBOX_CLEAR          0x004
@@ -338,6 +359,7 @@
 #define TH1520_GMAC1_IRQ           67
 #define TH1520_SDIO1_IRQ           71
 #define TH1520_USB_IRQ             68
+#define TH1520_RTC_IRQ             74
 
 #define TH1520_CLK_PERI_APB_PCLK   20
 #define TH1520_CLK_PERISYS_APB4    25
@@ -1811,6 +1833,35 @@ static void assert_pvt_fdt(const void *fdt, uint32_t clock_phandle)
     g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
 }
 
+static void assert_rtc_fdt(const void *fdt, uint32_t clock_phandle)
+{
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, "/soc/rtc@fffff40000");
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "apm,xgene-rtc");
+    assert_fdt_mmio(fdt, node, TH1520_RTC_BASE, 0x1000);
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, TH1520_RTC_IRQ);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "clocks"), ==,
+                    clock_phandle);
+    text = fdt_getprop(fdt, node, "clock-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "rtc");
+    assert_fdt_bool(fdt, node, "wakeup-source", true);
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "disabled");
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1937,6 +1988,7 @@ static void test_direct_boot_contract(void)
     uint32_t cpu0_phandle;
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
+    uint32_t rtc_clock_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[ARRAY_SIZE(th1520_padctrls)];
@@ -2008,6 +2060,21 @@ static void test_direct_boot_contract(void)
     aonsys_clock_phandle = fdt_get_phandle(fdt, clock_offset);
     g_assert_cmphex(aonsys_clock_phandle, !=, 0);
 
+    clock_offset = fdt_path_offset(fdt, "/clock-32768");
+    g_assert_cmpint(clock_offset, >=, 0);
+    compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "fixed-clock");
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==,
+                    0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    XGENE_RTC_PRESCALER);
+    compatible = fdt_getprop(fdt, clock_offset, "clock-output-names", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "rtc_clk");
+    rtc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(rtc_clock_phandle, !=, 0);
+
     clock_offset = fdt_path_offset(fdt,
                                    "/soc/clock-controller@ffef010000");
     g_assert_cmpint(clock_offset, >=, 0);
@@ -2062,6 +2129,7 @@ static void test_direct_boot_contract(void)
     assert_pwm_fdt(fdt, ap_clock_phandle);
     assert_mbox_fdt(fdt, ap_clock_phandle);
     assert_pvt_fdt(fdt, aonsys_clock_phandle);
+    assert_rtc_fdt(fdt, rtc_clock_phandle);
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
         assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
@@ -5490,6 +5558,243 @@ static void test_th1520_usb_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_xgene_rtc_registers_timing_irq(void)
+{
+    const uint32_t run = XGENE_RTC_EN | XGENE_RTC_PSCLR_EN;
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none "
+        "-rtc base=2000-01-01,clock=vm");
+    uint32_t retained;
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_RTC_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_RTC_IRQ, true);
+
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, XGENE_RTC_TEST_EPOCH);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CMR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CLR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_STAT),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_EOI),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_VER),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CPSR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CPCVR),
+                    ==, 0);
+
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CPSR,
+                  XGENE_RTC_PRESCALER);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR, run);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CLR, 100);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CLR),
+                    ==, 100);
+
+    /* CLR becomes visible on the next prescaled counter update. */
+    qtest_clock_step(qts, XGENE_RTC_SECOND_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, XGENE_RTC_TEST_EPOCH);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CPCVR),
+                    ==, XGENE_RTC_PRESCALER - 1);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 100);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CPCVR),
+                    ==, 0);
+
+    qtest_clock_step(qts, XGENE_RTC_SECOND_NS / 2);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 100);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CPCVR),
+                    ==, XGENE_RTC_PRESCALER / 2);
+    qtest_clock_step(qts, XGENE_RTC_SECOND_NS / 2);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 101);
+
+    /* A match while interrupt generation is disabled does not latch raw. */
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CMR, 102);
+    qtest_clock_step(qts, XGENE_RTC_SECOND_NS);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_RTC_IRQ));
+
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CMR, 104);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR,
+                  run | XGENE_RTC_IE);
+    qtest_clock_step(qts, 2 * XGENE_RTC_SECOND_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_STAT),
+                    ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 1);
+    g_assert_true(c900_plic_pending(qts, TH1520_RTC_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_RTC_IRQ);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_EOI),
+                    ==, 1);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_RTC_IRQ);
+    g_assert_false(c900_plic_pending(qts, TH1520_RTC_IRQ));
+
+    /* MASK hides STAT/IRQ but not RSTAT; unmasking exposes the latch. */
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CMR, 105);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR,
+                  run | XGENE_RTC_IE | XGENE_RTC_MASK);
+    qtest_clock_step(qts, XGENE_RTC_SECOND_NS);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_STAT),
+                    ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_RTC_IRQ));
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR,
+                  run | XGENE_RTC_IE);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_STAT),
+                    ==, 1);
+    g_assert_true(c900_plic_pending(qts, TH1520_RTC_IRQ));
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_RTC_IRQ);
+    qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_EOI);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_RTC_IRQ);
+
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR, 0);
+    retained = qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR);
+    qtest_clock_step(qts, 2 * XGENE_RTC_SECOND_NS);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, retained);
+
+    /* WEN forces the counter to zero on the match clock. */
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CPSR,
+                  XGENE_RTC_PRESCALER);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CMR, 12);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR,
+                  run | XGENE_RTC_IE | XGENE_RTC_WEN);
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CLR, 10);
+    qtest_clock_step(qts, XGENE_RTC_SECOND_NS);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 10);
+    qtest_clock_step(qts, 2 * XGENE_RTC_SECOND_NS - 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 11);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 1);
+    qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_EOI);
+
+    retained = qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR);
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, retained);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CMR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CLR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CPSR),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 0);
+
+    qtest_writel(qts, TH1520_RTC_BASE + XGENE_RTC_CCR, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_RTC_BASE + XGENE_RTC_CCR),
+                    ==, 0x1f);
+    qtest_quit(qts);
+}
+
+static void test_xgene_rtc_migration(void)
+{
+    const uint32_t run = XGENE_RTC_EN | XGENE_RTC_PSCLR_EN |
+                         XGENE_RTC_IE;
+    const char *rtc_args =
+        "-machine beaglev-ahead -bios none "
+        "-rtc base=2000-01-01,clock=vm";
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming_args = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-rtc-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+    incoming_args = g_strdup_printf("%s -incoming defer", rtc_args);
+
+    src = qtest_init(rtc_args);
+    dst = qtest_init(incoming_args);
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+    qtest_writel(src, C900_PLIC_PRIORITY(TH1520_RTC_IRQ), 5);
+    c900_plic_set_enable(src, 1, TH1520_RTC_IRQ, true);
+
+    qtest_writel(src, TH1520_RTC_BASE + XGENE_RTC_CPSR,
+                  XGENE_RTC_PRESCALER);
+    qtest_writel(src, TH1520_RTC_BASE + XGENE_RTC_CCR,
+                  XGENE_RTC_EN | XGENE_RTC_PSCLR_EN);
+    qtest_writel(src, TH1520_RTC_BASE + XGENE_RTC_CLR, 100);
+    qtest_clock_step(src, XGENE_RTC_SECOND_NS);
+    qtest_writel(src, TH1520_RTC_BASE + XGENE_RTC_CMR, 103);
+    qtest_writel(src, TH1520_RTC_BASE + XGENE_RTC_CCR, run);
+    qtest_clock_step(src, XGENE_RTC_SECOND_NS);
+    g_assert_cmphex(qtest_readl(src, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 101);
+    qtest_clock_step(src, XGENE_RTC_SECOND_NS / 2);
+    g_assert_cmphex(qtest_readl(src, TH1520_RTC_BASE + XGENE_RTC_CPCVR),
+                    ==, XGENE_RTC_PRESCALER / 2);
+
+    g_assert_cmpint(qtest_clock_set(dst, 5 * XGENE_RTC_SECOND_NS / 2), ==,
+                    5 * XGENE_RTC_SECOND_NS / 2);
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 101);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CMR),
+                    ==, 103);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CCR),
+                    ==, run);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CPSR),
+                    ==, XGENE_RTC_PRESCALER);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CPCVR),
+                    ==, XGENE_RTC_PRESCALER / 2);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 0);
+
+    qtest_clock_step(dst, 3 * XGENE_RTC_SECOND_NS / 2 - 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 102);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_RSTAT),
+                    ==, 0);
+    qtest_clock_step(dst, 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_CCVR),
+                    ==, 103);
+    g_assert_cmphex(qtest_readl(dst, TH1520_RTC_BASE + XGENE_RTC_STAT),
+                    ==, 1);
+    g_assert_true(c900_plic_pending(dst, TH1520_RTC_IRQ));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_dw_timer_migration(void)
 {
     const TH1520Timer *running = &th1520_timers[2];
@@ -6956,6 +7261,10 @@ int main(int argc, char **argv)
         }
         qtest_add_func("/beaglev-ahead/usb/migration",
                        test_th1520_usb_migration);
+        qtest_add_func("/beaglev-ahead/xgene-rtc/registers-timing-irq",
+                       test_xgene_rtc_registers_timing_irq);
+        qtest_add_func("/beaglev-ahead/xgene-rtc/migration",
+                       test_xgene_rtc_migration);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
