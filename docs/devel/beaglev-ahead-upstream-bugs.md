@@ -14,7 +14,7 @@ reporting it.
 
 The current conservative tally is:
 
-* **8 proposed new upstream report units** (`UQ-001` through `UQ-008`);
+* **10 proposed new upstream report units** (`UQ-001` through `UQ-010`);
 * **1 matching public upstream report** (`UQ-K001`), which is not new;
 * **2 additional investigation candidates** (`UQ-C001` and `UQ-C002`);
 * **1 defect confined to this not-yet-upstream board implementation**
@@ -30,10 +30,14 @@ unit.  Upstream had no reusable DW APB watchdog model to regress, and the
 TH1520 integration, provisional synthesis values and hardware uncertainties
 are new-board scope rather than defects in pre-existing QEMU code.
 
+The 2026-08-24 USB-host milestone added two report units.  Unlike the new
+TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
+xHCI models and were independently exposed by an upstream Linux host driver.
+
 A report unit groups symptoms that have the same subsystem, reproducer, and
-likely fix.  A maintainer may reasonably split `UQ-003`, `UQ-004`, or
-`UQ-007`, so the eventual issue count can increase without discovering a new
-underlying problem.
+likely fix.  A maintainer may reasonably split `UQ-003`, `UQ-004`, `UQ-007`,
+or the adjacent 64-bit-access audit from `UQ-010`, so the eventual issue count
+can increase without discovering a new underlying problem.
 
 `REPORTABLE` below means the source defect is sufficiently concrete to merit
 an upstream report after the listed isolation and duplicate-search steps.  It
@@ -327,6 +331,130 @@ Upstream isolation task:
 
 No matching public issue was found in the 2026-08-23 quick search.
 
+### UQ-009: the generic DWC3 host model omits host-initialization DCTL access
+
+Status: **REPORTABLE; high confidence; Linux and qtest regressions exist;
+generic isolation and duplicate search still required**
+
+Affected upstream code:
+
+* `hw/usb/hcd-dwc3.c`; and
+* `include/hw/usb/hcd-dwc3.h`.
+
+The upstream `usb-dwc3` device maps the xHCI registers and DWC3 global
+registers beginning at `0xc100`, but leaves the device-register aperture
+beginning at `0xc700` unassigned.  Linux's generic DWC3 core initialization
+reads and soft-resets DCTL at `0xc704` even when the requested final role is
+host.  On the TH1520 integration this produced a guest load-access fault at
+that address before xHCI could probe.
+
+Expected result:
+
+* a generic DWC3 advertised for host use must allow the host driver's required
+  DCTL read/write sequence; and
+* setting `DCTL.CSFTRST` must eventually clear so initialization can continue.
+
+Baseline result:
+
+* `0xc704` is a decode hole, so Linux faults rather than completing the reset.
+
+Branch fix and evidence:
+
+* commit `38f6addbc8` (`hw/usb: model DWC3 DCTL soft reset`) adds the minimal
+  host-required DCTL block, retains
+  `RUN_STOP`, completes `CSFTRST` immediately in this untimed host-only model,
+  resets it with the core and migrates it through a backward-compatible
+  versioned field;
+* commit `af9076a779` adds `/riscv64/beaglev-ahead/usb/registers`, which checks
+  reset, soft-reset self-clear, readback and system reset, while the USB
+  migration test preserves `RUN_STOP`; and
+* after this fix, pinned upstream Linux commit
+  `2709dd5ae32f0828f386327c76bba9f39f63a1c6` proceeds past DWC3 core reset.
+
+Current branch reproducer:
+
+```sh
+QTEST_QEMU_BINARY="$PWD/build-beaglev-ahead/qemu-system-riscv64" \
+  build-beaglev-ahead/tests/qtest/beaglev-ahead-test \
+  -p /riscv64/beaglev-ahead/usb/registers
+```
+
+Upstream isolation task:
+
+* instantiate `usb-dwc3` directly in a small generic qtest, or use an existing
+  upstream machine that realizes it, without any TH1520 source;
+* show that DCTL access fails on the baseline and that `CSFTRST` self-clears
+  after the minimal patch;
+* check old-to-new migration in both directions permitted by QEMU policy; and
+* search GitLab and qemu-devel for DWC3 DCTL/device-register/host-init reports.
+
+This report is independent of the missing TH1520 glue driver and must not claim
+that the minimal DCTL block implements DWC3 device mode.
+
+### UQ-010: xHCI event-ring setup depends on ERSTBA half-write order
+
+Status: **REPORTABLE; high confidence; Linux and qtest regressions exist;
+generic isolation, 64-bit-access audit and duplicate search still required**
+
+Affected upstream code:
+
+* `hw/usb/hcd-xhci.c`, `xhci_runtime_write()`; and
+* `hw/usb/hcd-xhci.h`, `XHCIInterrupter` migration state.
+
+ERSTBA is a 64-bit event-ring-segment-table base exposed as two 32-bit words.
+The baseline stores either half but calls `xhci_er_reset()` only after a write
+to the high half.  Linux programs this register high half first and low half
+second.  QEMU therefore reloads the event ring with the old low word (zero),
+marks it disabled, then never reloads it after the real low address arrives.
+No command-completion or port-change event is delivered and the guest waits
+indefinitely for xHCI enumeration.
+
+Expected result:
+
+* programming both ERSTBA halves must activate the same event-ring table in
+  either normal 32-bit write order.
+
+Baseline result:
+
+* low-then-high works, while high-then-low leaves `er_start`/`er_size`
+  disabled even though ERSTBA reads back correctly.
+
+Branch fix and evidence:
+
+* commit `e51e183b1c` (`hw/usb: accept either xHCI ERSTBA write order`) records
+  which half has arrived, reloads the event ring only after both halves have
+  been written, resets that latch and migrates a partially programmed register
+  with a backward-compatible VMState version;
+* commit `af9076a779` adds `/riscv64/beaglev-ahead/usb/host-dma-irq`, which
+  intentionally uses Linux's
+  high-then-low order and proves an xHCI no-op command produces an event DMA
+  and PLIC source 68; the full-build HID hotplug test retains low-then-high
+  coverage and proves a port-change event; and
+* after the fix, the pinned upstream Linux kernel enumerates QEMU keyboard
+  `0627:0001` through the DWC3/xHCI host.
+
+Current branch reproducer:
+
+```sh
+QTEST_QEMU_BINARY="$PWD/build-beaglev-ahead/qemu-system-riscv64" \
+  build-beaglev-ahead/tests/qtest/beaglev-ahead-test \
+  -p /riscv64/beaglev-ahead/usb/host-dma-irq
+```
+
+Upstream isolation task:
+
+* move the order test to a generic qtest using `qemu-xhci` or another existing
+  xHCI fixture and require identical command-event results for both orders;
+* add a migration case after exactly one half has been written;
+* audit true 64-bit MMIO reads/writes: the runtime region currently advertises
+  accesses up to `sizeof(dma_addr_t)`, while the handler switches on one
+  32-bit offset and returns a 32-bit value; and
+* search GitLab and qemu-devel for ERSTBA, event-ring initialization and Linux
+  xHCI timeout reports before filing.
+
+This defect is in generic xHCI code and reproduces independently of TH1520.
+It is not a claim about the board's provisional DWC3 synthesis values.
+
 ## Already reported upstream
 
 ### UQ-K001: NPCM GMAC transmit buffer integer truncation
@@ -343,7 +471,7 @@ checks accumulated frame length before addition/copy, and bounds descriptor
 walks.  Before proposing any subset, compare it with the issue's current patch
 and coordinate rather than sending a competing duplicate fix.
 
-## Investigation candidates not included in the eight-report tally
+## Investigation candidates not included in the ten-report tally
 
 ### UQ-C001: `pmpaddr` retains bits above the implemented address width
 
@@ -410,8 +538,10 @@ The following are also not counted as upstream QEMU bugs at present:
 1. `UQ-006` first, privately, because it may disclose host memory.
 2. `UQ-K001` and `UQ-C002`, to avoid duplicating or conflicting with the
    existing NPCM security work.
-3. Small isolated fixes: `UQ-008`, `UQ-005`, and `UQ-001`.
-4. Migration fixes: `UQ-004` and `UQ-007`.
+3. Small isolated fixes: `UQ-009`, `UQ-010`, `UQ-008`, `UQ-005`, and
+   `UQ-001`.
+4. Migration fixes: `UQ-004` and `UQ-007`, plus the compatibility portions of
+   `UQ-009` and `UQ-010`.
 5. Generic RISC-V PMU work: `UQ-002` and `UQ-003`.
 6. Only then decide whether `UQ-C001` has enough specification and test
    evidence to promote into the reportable list.

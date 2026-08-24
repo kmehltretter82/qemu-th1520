@@ -37,6 +37,14 @@ The machine currently provides:
   ``0xfff7f2c000``, connected to PLIC sources 44 through 49.  I2C0 is enabled
   for the board's 4 KiB FT24C32A-compatible EEPROM at address ``0x50``; I2C1
   through I2C5 are present but board-disabled;
+* the TH1520 miscellaneous clock/reset bank at ``0xffec02c000`` and USB DRD
+  wrapper at ``0xffec03f000``.  Their modeled reset values, writable masks,
+  three active-low USB reset outputs, reset and migration state follow the
+  recorded TH1520 software contract; clock-gate bits are visible state only;
+* one DWC3/xHCI USB 3 host controller at ``0xffe7040000`` on PLIC source 68,
+  with one paired USB2/USB3 connector.  Host DMA, interrupts, a USB keyboard,
+  hotplug, system reset and migration are exercised; the generated generic
+  core node remains disabled pending a mainline TH1520 glue binding;
 * one DesignWare APB SSI controller at ``0xffe700c000``, connected to PLIC
   source 54.  The ``spi0`` node is disabled to match upstream Linux and no
   flash or other board peripheral is attached;
@@ -94,9 +102,9 @@ The machine currently provides:
 The generated device tree uses the same board, CPU, PLIC, CLINT, UART, I2C,
 SPI0, PWM, APB timer, PVT, GPIO, pinctrl, storage, memory, and cache topology
 bindings as upstream Linux's TH1520 device tree, augmented with the
-schematic-established board EEPROM and two disabled generic DesignWare
-watchdog nodes.  It advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for
-every C910 hart.
+schematic-established board EEPROM, two disabled generic DesignWare watchdog
+nodes, both USB syscon apertures, and a disabled generic DWC3 node.  It
+advertises ``xtheadvector`` and ``thead,vlenb = <16>`` for every C910 hart.
 
 Boot options
 ------------
@@ -122,6 +130,15 @@ Passing ``-dtb file.dtb`` replaces the generated tree and passes that external
 tree through the same firmware handoff.  This is useful for controlled driver
 experiments; the supplied tree remains responsible for describing the real
 machine topology correctly.
+
+For a USB host experiment whose external device tree enables and sequences the
+TH1520 glue and DWC3 core, a keyboard can be attached with:
+
+.. code-block:: bash
+
+   -device usb-kbd,bus=usb-bus.0,port=1
+
+The generated tree deliberately does not enable the core by itself.
 
 All four C910 harts currently enter that trampoline.  The FW_DYNAMIC handoff
 selects hart 0 for relocation, and an OpenSBI configuration node restricts its
@@ -245,6 +262,33 @@ write-cycle busy time, endurance, power-loss or write-protect behavior.
 Factory contents and layout, the fitted board revision and the schematic's
 GPIO2_22-related write-protect network must be checked on the owner's board
 before those behaviors are modeled.
+
+The USB model combines QEMU's host-only DWC3/xHCI core with TH1520
+miscellaneous-system and DRD wrapper registers at their Linux/vendor addresses.
+It exposes one paired USB2/USB3 connector, routes the xHCI interrupt to PLIC
+source 68, gives xHCI DMA access to guest memory, and translates all three
+active-low miscellaneous reset bits into conservative whole-core resets.  The
+wrapper and core register state migrate.  Focused tests program an xHCI event
+and command ring, complete a no-op command through DMA, check PLIC delivery,
+hotplug a keyboard, exercise both ERSTBA half-write orders, and migrate
+miscellaneous, wrapper, DWC3 and xHCI state.
+
+Linux commit ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` was also booted with
+its DWC3/xHCI/HID host drivers built in and a test-only TH1520 glue module.  It
+enumerated QEMU's ``0627:0001`` USB keyboard through this controller.  That
+module is validation scaffolding derived from the public vendor-driver
+sequence, not a proposed production Linux driver.  Mainline Linux has no
+TH1520 USB parent binding or glue driver, so QEMU emits both syscon nodes but
+keeps the generic child disabled rather than bypassing clock/reset sequencing.
+
+This milestone is host-functional, not complete DRD or PHY emulation.  Device
+mode, OTG role detection/switching, VBUS and ID sensing, Fastboot/BootROM
+recovery, suspend/resume, analog USB2/USB3 PHY behavior, link training, timing,
+error injection, dynamic port-disable/topology overrides and clock-gate effects
+are absent.  DWC3 revision/HWPARAM values are QEMU synthesis defaults, not
+measured TH1520 values.  The three silicon reset domains are collapsed to a
+full digital-core reset because the reusable core exposes no finer boundary.
+All of these distinctions remain in the hardware-validation ledger.
 
 SPI0 uses a reusable DesignWare APB SSI master model.  Its address, level-high
 PLIC source 54, AP clock ID 54, ``spi0`` alias and disabled
@@ -483,7 +527,9 @@ brings up four harts, uses earlycon, and binds the DesignWare UART as
 ``ttyS0``.  A variant with ``CONFIG_EEPROM_AT24=y`` also binds I2C0 and reads
 all 4096 bytes of the synthetic erased board EEPROM.  A separate variant with
 ``CONFIG_SENSORS_MR75203=y`` binds the PVT controller and reads two temperature
-and 16 voltage hwmon channels.  With no block device
+and 16 voltage hwmon channels.  The USB validation variant enumerates a QEMU
+keyboard through the TH1520 DWC3/xHCI path using the test-only glue described
+above.  With no block device
 attached, the expected endpoint is a
 missing-root-filesystem panic; this is a bring-up test, not a claim that a
 production image is supported.
@@ -497,17 +543,20 @@ A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
 and C910-specific CSR state, the rotating CPUID cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
 APB timer components, both AP watchdogs, TH1520 mailbox and MR75203 PVT state,
-all six GPIO controllers, all three pad controllers, storage and GMAC state in
-one stream.
+all six GPIO controllers, all three pad controllers, storage, GMAC, the USB
+miscellaneous and DRD wrappers, DWC3 and xHCI state in one stream.
 Focused migration tests additionally preserve an in-flight I2C read and
 EEPROM address pointer, two running watchdogs at different stages, a running
 APB timer with a latched interrupt, a running TH1520 PWM phase with a pending
 update, a mailbox event and remote-window data, plus completed AXI-DMAC
 data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
-conversions.  Together with the focused device tests, the complete 82-test
-board gate runs in the full, dependency-minimal and ASan/UBSan builds.  The
-instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
+conversions.  Together with the focused device tests, the complete board gate
+passes 87 tests in the normal build and 86 in both the dependency-minimal and
+ASan/UBSan builds.  The only conditional omission is the keyboard-hotplug test
+because the deliberately minimal configurations exclude ``usb-kbd``; their
+register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
+vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
 cover the later native UART handoff and expected missing-root panic.  ASan's
@@ -515,8 +564,9 @@ warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
 QSPI/XIP, board SPI peripherals and timer PWM outputs, PVT alarm/timer/IRQ and
-analog timing fidelity, RTC and non-application watchdogs, USB,
-PCIe, display, audio, camera, video codecs, GPU, NPU, the C906 and E902
+analog timing fidelity, RTC and non-application watchdogs, USB device/OTG,
+PHY and recovery-mode behavior, PCIe, display, audio, camera, video codecs,
+GPU, NPU, the C906 and E902
 auxiliary cores, DSPs, security blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.
 Electrical pad routing and GPIO-connected PHY/Wi-Fi/card-detect signals are

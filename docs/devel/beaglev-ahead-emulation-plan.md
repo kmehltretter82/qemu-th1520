@@ -66,6 +66,25 @@ software-visible contract that can be documented and verified.  If proprietary
 firmware or unavailable specifications prevent that contract, the limitation
 remains an open release blocker in the ledger.
 
+## Current progress estimate
+
+As of 2026-08-24, this branch is approximately **43% complete (plus or minus
+5 percentage points)** against the strict definition above and approximately
+**75% complete for practical C910 Linux and driver development**.  These are
+weighted engineering estimates, not a ratio of files or register blocks.  The
+strict number remains dominated by authentic boot/reset, exhaustive CPU
+differential validation, USB device/OTG and PHY behavior, PCIe, display/GPU,
+media/NPU, auxiliary processors, security/power domains, stock-image coverage,
+physical comparison and final source pruning.
+
+The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
+miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
+hotplug, migration and upstream-Linux keyboard enumeration work.  Its remaining
+host gaps are exact silicon capabilities, PHY/link/timing, clock gating,
+suspend/resume, stress/error injection and physical comparison.  This does not
+mean Phase 7 is 90% complete: USB device/OTG/Fastboot plus Wi-Fi and Bluetooth
+remain largely open.
+
 ## Pinned source set and provenance
 
 The implementation must cite and pin the evidence used for each block:
@@ -139,10 +158,10 @@ validation.
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance and migration are implemented; PMA timing/cache effects and PMU fidelity remain | Finish CSR probes, memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
-| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, documented reset values/write masks, deterministic PLL locking and VMState; selected documented watchdog, PWM and timer reset lines drive immediate model resets and are replayed after migration; the generated DT uses the upstream Linux providers | Couple gates to children, extend reset coupling beyond watchdog/PWM/timers, model remaining AO/video/DSP/misc domains and power transitions, and validate every default/timing distinction on hardware |
+| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB reset/clock bank, documented reset values/write masks, deterministic PLL locking and VMState; selected watchdog, PWM, timer and USB reset lines drive model resets and are replayed after migration; the generated DT uses the upstream Linux providers | Couple gates to children, refine the three USB reset domains, extend reset coupling to remaining blocks, model remaining AO/video/DSP/misc domains and power transitions, and validate every default/timing distinction on hardware |
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior and clock/reset coupling |
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs and clocks; I2C0 carries the 4 KiB board EEPROM and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, clock/reset coupling, reserved-aperture behavior and physical differential validation |
-| USB host | DWC3 host and sysbus xHCI models exist | Add TH1520 wrapper, PHY, OTG/device behavior and exact capabilities |
+| USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, and mainline Linux binds GMAC0 as DWMAC1000 | Add programmable MAC/VLAN/hash filtering, full checksum-mode coverage, PTP/MMC/WOL/EEE, RTL8211F vendor pages/delays/IRQ/reset, traffic stress, error injection and physical differential validation |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
@@ -157,7 +176,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, TH1520 mailbox, MR75203 PVT, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if the synchronous DMAC model later gains timing |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, TH1520 mailbox, MR75203 PVT, GPIO, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing and add USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -308,6 +327,18 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   generated DT now exposes the upstream Linux bindings and uses their real
   clock IDs for all six UARTs, the general DMAC, all three storage controllers
   and both GMACs instead of temporary fixed-clock nodes; and
+* a TH1520 USB host path comprising the misc-system bank at
+  ``0xffec02c000``, DRD wrapper at ``0xffec03f000`` and DWC3/xHCI core at
+  ``0xffe7040000`` on PLIC source 68.  One paired USB2/USB3 connector has
+  functional guest-memory DMA, command/event rings, interrupts and HID
+  hotplug.  The three active-low wrapper reset inputs conservatively reset the
+  complete reusable core, while the misc/wrapper/DWC3/xHCI state migrates.
+  Five normal-build tests cover register masks and provisional identity,
+  resets, both xHCI ERSTBA write orders, DMA/PLIC completion, keyboard hotplug
+  and migration.  A pinned upstream Linux 7.2 kernel with a deliberately
+  test-only TH1520 glue module enumerates the QEMU keyboard.  The generated
+  DWC3 node remains disabled because mainline has no TH1520 parent binding or
+  glue driver; device/OTG, PHY and recovery behavior remain open; and
 * a deterministic direct-boot contract that selects hart 0 for both the
   FW_DYNAMIC relocation stage and OpenSBI's later cold-boot lottery, plus a
   four-hart M-mode payload whose ordered UART transcript proves that harts
@@ -320,7 +351,7 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   six I2C and GPIO controllers, the board EEPROM, SPI0, both APB timer
   components, TH1520 mailbox state, all three pad controllers, all three
   storage controllers, both GMAC cores, PHY banks and both GMAC APB-glue
-  instances together; and
+  instances, plus TH1520 USB misc/DRD, DWC3 and xHCI state together; and
 * a minimal device build that excludes unrelated boards and most unused
   devices without deleting shared source prematurely.
 
@@ -353,8 +384,14 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently comprises 82 board qtests in the normal,
-dependency-minimal and ASan/UBSan builds.  These include eight storage tests
+The focused gate currently passes 87 board qtests in the normal build and 86
+in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
+difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
+from the minimal configurations.  The four remaining USB tests cover exact
+misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
+three reset outputs, Linux's high-half-first and the conventional
+low-half-first ERSTBA sequences, guest-memory DMA, PLIC source 68, system reset
+and migration.  These gates also include eight storage tests
 for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23
 with a 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
@@ -414,6 +451,21 @@ panic are separately established by the normal full and minimal boots.  This
 snapshot proves only the boot-critical interfaces exercised by those tests;
 it does not resolve a hardware-only ledger item or imply stock-image
 compatibility.
+
+A separate Linux build from the same pinned commit enabled DWC3 host, xHCI and
+HID in the kernel and used an out-of-tree, test-only TH1520 glue module whose
+sequence is explicitly attributed to vendor kernel commit
+``b9cf70c75d2b7482195a94e754d59f8cfc9dda2c``.  With an external enabling DT
+and ``usb-kbd`` pre-attached, it reported:
+
+```text
+USBTEST_INIT: PASS upstream Linux enumerated QEMU USB keyboard 0627:0001 through TH1520 DWC3/xHCI
+```
+
+This proves the upstream host-driver, wrapper, DMA, interrupt and enumeration
+path.  It does not promote the validation module into a production Linux
+driver or resolve any PHY, role, synthesis, reset-domain or physical-board
+uncertainty.
 
 With a blank 64 MiB image attached as storage unit 0, the same pinned Linux
 kernel binds all three ``thead,th1520-dwcmshc`` nodes, reports 64-bit ADMA, and
@@ -802,6 +854,19 @@ Gate P7:
 
 RF propagation and real 802.11/Bluetooth air behavior remain backend concerns,
 not emulated analog behavior.
+
+Status: in progress.  The first USB-host submilestone maps the misc-system and
+DRD wrapper apertures, embeds one DWC3/xHCI host with one USB2 and one USB3 port
+for the board's paired connector, routes DMA and PLIC source 68, couples all
+three known reset bits, and preserves wrapper/core state across migration.
+Register/reset, both ERSTBA half-write orders, command-ring DMA, interrupt,
+keyboard hotplug and migration qtests pass.  An upstream Linux 7.2 kernel with
+test-only TH1520 glue enumerates the attached keyboard.  The generic DWC3 node
+remains generated but disabled until mainline gains a real parent binding and
+driver.  Exact DWC3/xHCI synthesis values, distinct reset domains, clocks,
+PHY/link behavior, host stress and error paths, suspend/resume, device/OTG,
+VBUS/ID role switching, Fastboot/BootROM recovery, Wi-Fi and Bluetooth are
+still open, so P7 is not closed.
 
 ### Phase 8 — display, GPU, camera and media
 
