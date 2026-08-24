@@ -27,12 +27,14 @@ typedef struct DWAPBTimerContext {
  *  + Clock input "timer": common counter clock
  *  + sysbus MMIO region 0: the component register bank
  *  + sysbus IRQ 0..3: timer interrupt outputs
+ *  + GPIO output "toggle" 0..3: timer toggle/PWM outputs
  */
 struct DWAPBTimerState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
     qemu_irq irq[DW_APB_TIMER_CHANNELS];
+    qemu_irq toggle[DW_APB_TIMER_CHANNELS];
     Clock *timer_clk;
     ptimer_state *timer[DW_APB_TIMER_CHANNELS];
     DWAPBTimerContext context[DW_APB_TIMER_CHANNELS];
@@ -42,6 +44,7 @@ struct DWAPBTimerState {
     uint32_t raw_intr[DW_APB_TIMER_CHANNELS];
     uint32_t load_count2[DW_APB_TIMER_CHANNELS];
     uint32_t protection[DW_APB_TIMER_CHANNELS];
+    bool toggle_level[DW_APB_TIMER_CHANNELS];
 
     uint32_t component_version;
 };

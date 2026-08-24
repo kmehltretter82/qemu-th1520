@@ -3,8 +3,10 @@
  *
  * This models the software-visible four-counter component used by TH1520.
  * A disabled input clock freezes enabled counters and a later non-zero clock
- * resumes them.  Cascade wiring, per-counter synthesized clocks, and physical
- * PWM outputs are integration options and are deliberately not inferred here.
+ * resumes them.  Each counter has a toggle output.  In user-defined PWM mode,
+ * LoadCount controls its low interval and LoadCount2 controls its high
+ * interval.  Cascade wiring, per-counter synthesized clocks, and physical pin
+ * routing are integration options and are deliberately not inferred here.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -84,19 +86,55 @@ static void dw_apb_timer_clear_irq(DWAPBTimerState *s,
     dw_apb_timer_update_irq(s, channel);
 }
 
+static void dw_apb_timer_set_toggle(DWAPBTimerState *s,
+                                     unsigned int channel, bool level)
+{
+    s->toggle_level[channel] = level;
+    qemu_set_irq(s->toggle[channel], level);
+}
+
+/*
+ * ptimer reloads before invoking the expiry callback.  Keep its limit set to
+ * the value needed after the next toggle: low->high loads LoadCount2 and
+ * high->low loads LoadCount.  Outside user-defined PWM mode the normal timer
+ * mode selects the reload value.
+ */
+static uint32_t dw_apb_timer_next_limit(DWAPBTimerState *s,
+                                         unsigned int channel)
+{
+    uint32_t control = s->control[channel];
+
+    if (!(control & DW_APB_TIMER_CONTROL_MODE)) {
+        return UINT32_MAX;
+    }
+    if (control & DW_APB_TIMER_CONTROL_PWM) {
+        return s->toggle_level[channel] ? s->load_count[channel] :
+                                          s->load_count2[channel];
+    }
+    return s->load_count[channel];
+}
+
 static void dw_apb_timer_write_load(DWAPBTimerState *s,
                                      unsigned int channel, uint32_t value)
 {
     ptimer_state *timer = s->timer[channel];
-    uint32_t limit;
 
     s->load_count[channel] = value;
-    limit = s->control[channel] & DW_APB_TIMER_CONTROL_MODE ?
-            value : UINT32_MAX;
 
     ptimer_transaction_begin(timer);
-    ptimer_set_limit(timer, limit, 0);
+    ptimer_set_limit(timer, dw_apb_timer_next_limit(s, channel), 0);
     ptimer_set_count(timer, value);
+    ptimer_transaction_commit(timer);
+}
+
+static void dw_apb_timer_write_load2(DWAPBTimerState *s,
+                                      unsigned int channel, uint32_t value)
+{
+    ptimer_state *timer = s->timer[channel];
+
+    s->load_count2[channel] = value;
+    ptimer_transaction_begin(timer);
+    ptimer_set_limit(timer, dw_apb_timer_next_limit(s, channel), 0);
     ptimer_transaction_commit(timer);
 }
 
@@ -113,28 +151,22 @@ static void dw_apb_timer_write_control(DWAPBTimerState *s,
     if ((old & DW_APB_TIMER_CONTROL_ENABLE) &&
         !(value & DW_APB_TIMER_CONTROL_ENABLE)) {
         ptimer_stop(timer);
-    }
-
-    if ((old ^ value) & DW_APB_TIMER_CONTROL_MODE) {
-        uint32_t limit = value & DW_APB_TIMER_CONTROL_MODE ?
-                         s->load_count[channel] : UINT32_MAX;
-
-        ptimer_set_limit(timer, limit, 0);
+        /* The synthesized toggle register is cleared with TIMER_ENABLE. */
+        dw_apb_timer_set_toggle(s, channel, false);
     }
 
     s->control[channel] = value;
+    if ((old ^ value) & (DW_APB_TIMER_CONTROL_ENABLE |
+                         DW_APB_TIMER_CONTROL_MODE |
+                         DW_APB_TIMER_CONTROL_PWM)) {
+        ptimer_set_limit(timer, dw_apb_timer_next_limit(s, channel), 0);
+    }
     if ((value & DW_APB_TIMER_CONTROL_ENABLE) &&
         clock_is_enabled(s->timer_clk)) {
         ptimer_run(timer, 0);
     }
     ptimer_transaction_commit(timer);
 
-    if ((value & DW_APB_TIMER_CONTROL_PWM) &&
-        !(old & DW_APB_TIMER_CONTROL_PWM)) {
-        qemu_log_mask(LOG_UNIMP,
-                      "%s: timer %u PWM output is not connected\n",
-                      TYPE_DW_APB_TIMER, channel);
-    }
     dw_apb_timer_update_irq(s, channel);
 }
 
@@ -222,8 +254,8 @@ static void dw_apb_timer_write(void *opaque, hwaddr offset, uint64_t value,
     switch (offset) {
     case DW_APB_TIMER_LOAD_COUNT2_BASE ...
          DW_APB_TIMER_LOAD_COUNT2_BASE + 4 * (DW_APB_TIMER_CHANNELS - 1):
-        s->load_count2[(offset - DW_APB_TIMER_LOAD_COUNT2_BASE) / 4] =
-            value32;
+        dw_apb_timer_write_load2(
+            s, (offset - DW_APB_TIMER_LOAD_COUNT2_BASE) / 4, value32);
         break;
     case DW_APB_TIMER_PROTECTION_BASE ...
          DW_APB_TIMER_PROTECTION_BASE + 4 * (DW_APB_TIMER_CHANNELS - 1):
@@ -273,9 +305,13 @@ static void dw_apb_timer_tick(void *opaque)
 {
     DWAPBTimerContext *context = opaque;
     DWAPBTimerState *s = context->parent;
+    unsigned int channel = context->index;
 
-    s->raw_intr[context->index] = 1;
-    dw_apb_timer_update_irq(s, context->index);
+    dw_apb_timer_set_toggle(s, channel, !s->toggle_level[channel]);
+    ptimer_set_limit(s->timer[channel],
+                     dw_apb_timer_next_limit(s, channel), 0);
+    s->raw_intr[channel] = 1;
+    dw_apb_timer_update_irq(s, channel);
 }
 
 static void dw_apb_timer_clk_update(void *opaque, ClockEvent event)
@@ -311,6 +347,7 @@ static void dw_apb_timer_reset(DeviceState *dev)
         s->raw_intr[i] = 0;
         s->load_count2[i] = 0;
         s->protection[i] = 2;
+        dw_apb_timer_set_toggle(s, i, false);
 
         ptimer_transaction_begin(s->timer[i]);
         ptimer_stop(s->timer[i]);
@@ -336,9 +373,12 @@ static int dw_apb_timer_post_load(void *opaque, int version_id)
     for (unsigned int i = 0; i < DW_APB_TIMER_CHANNELS; i++) {
         if ((s->control[i] & ~DW_APB_TIMER_CONTROL_VALID) ||
             s->raw_intr[i] > 1 ||
-            (s->protection[i] & ~DW_APB_TIMER_PROTECTION_VALID)) {
+            (s->protection[i] & ~DW_APB_TIMER_PROTECTION_VALID) ||
+            (!(s->control[i] & DW_APB_TIMER_CONTROL_ENABLE) &&
+             s->toggle_level[i])) {
             return -EINVAL;
         }
+        qemu_set_irq(s->toggle[i], s->toggle_level[i]);
     }
     dw_apb_timer_update_irqs(s);
     return 0;
@@ -346,7 +386,7 @@ static int dw_apb_timer_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_dw_apb_timer = {
     .name = TYPE_DW_APB_TIMER,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .post_load = dw_apb_timer_post_load,
     .fields = (const VMStateField[]) {
@@ -362,6 +402,8 @@ static const VMStateDescription vmstate_dw_apb_timer = {
                              DW_APB_TIMER_CHANNELS),
         VMSTATE_UINT32_ARRAY(protection, DWAPBTimerState,
                              DW_APB_TIMER_CHANNELS),
+        VMSTATE_BOOL_ARRAY_V(toggle_level, DWAPBTimerState,
+                             DW_APB_TIMER_CHANNELS, 2),
         VMSTATE_END_OF_LIST(),
     },
 };
@@ -384,6 +426,8 @@ static void dw_apb_timer_init(Object *obj)
         s->context[i].parent = s;
         s->context[i].index = i;
     }
+    qdev_init_gpio_out_named(DEVICE(s), s->toggle, "toggle",
+                             DW_APB_TIMER_CHANNELS);
     s->timer_clk = qdev_init_clock_in(DEVICE(s), "timer",
                                       dw_apb_timer_clk_update, s,
                                       ClockPreUpdate | ClockUpdate);

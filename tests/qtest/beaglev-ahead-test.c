@@ -332,6 +332,8 @@
 #define TH1520_MBOX_QOM_PATH       "/machine/soc/mbox"
 #define TH1520_PVT_QOM_PATH        "/machine/soc/pvt"
 #define TH1520_PWM_QOM_PATH        "/machine/soc/pwm"
+#define TH1520_TIMER0_3_QOM_PATH   "/machine/soc/timer0-3"
+#define TH1520_TIMER4_7_QOM_PATH   "/machine/soc/timer4-7"
 
 #define TH1520_UART0_IRQ           36
 #define TH1520_UART1_IRQ           37
@@ -4813,6 +4815,107 @@ static void test_dw_timer_timing(void)
     qtest_quit(qts);
 }
 
+static void test_dw_timer_toggle_pwm(void)
+{
+    static const struct {
+        const char *path;
+        uint64_t base;
+        unsigned int gate;
+    } groups[] = {
+        { TH1520_TIMER0_3_QOM_PATH, TH1520_TIMER0_3_BASE,
+          TH1520_AP_CLOCK_GATE_TIMER0 },
+        { TH1520_TIMER4_7_QOM_PATH, TH1520_TIMER4_7_BASE,
+          TH1520_AP_CLOCK_GATE_TIMER1 },
+    };
+
+    for (size_t group = 0; group < ARRAY_SIZE(groups); group++) {
+        const uint64_t base = groups[group].base;
+        const uint64_t timer0 = base;
+        const uint64_t timer1 = base + DW_TIMER_STRIDE;
+        QTestState *qts = qtest_init(
+            "-machine beaglev-ahead -bios none");
+
+        qtest_irq_intercept_out_named(qts, groups[group].path, "toggle");
+        g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+        for (unsigned int channel = 0; channel < 4; channel++) {
+            g_assert_false(qtest_get_irq(qts, channel));
+        }
+
+        /* LoadCount is low time; LoadCount2 is high time in PWM mode. */
+        qtest_writel(qts, timer0 + DW_TIMER_LOAD_COUNT, 3);
+        qtest_writel(qts, base + DW_TIMER_LOAD_COUNT2(0), 5);
+        qtest_writel(qts, timer0 + DW_TIMER_CONTROL,
+                      DW_TIMER_ENABLE | DW_TIMER_PERIODIC | DW_TIMER_PWM);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_clock_step(qts, 3 * TH1520_TIMER_TICK_NS - 1);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_clock_step(qts, 1);
+        g_assert_true(qtest_get_irq(qts, 0));
+        qtest_readl(qts, timer0 + DW_TIMER_EOI);
+
+        /* The AP leaf gate freezes both the counter and output phase. */
+        th1520_set_ap_clock_gate(
+            qts, th1520_ap_clock_gate_test_outputs[groups[group].gate].offset,
+            th1520_ap_clock_gate_test_outputs[groups[group].gate].mask,
+            false);
+        qtest_clock_step(qts, 100 * TH1520_TIMER_TICK_NS);
+        g_assert_true(qtest_get_irq(qts, 0));
+        g_assert_cmphex(qtest_readl(qts, timer0 + DW_TIMER_INT_STATUS), ==,
+                        0);
+        th1520_set_ap_clock_gate(
+            qts, th1520_ap_clock_gate_test_outputs[groups[group].gate].offset,
+            th1520_ap_clock_gate_test_outputs[groups[group].gate].mask,
+            true);
+
+        qtest_clock_step(qts, 6 * TH1520_TIMER_TICK_NS - 1);
+        g_assert_true(qtest_get_irq(qts, 0));
+        qtest_clock_step(qts, 1);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_readl(qts, timer0 + DW_TIMER_EOI);
+
+        /* A low-phase write changes the following high interval only. */
+        qtest_writel(qts, base + DW_TIMER_LOAD_COUNT2(0), 2);
+        qtest_clock_step(qts, 4 * TH1520_TIMER_TICK_NS - 1);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_clock_step(qts, 1);
+        g_assert_true(qtest_get_irq(qts, 0));
+        qtest_readl(qts, timer0 + DW_TIMER_EOI);
+        qtest_clock_step(qts, 3 * TH1520_TIMER_TICK_NS - 1);
+        g_assert_true(qtest_get_irq(qts, 0));
+        qtest_clock_step(qts, 1);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_writel(qts, timer0 + DW_TIMER_CONTROL, 0);
+
+        /* Without PWM, LoadCount2 is ignored and both halves are equal. */
+        qtest_writel(qts, timer1 + DW_TIMER_LOAD_COUNT, 2);
+        qtest_writel(qts, base + DW_TIMER_LOAD_COUNT2(1), 7);
+        qtest_writel(qts, timer1 + DW_TIMER_CONTROL,
+                      DW_TIMER_ENABLE | DW_TIMER_PERIODIC |
+                      DW_TIMER_INT_MASK);
+        qtest_clock_step(qts, 2 * TH1520_TIMER_TICK_NS);
+        g_assert_true(qtest_get_irq(qts, 1));
+        g_assert_cmphex(qtest_readl(qts, timer1 + DW_TIMER_INT_STATUS), ==,
+                        0);
+        g_assert_true(qtest_readl(qts, base + DW_TIMERS_RAW_INT_STATUS) &
+                      BIT(1));
+        qtest_readl(qts, timer1 + DW_TIMER_EOI);
+        qtest_clock_step(qts, 3 * TH1520_TIMER_TICK_NS - 1);
+        g_assert_true(qtest_get_irq(qts, 1));
+        qtest_clock_step(qts, 1);
+        g_assert_false(qtest_get_irq(qts, 1));
+
+        qtest_writel(qts, timer1 + DW_TIMER_CONTROL, DW_TIMER_PERIODIC);
+        for (unsigned int channel = 0; channel < 4; channel++) {
+            g_assert_false(qtest_get_irq(qts, channel));
+        }
+        qtest_system_reset(qts);
+        for (unsigned int channel = 0; channel < 4; channel++) {
+            g_assert_false(qtest_get_irq(qts, channel));
+        }
+        qtest_quit(qts);
+    }
+}
+
 static void test_dw_timer_interrupt_routes(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -6295,6 +6398,74 @@ static void test_dw_timer_migration(void)
                                 running->base + DW_TIMER_INT_STATUS), ==,
                     1);
 
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_dw_timer_toggle_migration(void)
+{
+    const uint64_t base = TH1520_TIMER0_3_BASE;
+    const uint64_t timer = base;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-timer-toggle-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(src, TH1520_TIMER0_3_QOM_PATH,
+                                  "toggle");
+    qtest_irq_intercept_out_named(dst, TH1520_TIMER0_3_QOM_PATH,
+                                  "toggle");
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    qtest_writel(src, timer + DW_TIMER_LOAD_COUNT, 3);
+    qtest_writel(src, base + DW_TIMER_LOAD_COUNT2(0), 5);
+    qtest_writel(src, timer + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC | DW_TIMER_PWM);
+    qtest_clock_step(src, 3 * TH1520_TIMER_TICK_NS);
+    g_assert_true(qtest_get_irq(src, 0));
+    qtest_readl(src, timer + DW_TIMER_EOI);
+    qtest_clock_step(src, 2 * TH1520_TIMER_TICK_NS);
+    g_assert_true(qtest_get_irq(src, 0));
+
+    g_assert_cmpint(qtest_clock_set(dst, 5 * TH1520_TIMER_TICK_NS), ==,
+                    5 * TH1520_TIMER_TICK_NS);
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, timer + DW_TIMER_CONTROL), ==,
+                    DW_TIMER_ENABLE | DW_TIMER_PERIODIC | DW_TIMER_PWM);
+    g_assert_cmphex(qtest_readl(dst, timer + DW_TIMER_LOAD_COUNT), ==, 3);
+    g_assert_cmphex(qtest_readl(dst, base + DW_TIMER_LOAD_COUNT2(0)), ==,
+                    5);
+    g_assert_true(qtest_get_irq(dst, 0));
+
+    /* The high-half deadline and the following low half both continue. */
+    qtest_clock_step(dst, 4 * TH1520_TIMER_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 1);
+    g_assert_false(qtest_get_irq(dst, 0));
+    qtest_readl(dst, timer + DW_TIMER_EOI);
+    qtest_clock_step(dst, 4 * TH1520_TIMER_TICK_NS - 1);
+    g_assert_false(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 1);
+    g_assert_true(qtest_get_irq(dst, 0));
+
+    qtest_system_reset(dst);
+    g_assert_false(qtest_get_irq(dst, 0));
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -8200,10 +8371,14 @@ int main(int argc, char **argv)
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
                        test_dw_timer_timing);
+        qtest_add_func("/beaglev-ahead/dw-timer/toggle-pwm",
+                       test_dw_timer_toggle_pwm);
         qtest_add_func("/beaglev-ahead/dw-timer/interrupt-routes",
                        test_dw_timer_interrupt_routes);
         qtest_add_func("/beaglev-ahead/dw-timer/migration",
                        test_dw_timer_migration);
+        qtest_add_func("/beaglev-ahead/dw-timer/toggle-migration",
+                       test_dw_timer_toggle_migration);
         qtest_add_func("/beaglev-ahead/dw-wdt/registers",
                        test_dw_wdt_registers);
         qtest_add_func("/beaglev-ahead/dw-wdt/timing",
