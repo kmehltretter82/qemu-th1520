@@ -9,16 +9,17 @@ The audit baseline is QEMU `staging` commit
 into this workspace by `2d7bb62c70`.  Recheck every item against current
 `master` immediately before reporting it.
 
-`UQ-002` was additionally rechecked against freshly fetched QEMU `master`
-commit `bde2492aace2b5acb755a5b057013e915163a77f` on 2026-08-24.  Its generic
-reproducer fails there and passes on this branch; the remaining pre-filing
-step is a human duplicate review and report/patch preparation.
+`UQ-002` and `UQ-012` were additionally rechecked against freshly fetched
+QEMU `master` commit
+`bde2492aace2b5acb755a5b057013e915163a77f` on 2026-08-24.  Their generic
+reproducers fail there and pass on this branch; the remaining pre-filing step
+is a human duplicate review and report/patch preparation.
 
 ## Snapshot and counting rules
 
 The current conservative tally is:
 
-* **11 proposed new upstream report units** (`UQ-001` through `UQ-011`);
+* **12 proposed new upstream report units** (`UQ-001` through `UQ-012`);
 * **1 matching public upstream report** (`UQ-K001`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
 * **5 defects confined to this not-yet-upstream board/CPU implementation**
@@ -44,6 +45,15 @@ extension disabled, writes to `mideleg.LCOFI` and `mip.LCOFIP` incorrectly
 stick.  The current conservative tally is therefore 11.  The quick public
 tracker and mailing-list search on 2026-08-24 found no matching report, but the
 required current-`master` duplicate search remains outstanding.
+
+The subsequent generic PMU migration audit adds `UQ-012`.  Architectural
+event selectors and counter bases were present in the stream, but the runtime
+event map, fixed-counter clock snapshots and overflow deadline were not
+reconstructed, while `mcyclecfg` and `minstretcfg` were omitted entirely.  A
+single deterministic migration guest now distinguishes configuration loss,
+source-value loss, destination counter stoppage and missing overflow rearming.
+The current conservative tally is therefore 12.  A focused GitLab/qemu-devel
+search on 2026-08-24 found no match; a human duplicate search is still required.
 
 The 2026-08-24 MR75203 PVT milestone did not add a report unit.  Its missing
 alarm, timer, conversion-latency and interrupt behavior is new-model scope,
@@ -637,6 +647,92 @@ and the
 A 2026-08-24 search for `Sscofpmf`, `LCOFIE`, `LCOFIP`, bit 13 and counter
 overflow found no matching public QEMU GitLab issue or qemu-devel result.
 
+### UQ-012: RISC-V PMU state does not continue correctly after migration
+
+Status: **REPORTABLE; generic current-master fail-before and branch pass-after;
+final human duplicate review required**
+
+Affected upstream code:
+
+* `target/riscv/machine.c`, the CPU VMState and post-load path; and
+* `target/riscv/tcg/pmu.c`, the derived counter, event-map and overflow-timer
+  state.
+
+The migration stream carries `mhpmevent_val`, `mhpmcounter_val` and
+`mhpmcounter_prev`, but this is insufficient to resume a running PMU:
+
+* the destination's `pmu_event_ctr_map` remains empty, so a migrated
+  programmable counter no longer receives its configured event;
+* the host/icount snapshots in `pmu_fixed_ctrs` are process-local derived
+  state, so fixed and instruction/cycle-backed programmable counters lose the
+  source-side delta unless it is first materialized into their architectural
+  values;
+* the shared PMU overflow timer and per-counter long-deadline remainder are
+  not migrated or reconstructed, so an armed near-wrap counter does not set
+  its overflow state on the destination; and
+* the architectural Smcntrpmf `mcyclecfg` and `minstretcfg` CSRs are absent
+  from VMState altogether.
+
+The generic qtest uses `virt` with
+`rv64,pmu-mask=0x8,sscofpmf=true,smcntrpmf=true` and deterministic
+`-icount shift=0`.  Its freestanding M-mode guest selects standard instruction
+event 2 in counter 3, writes nonzero fixed-counter filter CSRs, accumulates and
+records both programmable and fixed-counter source values, arms counter 3 near
+wrap, and stops for file migration.  Without reprogramming any PMU CSR on the
+destination, it requires:
+
+* both Smcntrpmf configuration values to survive;
+* fixed `mcycle` and programmable counter 3 to start at or beyond their
+  recorded source values and continue advancing;
+* counter 3 to cross its wrap point; and
+* `mhpmevent3.OF` to become set by the reconstructed timer.
+
+An equivalent BeagleV Ahead variant selects C910 event 22 and checks the
+vendor `MCOUNTEROF` bit instead of standard `mhpmevent3.OF`.  Both branch tests
+pass.  Exact QEMU `master` commit
+`bde2492aace2b5acb755a5b057013e915163a77f` fails the strengthened generic
+test first with guest status `0xdead0005` because the Smcntrpmf configuration
+is lost.  Before that check was added, the same revision failed with
+`0xdead0001` because the destination counter did not advance.  Fault-isolation
+runs on the strengthened test independently produce
+`0xdead0005` when configuration serialization is disabled, `0xdead0004` when
+source materialization is disabled, `0xdead0001` when event-map reconstruction
+is disabled, and `0xdead0002` when timer rearming is disabled.  The complete
+fix returns status 3.
+
+Branch commit `aff489d2f7` (`target/riscv: Reconstruct PMU state after
+migration`):
+
+* materializes instruction/cycle-derived values in a CPU `pre_save` callback
+  while rebasing the source snapshots so a cancelled migration can continue;
+* serializes nonzero `mcyclecfg` and `minstretcfg` in an optional VMState
+  subsection;
+* clears and rebuilds the destination event map from the migrated selectors;
+* rebases process-local fixed-counter snapshots to the destination clock; and
+* recomputes all eligible non-pending overflow deadlines from the migrated
+  architectural counter values.
+
+The complete normal RISC-V qtest suite passes 17 test binaries with one skip,
+including 98 BeagleV Ahead and five CSR/PMU subtests.  The dependency-minimal
+and ASan/UBSan suites each pass ten binaries with three expected skips,
+including 97 board and two CSR/PMU subtests.  The complete normal RISC-V TCG
+guest suite also passes.
+
+Run the focused generic regression with:
+
+```sh
+QTEST_QEMU_BINARY=build/qemu-system-riscv64 \
+  build/tests/qtest/riscv-csr-test -p /riscv64/cpu/pmu-migration
+```
+
+A 2026-08-24 quick search of QEMU GitLab and qemu-devel for RISC-V PMU
+migration, `mhpmevent`, `pmu_event_ctr_map`,
+`riscv_pmu_update_event_map` and post-load timer rearming found no matching
+report or patch.  This was not exhaustive.  Before filing, repeat the search
+manually, rerun the test against then-current `master`, decide whether
+maintainers prefer the missing Smcntrpmf fields split from derived-state
+reconstruction, and disclose the agent-assisted discovery.
+
 ## Already reported upstream
 
 ### UQ-K001: NPCM GMAC transmit buffer integer truncation
@@ -653,7 +749,7 @@ checks accumulated frame length before addition/copy, and bounds descriptor
 walks.  Before proposing any subset, compare it with the issue's current patch
 and coordinate rather than sending a competing duplicate fix.
 
-## Investigation candidates not included in the eleven-report tally
+## Investigation candidates not included in the twelve-report tally
 
 ### UQ-C001: `pmpaddr` retains bits above the implemented address width
 
@@ -853,7 +949,7 @@ The following are also not counted as upstream QEMU bugs at present:
    `UQ-001`.
 4. Migration fixes: `UQ-004` and `UQ-007`, plus the compatibility portions of
    `UQ-009` and `UQ-010`.
-5. Generic RISC-V PMU work: `UQ-011`, `UQ-002` and `UQ-003`.
+5. Generic RISC-V PMU work: `UQ-011`, `UQ-012`, `UQ-002` and `UQ-003`.
 6. Only then decide whether `UQ-C001` or `UQ-C003` has enough specification
    and test evidence to promote into the reportable list.
 

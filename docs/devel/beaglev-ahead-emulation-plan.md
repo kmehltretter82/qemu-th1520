@@ -829,11 +829,15 @@ Gate P2:
 Status: in progress.  CPU identity, the TH1520 no-PMP/40-bit configuration,
 the initial custom CSR/PMU/MAEE state, scalar XThead decode, Zfh/Zfhmin, and
 MXSTATUS/SXSTATUS.MM scalar alignment behavior are implemented and covered by
-CSR, migration and guest-executed tests.  The alignment tests are grounded in
-pinned openC910 RTL and distinguish scalar, atomic and vector behavior across
-M/S/U privilege, delegated traps and a mapped/unmapped page boundary.  MAEE
-tests additionally distinguish normal, non-cacheable, strong-order and
-non-shareable mappings, enforce post-translation scalar alignment on the
+CSR, migration and guest-executed tests.  Generic and C910 PMU migration
+payloads now preserve Smcntrpmf configuration, fixed and programmable counter
+continuity, rebuild selector routing and rearm a near-wrap overflow deadline
+without guest reprogramming on the destination.  The alignment tests are
+grounded in pinned openC910 RTL and distinguish scalar, atomic and vector
+behavior across M/S/U privilege, delegated traps and a mapped/unmapped page
+boundary.  MAEE tests additionally distinguish normal, non-cacheable,
+strong-order and non-shareable mappings, enforce post-translation scalar
+alignment on the
 strong-order type, require a strong-order instruction access fault, reject
 AMO.W/AMO.D RMW on C=0 while allowing LR.W/SC.W and LR.D/SC.D, reject
 strong-order vector accesses across all four element widths and the unit,
