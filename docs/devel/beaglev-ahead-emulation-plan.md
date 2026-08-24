@@ -41,7 +41,7 @@ The next work is review rather than more feature expansion:
 
 * inspect [beaglev-ahead-upstream-bugs.md](beaglev-ahead-upstream-bugs.md),
   starting with the confidential UQ-006 NPCM GMAC receive-path draft;
-* independently rerun the current-master reproducer and decide whether the
+* review the completed current-master ASan reproducer and decide whether the
   evidence meets QEMU's confidential security-triage threshold; and
 * only after explicit authorization, prepare an external report.  No report
   has been filed from this workspace.

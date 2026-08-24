@@ -22,7 +22,7 @@ draft makes no CVE, exploitability, or arbitrary-code-execution claim.
 
 ## Affected revision and code
 
-* QEMU master: `bde2492aace2b5acb755a5b057013e915163a77f` (2026-08-24 audit)
+* QEMU master: `bde2492aace2b5acb755a5b057013e915163a77f` (2026-08-24 audit and rerun)
 * `hw/net/npcm_gmac.c:gmac_receive()` and
   `gmac_rx_transfer_frame_to_buffer()`
 * `net/queue.c:qemu_net_queue_append()` and
@@ -30,6 +30,11 @@ draft makes no CVE, exploitability, or arbitrary-code-execution claim.
 
 The affected source paths are unchanged in the disposable sanitizer build
 used for the trace, `eea8fe61b8be8f3016e522e6af24924a0266ca95`.
+
+A fresh disposable ASan/UBSan `aarch64-softmmu` binary was also built from
+the pinned current-master tree at `bde2492aace2b5acb755a5b057013e915163a77f`
+on 2026-08-24.  The exact sequence below reproduced the failure there; QEMU
+aborted with return code `-6` before replying to the final qtest command.
 
 ## Minimal reproduction
 
@@ -85,6 +90,7 @@ The relevant output from ASan/UBSan is:
 ```text
 AddressSanitizer: heap-buffer-overflow
 READ of size 68
+qemu_ram_move ... system/physmem.c:3163
 gmac_rx_transfer_frame_to_buffer ... hw/net/npcm_gmac.c:293
 gmac_receive ... hw/net/npcm_gmac.c:390
 allocation: qemu_net_queue_append ... net/queue.c:105
@@ -116,5 +122,7 @@ filesystem paths.
 * Status: confidential-triage-ready; not submitted.
 * Local fix/reference: branch commit `95af4a301b` allocates a bounded
   `len + ETH_FCS_LEN` frame and computes the CRC32.
-* Required before submission: human review, clean current-master rerun,
-  duplicate search, and user authorization for the external disclosure.
+* Current-master ASan/UBSan rerun: completed on 2026-08-24 at the pinned
+  revision; the trace above is the result.
+* Required before submission: human review, a fresh duplicate search, and
+  user authorization for the external disclosure.

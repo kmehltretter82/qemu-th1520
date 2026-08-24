@@ -431,7 +431,7 @@ The quick search found unrelated AT24C issue 1485, but no migration report.
 
 ### UQ-006: NPCM GMAC receive FCS handling reads beyond the host packet
 
-Status: **CONFIDENTIAL TRIAGE READY; do not file publicly first**
+Status: **CONFIDENTIAL TRIAGE READY; current-master rerun complete; do not file publicly first**
 
 Affected upstream code:
 
@@ -454,8 +454,8 @@ Branch fix and evidence:
 
 Required next action:
 
-* have a human reviewer verify the minimal queued-packet trigger and repeat it
-  on a clean current-master ASan build;
+* have a human reviewer verify the minimal queued-packet trigger and inspect
+  the fresh current-master ASan trace;
 * verify ownership and lifetime guarantees of every network backend buffer and
   determine whether the four bytes can contain host data of security value;
 * treat the confirmed host heap over-read as security-sensitive even though
@@ -481,6 +481,7 @@ paths are unchanged from current master `bde2492aace`) reports:
 ```
 AddressSanitizer: heap-buffer-overflow
 READ of size 68
+qemu_ram_move ... system/physmem.c:3163
 gmac_rx_transfer_frame_to_buffer ... hw/net/npcm_gmac.c:293
 gmac_receive ... hw/net/npcm_gmac.c:390
 allocation: qemu_net_queue_append ... net/queue.c:105
@@ -495,6 +496,27 @@ different transmit-side integer-truncation overflow.  No report has been
 filed from this project.  Do not submit UQ-006 until a human reviewer has
 approved a confidential work item and the report declares the AI-assisted
 discovery as required by QEMU policy.
+
+On 2026-08-24, a fresh disposable ASan/UBSan `aarch64-softmmu` binary built
+from pinned current master `bde2492aace2b5acb755a5b057013e915163a77f` reproduced
+the same queued-path failure.  The controller received `OK` for all setup
+commands, sent one 64-byte packet, and QEMU aborted with return code `-6` when
+`writel 0xF0803018 0x00000002` flushed the queue.  The current-master trace
+included:
+
+```
+AddressSanitizer: heap-buffer-overflow
+READ of size 68
+qemu_ram_move ... system/physmem.c:3163
+gmac_rx_transfer_frame_to_buffer ... hw/net/npcm_gmac.c:293
+gmac_receive ... hw/net/npcm_gmac.c:390
+qemu_net_queue_append ... net/queue.c:105
+allocated region: 104 bytes; read ends at its boundary
+```
+
+This closes the clean current-master reproduction gate.  Human review,
+security-boundary classification, and a fresh duplicate search remain open;
+the project still has filed zero external reports.
 
 ### UQ-007: NPCM GMAC migration loses PHY state and can restore a stale IRQ
 
