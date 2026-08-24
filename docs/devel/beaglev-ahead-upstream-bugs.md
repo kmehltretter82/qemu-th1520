@@ -4,6 +4,9 @@ This document records defects in pre-existing upstream QEMU code that were
 found while implementing BeagleV Ahead support.  It is a reviewer handoff,
 not a claim that an issue has been accepted by QEMU or assigned a CVE.
 
+For the branch-only counterpart, current local test checkpoint, and remaining
+fidelity gaps, see [beaglev-ahead-local-bugs.md](beaglev-ahead-local-bugs.md).
+
 The audit baseline is QEMU `staging` commit
 `2be159078ea26feac4c9c9902acf8906f1a05c2a` fetched on 2026-08-24 and merged
 into this workspace by `2d7bb62c70`.  Recheck every item against current

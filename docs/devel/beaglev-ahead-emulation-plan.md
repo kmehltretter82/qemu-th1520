@@ -29,6 +29,11 @@ in pre-existing QEMU code from missing emulation, hardware unknowns, and bugs
 confined to this not-yet-upstream board implementation.  It records the
 reproducer and disclosure work required before any external report.
 
+The companion
+[local implementation audit](beaglev-ahead-local-bugs.md) is the focused
+checklist for branch-only defects, current normal/sanitizer evidence, and
+fidelity gaps that must not be mislabeled as upstream bugs.
+
 ## Pause point and handoff
 
 Per owner direction, feature implementation is paused after the reviewed
@@ -39,6 +44,8 @@ complete or that the board is perfectly modeled.
 
 The next work is review rather than more feature expansion:
 
+* inspect [beaglev-ahead-local-bugs.md](beaglev-ahead-local-bugs.md) and keep
+  branch-only fixes and open fidelity gaps separate;
 * inspect [beaglev-ahead-upstream-bugs.md](beaglev-ahead-upstream-bugs.md),
   starting with the confidential UQ-006 NPCM GMAC receive-path draft;
 * review the completed current-master ASan reproducer and decide whether the
