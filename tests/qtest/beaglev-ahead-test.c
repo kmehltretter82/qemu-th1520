@@ -50,6 +50,10 @@
 #define TH1520_PWM_BASE            0xffec01c000ULL
 #define TH1520_TIMER0_3_BASE       0xffefc32000ULL
 #define TH1520_TIMER4_7_BASE       0xffffc33000ULL
+#define TH1520_MBOX_LOCAL_BASE      0xffffc38000ULL
+#define TH1520_MBOX_REMOTE0_BASE    0xffffc40000ULL
+#define TH1520_MBOX_REMOTE1_BASE    0xffffc4c000ULL
+#define TH1520_MBOX_REMOTE2_BASE    0xffffc54000ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -164,6 +168,15 @@
 #define DW_TIMER_INT_MASK          BIT(2)
 #define DW_TIMER_PWM               BIT(3)
 
+#define TH1520_MBOX_STATUS         0x000
+#define TH1520_MBOX_CLEAR          0x004
+#define TH1520_MBOX_MASK           0x00c
+#define TH1520_MBOX_GENERATE       0x010
+#define TH1520_MBOX_INFO(word)     (0x014 + 4 * (word))
+#define TH1520_MBOX_CHANNEL(channel) \
+    (TH1520_MBOX_LOCAL_BASE + 0x1000 * (channel))
+#define TH1520_MBOX_REMOTE0_CHANNEL (TH1520_MBOX_REMOTE0_BASE + 0x4000)
+
 #define DW_SSI_CTRLR0              0x00
 #define DW_SSI_CTRLR1              0x04
 #define DW_SSI_SSIENR              0x08
@@ -223,6 +236,7 @@
 #define C900_PLIC_QOM_PATH         "/machine/soc/plic"
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 #define TH1520_AP_RESET_QOM_PATH   "/machine/soc/ap-reset"
+#define TH1520_MBOX_QOM_PATH       "/machine/soc/mbox"
 #define TH1520_PWM_QOM_PATH        "/machine/soc/pwm"
 
 #define TH1520_UART0_IRQ           36
@@ -245,6 +259,7 @@
 #define TH1520_I2C5_IRQ            49
 #define TH1520_SPI0_IRQ            54
 #define TH1520_TIMER0_IRQ          16
+#define TH1520_MBOX_IRQ            28
 #define TH1520_DMAC0_IRQ           27
 #define TH1520_EMMC_IRQ            62
 #define TH1520_SDIO0_IRQ           64
@@ -278,6 +293,10 @@
 #define TH1520_CLK_I2C3            67
 #define TH1520_CLK_I2C4            68
 #define TH1520_CLK_I2C5            69
+#define TH1520_CLK_MBOX0           72
+#define TH1520_CLK_MBOX1           73
+#define TH1520_CLK_MBOX2           74
+#define TH1520_CLK_MBOX3           75
 #define TH1520_CLK_UART_SCLK       85
 
 #define TH1520_I2C_COMP_PARAM1     0x000f0fee
@@ -1386,6 +1405,72 @@ static void assert_pwm_fdt(const void *fdt, uint32_t clock_phandle)
     g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
 }
 
+static void assert_mbox_fdt(const void *fdt, uint32_t clock_phandle)
+{
+    static const char *const reg_names[] = {
+        "local", "remote-icu0", "remote-icu1", "remote-icu2"
+    };
+    static const char *const clock_names[] = {
+        "clk-local", "clk-remote-icu0", "clk-remote-icu1",
+        "clk-remote-icu2"
+    };
+    static const uint64_t bases[] = {
+        TH1520_MBOX_LOCAL_BASE,
+        TH1520_MBOX_REMOTE0_BASE,
+        TH1520_MBOX_REMOTE1_BASE,
+        TH1520_MBOX_REMOTE2_BASE,
+    };
+    static const uint32_t sizes[] = { 0x6000, 0x6000, 0x2000, 0x2000 };
+    static const uint32_t clock_ids[] = {
+        TH1520_CLK_MBOX0,
+        TH1520_CLK_MBOX1,
+        TH1520_CLK_MBOX2,
+        TH1520_CLK_MBOX3,
+    };
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, "/soc/mailbox@ffffc38000");
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "thead,th1520-mbox");
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#mbox-cells"), ==, 1);
+    assert_fdt_stringlist(fdt, node, "reg-names", reg_names,
+                          ARRAY_SIZE(reg_names));
+    assert_fdt_stringlist(fdt, node, "clock-names", clock_names,
+                          ARRAY_SIZE(clock_names));
+
+    cells = fdt_getprop(fdt, node, "reg", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, ARRAY_SIZE(bases) * 4 * sizeof(*cells));
+    for (size_t i = 0; i < ARRAY_SIZE(bases); i++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4]), ==, bases[i] >> 32);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4 + 1]), ==,
+                        (uint32_t)bases[i]);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4 + 2]), ==, 0);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4 + 3]), ==, sizes[i]);
+    }
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, ARRAY_SIZE(clock_ids) * 2 * sizeof(*cells));
+    for (size_t i = 0; i < ARRAY_SIZE(clock_ids); i++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 2]), ==, clock_phandle);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 2 + 1]), ==, clock_ids[i]);
+    }
+
+    cells = fdt_getprop(fdt, node, "interrupts", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, TH1520_MBOX_IRQ);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, 4);
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_null(text);
+    g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1633,6 +1718,7 @@ static void test_direct_boot_contract(void)
 
     assert_spi_fdt(fdt, &th1520_spi0, ap_clock_phandle);
     assert_pwm_fdt(fdt, ap_clock_phandle);
+    assert_mbox_fdt(fdt, ap_clock_phandle);
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
         assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
@@ -1879,6 +1965,111 @@ static void test_ap_reset_outputs(void)
     for (unsigned int i = 0; i < 3; i++) {
         g_assert_false(qtest_get_irq(qts, i));
     }
+    qtest_quit(qts);
+}
+
+static void assert_th1520_mbox_reset_state(QTestState *qts)
+{
+    static const uint64_t remote_bases[] = {
+        TH1520_MBOX_REMOTE0_CHANNEL,
+        TH1520_MBOX_REMOTE1_BASE,
+        TH1520_MBOX_REMOTE2_BASE,
+    };
+
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_MASK), ==, 0);
+    for (unsigned int channel = 0; channel < 4; channel++) {
+        uint64_t base = TH1520_MBOX_CHANNEL(channel);
+
+        g_assert_cmphex(qtest_readl(qts, base + TH1520_MBOX_GENERATE), ==,
+                        0);
+        for (unsigned int word = 0; word < 8; word++) {
+            g_assert_cmphex(qtest_readl(qts, base + TH1520_MBOX_INFO(word)),
+                            ==, 0);
+        }
+    }
+    for (size_t channel = 0; channel < ARRAY_SIZE(remote_bases); channel++) {
+        uint64_t base = remote_bases[channel];
+
+        g_assert_cmphex(qtest_readl(qts, base + TH1520_MBOX_GENERATE), ==,
+                        0);
+        for (unsigned int word = 0; word < 8; word++) {
+            g_assert_cmphex(qtest_readl(qts, base + TH1520_MBOX_INFO(word)),
+                            ==, 0);
+        }
+    }
+}
+
+static void test_th1520_mbox_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_mbox_reset_state(qts);
+
+    qtest_writel(qts, TH1520_MBOX_CHANNEL(1) + TH1520_MBOX_INFO(0),
+                 0x10203040);
+    qtest_writel(qts, TH1520_MBOX_CHANNEL(1) + TH1520_MBOX_INFO(6),
+                 0x50607080);
+    qtest_writel(qts, TH1520_MBOX_CHANNEL(1) + TH1520_MBOX_GENERATE,
+                 UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_CHANNEL(1) +
+                                TH1520_MBOX_INFO(0)), ==, 0x10203040);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_CHANNEL(1) +
+                                TH1520_MBOX_INFO(6)), ==, 0x50607080);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_CHANNEL(1) +
+                                TH1520_MBOX_GENERATE), ==, 0xff);
+
+    qtest_writel(qts, TH1520_MBOX_REMOTE0_CHANNEL + TH1520_MBOX_INFO(0),
+                 0xaabbccdd);
+    qtest_writel(qts, TH1520_MBOX_REMOTE1_BASE + TH1520_MBOX_INFO(7),
+                 0x11223344);
+    qtest_writel(qts, TH1520_MBOX_REMOTE2_BASE + TH1520_MBOX_GENERATE,
+                 0xc0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_REMOTE0_CHANNEL +
+                                TH1520_MBOX_INFO(0)), ==, 0xaabbccdd);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_REMOTE1_BASE +
+                                TH1520_MBOX_INFO(7)), ==, 0x11223344);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_REMOTE2_BASE +
+                                TH1520_MBOX_GENERATE), ==, 0xc0);
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_MBOX_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_MBOX_IRQ, true);
+    qtest_writel(qts, TH1520_MBOX_LOCAL_BASE + TH1520_MBOX_MASK,
+                 UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_MASK), ==, 0x7);
+
+    qtest_set_irq_in(qts, TH1520_MBOX_QOM_PATH, "remote-event", 1, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_STATUS), ==, BIT(1));
+    g_assert_true(c900_plic_pending(qts, TH1520_MBOX_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_MBOX_IRQ);
+    qtest_writel(qts, TH1520_MBOX_LOCAL_BASE + TH1520_MBOX_CLEAR, BIT(1));
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_MBOX_IRQ);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_STATUS), ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_MBOX_IRQ));
+    assert_no_irq(qts);
+    qtest_set_irq_in(qts, TH1520_MBOX_QOM_PATH, "remote-event", 1, 0);
+
+    qtest_system_reset(qts);
+    assert_th1520_mbox_reset_state(qts);
     qtest_quit(qts);
 }
 
@@ -5058,6 +5249,82 @@ static void test_dwcmshc_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_th1520_mbox_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-mbox-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(dst, C900_PLIC_QOM_PATH, "sext");
+
+    qtest_writel(src, TH1520_MBOX_CHANNEL(2) + TH1520_MBOX_INFO(0),
+                 0x10203040);
+    qtest_writel(src, TH1520_MBOX_CHANNEL(2) + TH1520_MBOX_INFO(7),
+                 0x50607080);
+    qtest_writel(src, TH1520_MBOX_CHANNEL(2) + TH1520_MBOX_GENERATE,
+                 0xc0);
+    qtest_writel(src, TH1520_MBOX_REMOTE0_CHANNEL + TH1520_MBOX_INFO(3),
+                 0xabcdef01);
+    qtest_writel(src, TH1520_MBOX_REMOTE2_BASE + TH1520_MBOX_GENERATE,
+                 0x40);
+    qtest_writel(src, TH1520_MBOX_LOCAL_BASE + TH1520_MBOX_MASK, BIT(2));
+    qtest_writel(src, C900_PLIC_PRIORITY(TH1520_MBOX_IRQ), 5);
+    c900_plic_set_enable(src, 1, TH1520_MBOX_IRQ, true);
+    qtest_set_irq_in(src, TH1520_MBOX_QOM_PATH, "remote-event", 2, 1);
+    g_assert_true(c900_plic_pending(src, TH1520_MBOX_IRQ));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_CHANNEL(2) +
+                                TH1520_MBOX_INFO(0)), ==, 0x10203040);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_CHANNEL(2) +
+                                TH1520_MBOX_INFO(7)), ==, 0x50607080);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_CHANNEL(2) +
+                                TH1520_MBOX_GENERATE), ==, 0xc0);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_REMOTE0_CHANNEL +
+                                TH1520_MBOX_INFO(3)), ==, 0xabcdef01);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_REMOTE2_BASE +
+                                TH1520_MBOX_GENERATE), ==, 0x40);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_MASK), ==, BIT(2));
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_MBOX_LOCAL_BASE +
+                                TH1520_MBOX_STATUS), ==, BIT(2));
+    g_assert_true(c900_plic_pending(dst, TH1520_MBOX_IRQ));
+    assert_only_irq(dst, 0);
+    g_assert_cmphex(qtest_readl(dst, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_MBOX_IRQ);
+    qtest_writel(dst, TH1520_MBOX_LOCAL_BASE + TH1520_MBOX_CLEAR, BIT(2));
+    qtest_writel(dst, C900_PLIC_CLAIM(1), TH1520_MBOX_IRQ);
+    g_assert_false(c900_plic_pending(dst, TH1520_MBOX_IRQ));
+    assert_no_irq(dst);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_c900_plic_migration(void)
 {
     const uint32_t irq = 120;
@@ -5420,6 +5687,10 @@ int main(int argc, char **argv)
                        test_th1520_pwm_migration);
         qtest_add_func("/beaglev-ahead/cpr/peripheral-resets",
                        test_ap_reset_peripherals);
+        qtest_add_func("/beaglev-ahead/th1520-mbox/registers",
+                       test_th1520_mbox_registers);
+        qtest_add_func("/beaglev-ahead/th1520-mbox/migration",
+                       test_th1520_mbox_migration);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
