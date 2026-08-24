@@ -477,20 +477,22 @@ static void th1520_soc_init(Object *obj)
                                 TYPE_DW_APB_SSI);
     }
     object_initialize_child(obj, "pwm", &s->pwm, TYPE_TH1520_PWM);
-    s->pwm_clk = clock_new(obj, "pwm-clock");
-    clock_set_hz(s->pwm_clk, TH1520_PWM_INPUT_FREQ);
-    qdev_connect_clock_in(DEVICE(&s->pwm), "pwm", s->pwm_clk);
-    s->timer_clk = clock_new(obj, "timer-clock");
-    clock_set_hz(s->timer_clk, TH1520_TIMER_INPUT_FREQ);
+    qdev_connect_clock_in(
+        DEVICE(&s->pwm), "pwm",
+        qdev_get_clock_out(DEVICE(&s->ap_clock),
+                           TH1520_AP_CLOCK_PWM_OUTPUT));
     for (int i = 0; i < TH1520_TIMER_GROUP_COUNT; i++) {
         object_initialize_child(obj, th1520_timer_info[i].name,
                                 &s->timer[i], TYPE_DW_APB_TIMER);
         qdev_prop_set_uint32(DEVICE(&s->timer[i]), "component-version",
                              TH1520_TIMER_COMPONENT_VERSION);
-        qdev_connect_clock_in(DEVICE(&s->timer[i]), "timer", s->timer_clk);
+        qdev_connect_clock_in(
+            DEVICE(&s->timer[i]), "timer",
+            qdev_get_clock_out(
+                DEVICE(&s->ap_clock),
+                i ? TH1520_AP_CLOCK_TIMER1_OUTPUT :
+                    TH1520_AP_CLOCK_TIMER0_OUTPUT));
     }
-    s->wdt_clk = clock_new(obj, "wdt-clock");
-    clock_set_hz(s->wdt_clk, TH1520_WDT_INPUT_FREQ);
     for (int i = 0; i < TH1520_WDT_COUNT; i++) {
         DeviceState *wdt;
 
@@ -503,7 +505,12 @@ static void th1520_soc_init(Object *obj)
                              DW_APB_WDT_COMP_TYPE_VALUE);
         qdev_prop_set_uint32(wdt, "counter-reset-value",
                              TH1520_WDT_COUNTER_RESET);
-        qdev_connect_clock_in(wdt, "pclk", s->wdt_clk);
+        qdev_connect_clock_in(
+            wdt, "pclk",
+            qdev_get_clock_out(
+                DEVICE(&s->ap_clock),
+                i ? TH1520_AP_CLOCK_WDT1_OUTPUT :
+                    TH1520_AP_CLOCK_WDT0_OUTPUT));
     }
     object_initialize_child(obj, "mbox", &s->mbox, TYPE_TH1520_MBOX);
     object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
