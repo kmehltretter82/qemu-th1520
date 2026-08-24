@@ -19,6 +19,11 @@ every fact that is not yet proved.  An implementation must not silently turn
 one of those unknowns into a guessed hardware behavior.
 
 The companion
+[physical PMA design](beaglev-ahead-physical-pma.md) defines the eight-region
+C910 integration contract and the safe evidence/probe gate for the still
+unknown TH1520 system map.
+
+The companion
 [upstream bug handoff](beaglev-ahead-upstream-bugs.md) separates defects found
 in pre-existing QEMU code from missing emulation, hardware unknowns, and bugs
 confined to this not-yet-upstream board implementation.  It records the
