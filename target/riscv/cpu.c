@@ -20,6 +20,7 @@
 #include "qemu/osdep.h"
 #include "qemu/qemu-print.h"
 #include "qemu/ctype.h"
+#include "qemu/cutils.h"
 #include "qemu/log.h"
 #include "qemu/guest-random.h"
 #include "cpu.h"
@@ -1223,6 +1224,96 @@ static void riscv_cpu_disas_set_info(const CPUState *s, disassemble_info *info)
 }
 
 #ifndef CONFIG_USER_ONLY
+static bool riscv_thead_pma_parse_number(const char *text, uint64_t *value)
+{
+    const char *end;
+
+    return qemu_strtou64(text, &end, 0, value) == 0 && *end == '\0';
+}
+
+static void riscv_cpu_thead_pma_finalize(RISCVCPU *cpu, Error **errp)
+{
+    RISCVTHeadPMARegion regions[RISCV_THEAD_PMA_REGION_COUNT];
+    g_auto(GStrv) entries = NULL;
+    uint64_t max_page;
+    uint64_t previous = 0;
+    uint64_t value;
+
+    if (!cpu->thead_pma_config) {
+        return;
+    }
+    if (!tcg_enabled()) {
+        error_setg(errp, "x-thead-pma is supported only by TCG");
+        return;
+    }
+    if (!cpu->cfg.ext_xtheadmaee) {
+        error_setg(errp, "x-thead-pma requires XTheadMaee");
+        return;
+    }
+    if (cpu->cfg.phys_addr_bits <= RISCV_THEAD_PMA_PAGE_SHIFT ||
+        cpu->cfg.phys_addr_bits > 64) {
+        error_setg(errp, "x-thead-pma cannot represent a %u-bit "
+                   "physical address",
+                   cpu->cfg.phys_addr_bits);
+        return;
+    }
+
+    entries = g_strsplit(cpu->thead_pma_config, "/", -1);
+    if (g_strv_length(entries) != RISCV_THEAD_PMA_REGION_COUNT + 1) {
+        error_setg(errp, "x-thead-pma requires eight regions and a default");
+        error_append_hint(errp, "Expected "
+                          "<upper>:<attr>/.../default:<attr>\n");
+        return;
+    }
+
+    max_page = MAKE_64BIT_MASK(0, cpu->cfg.phys_addr_bits -
+                                  RISCV_THEAD_PMA_PAGE_SHIFT);
+    for (int i = 0; i < RISCV_THEAD_PMA_REGION_COUNT; i++) {
+        g_auto(GStrv) fields = g_strsplit(entries[i], ":", 2);
+        uint64_t upper_page;
+
+        if (g_strv_length(fields) != 2 ||
+            !riscv_thead_pma_parse_number(fields[0], &value) ||
+            value & MAKE_64BIT_MASK(0, RISCV_THEAD_PMA_PAGE_SHIFT)) {
+            error_setg(errp, "x-thead-pma region %d has an invalid or "
+                       "unaligned upper address", i);
+            return;
+        }
+
+        upper_page = value >> RISCV_THEAD_PMA_PAGE_SHIFT;
+        if (upper_page <= previous || upper_page > max_page) {
+            error_setg(errp, "x-thead-pma region %d upper address is not "
+                       "strictly increasing or exceeds the physical "
+                       "address width", i);
+            return;
+        }
+        if (!riscv_thead_pma_parse_number(fields[1], &value) ||
+            value > RISCV_THEAD_PMA_ATTR_MASK) {
+            error_setg(errp, "x-thead-pma region %d has an invalid "
+                       "five-bit attribute", i);
+            return;
+        }
+
+        regions[i].upper_page = upper_page;
+        regions[i].attributes = value;
+        previous = upper_page;
+    }
+
+    g_auto(GStrv) fields =
+        g_strsplit(entries[RISCV_THEAD_PMA_REGION_COUNT], ":", 2);
+
+    if (g_strv_length(fields) != 2 || strcmp(fields[0], "default") ||
+        !riscv_thead_pma_parse_number(fields[1], &value) ||
+        value > RISCV_THEAD_PMA_ATTR_MASK) {
+        error_setg(errp, "x-thead-pma has an invalid default attribute");
+        return;
+    }
+
+    memcpy(cpu->thead_pma_regions, regions, sizeof(regions));
+    cpu->thead_pma_default = value;
+    cpu->thead_pma_valid = true;
+}
+
 static void riscv_cpu_satp_mode_finalize(RISCVCPU *cpu, Error **errp)
 {
     bool rv32 = riscv_cpu_is_32bit(cpu);
@@ -1316,6 +1407,13 @@ void riscv_cpu_finalize_features(RISCVCPU *cpu, Error **errp)
             return;
         }
     }
+
+#ifndef CONFIG_USER_ONLY
+    riscv_cpu_thead_pma_finalize(cpu, &local_err);
+    if (local_err != NULL) {
+        error_propagate(errp, local_err);
+    }
+#endif
 }
 
 static void riscv_cpu_realize(DeviceState *dev, Error **errp)
@@ -2979,6 +3077,7 @@ static const Property riscv_cpu_properties[] = {
                        DEFAULT_RNMI_EXCPVEC),
     DEFINE_PROP_UINT32("num-triggers", RISCVCPU, env.num_triggers,
                        RV_DEFAULT_NUM_TRIGGERS),
+    DEFINE_PROP_STRING("x-thead-pma", RISCVCPU, thead_pma_config),
 #endif
 
     DEFINE_PROP_BOOL("short-isa-string", RISCVCPU, cfg.short_isa_string, false),

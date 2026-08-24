@@ -190,6 +190,17 @@ extern RISCVCPUImpliedExtsRule *riscv_multi_ext_implied_rules[];
 #define RV_MAX_MHPMEVENTS 32
 #define RV_MAX_MHPMCOUNTERS 32
 
+#ifndef CONFIG_USER_ONLY
+#define RISCV_THEAD_PMA_REGION_COUNT 8
+#define RISCV_THEAD_PMA_PAGE_SHIFT 12
+#define RISCV_THEAD_PMA_ATTR_MASK 0x1f
+
+typedef struct RISCVTHeadPMARegion {
+    uint64_t upper_page;
+    uint8_t attributes;
+} RISCVTHeadPMARegion;
+#endif
+
 /*
  * The Debug 1.0 spec allows a humongous amount of triggers.  Section
  * "Enumeration" says: "The above algorithm reads back tselect so that
@@ -587,6 +598,18 @@ struct ArchCPU {
     /* Configuration Settings */
     RISCVCPUConfig cfg;
     RISCVSATPModes satp_modes;
+
+#ifndef CONFIG_USER_ONLY
+    /*
+     * XTheadMaee's physical fallback map is integration data.  The
+     * experimental string is parsed once during realization; the resulting
+     * table is immutable and therefore does not belong in migrated CPU state.
+     */
+    char *thead_pma_config;
+    RISCVTHeadPMARegion thead_pma_regions[RISCV_THEAD_PMA_REGION_COUNT];
+    uint8_t thead_pma_default;
+    bool thead_pma_valid;
+#endif
 
     QEMUTimer *pmu_timer;
     /* A bitmask of Available programmable counters */

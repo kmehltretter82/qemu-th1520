@@ -1006,6 +1006,64 @@ typedef struct RISCVMmuAttrs {
     bool thead_pma_valid;
 } RISCVMmuAttrs;
 
+static bool riscv_thead_pma_lookup(CPURISCVState *env, hwaddr physical,
+                                   uint8_t *attributes)
+{
+    RISCVCPU *cpu = env_archcpu(env);
+    uint64_t page = physical >> RISCV_THEAD_PMA_PAGE_SHIFT;
+
+    if (!cpu->thead_pma_valid) {
+        return false;
+    }
+
+    for (int i = 0; i < RISCV_THEAD_PMA_REGION_COUNT; i++) {
+        if (page < cpu->thead_pma_regions[i].upper_page) {
+            *attributes = cpu->thead_pma_regions[i].attributes;
+            return true;
+        }
+    }
+
+    *attributes = cpu->thead_pma_default;
+    return true;
+}
+
+static int riscv_thead_pma_apply(CPURISCVState *env, hwaddr physical,
+                                 int access_type, bool first_stage,
+                                 bool pte_valid, uint8_t pte_attributes,
+                                 int *prot, RISCVMmuAttrs *mmu_attrs)
+{
+    uint8_t attributes;
+
+    if (!first_stage || !riscv_cpu_cfg(env)->ext_xtheadmaee) {
+        return TRANSLATE_SUCCESS;
+    }
+
+    if (pte_valid) {
+        attributes = pte_attributes;
+    } else if (!riscv_thead_pma_lookup(env, physical, &attributes)) {
+        return TRANSLATE_SUCCESS;
+    }
+
+    if (mmu_attrs) {
+        mmu_attrs->thead_pma = attributes;
+        mmu_attrs->thead_pma_valid = true;
+    }
+
+    /*
+     * openC910 rejects instruction fetch from a strong-order mapping.  Also
+     * prevent a data-side fill from installing an executable TLB entry which
+     * could bypass that check later.
+     */
+    if (attributes & (PTE_THEAD_SO >> 59)) {
+        *prot &= ~PAGE_EXEC;
+        if (access_type == MMU_INST_FETCH) {
+            return TRANSLATE_PMP_FAIL;
+        }
+    }
+
+    return TRANSLATE_SUCCESS;
+}
+
 static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                                 int *ret_prot, vaddr addr,
                                 hwaddr *fault_pte_addr,
@@ -1053,7 +1111,9 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     if (mode == PRV_M || !riscv_cpu_cfg(env)->mmu) {
         *physical = addr;
         *ret_prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
-        return TRANSLATE_SUCCESS;
+        return riscv_thead_pma_apply(env, *physical, access_type,
+                                     first_stage, false, 0, ret_prot,
+                                     mmu_attrs);
     }
 
     *ret_prot = 0;
@@ -1103,7 +1163,9 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     case VM_1_10_MBARE:
         *physical = addr;
         *ret_prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
-        return TRANSLATE_SUCCESS;
+        return riscv_thead_pma_apply(env, *physical, access_type,
+                                     first_stage, false, 0, ret_prot,
+                                     mmu_attrs);
     default:
       g_assert_not_reached();
     }
@@ -1526,29 +1588,11 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
         prot &= ~PAGE_WRITE;
     }
 
-    if (thead_maee) {
-        uint8_t thead_pma = (pte & PTE_THEAD_MAEE) >> 59;
-
-        /*
-         * openC910 reports an instruction access fault for a strong-order
-         * mapping.  Also prevent a data-side fill from installing an
-         * executable TLB entry which could bypass that check later.
-         */
-        if (pte & PTE_THEAD_SO) {
-            prot &= ~PAGE_EXEC;
-            if (access_type == MMU_INST_FETCH) {
-                return TRANSLATE_PMP_FAIL;
-            }
-        }
-
-        if (mmu_attrs) {
-            mmu_attrs->thead_pma = thead_pma;
-            mmu_attrs->thead_pma_valid = true;
-        }
-    }
     *ret_prot = prot;
-
-    return TRANSLATE_SUCCESS;
+    return riscv_thead_pma_apply(env, *physical, access_type, first_stage,
+                                 thead_maee,
+                                 (pte & PTE_THEAD_MAEE) >> 59,
+                                 ret_prot, mmu_attrs);
 }
 
 static void raise_mmu_exception(CPURISCVState *env, target_ulong address,
@@ -1907,10 +1951,6 @@ static bool riscv_thead_maee_check(CPURISCVState *env,
     void *host;
     int mmu_idx;
     bool denied;
-
-    if (!riscv_thead_maee_enabled(env)) {
-        return true;
-    }
 
     /* Atomic and vector alignment faults precede address translation. */
     if (address & (size - 1)) {
