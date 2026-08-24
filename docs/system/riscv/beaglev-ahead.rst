@@ -69,9 +69,12 @@ The machine currently provides:
   or consumer is wired;
 * two four-counter DesignWare APB timer components at ``0xffefc32000`` and
   ``0xffffc33000``.  Timers 0 through 7 count at 125 MHz and connect to PLIC
-  sources 16 through 23.  Their AP leaf gates freeze and resume enabled
-  counters.  All eight individual timer nodes remain disabled in the board
-  device tree, matching upstream Linux;
+  sources 16 through 23.  User-defined PWM mode alternates the low interval
+  from ``LoadCount`` and the high interval from ``LoadCount2`` on four named
+  toggle outputs per component.  Their AP leaf gates freeze and resume the
+  enabled count and output phase.  The toggle outputs are QEMU test
+  facilities, not routed board pins.  All eight individual timer nodes remain
+  disabled in the board device tree, matching upstream Linux;
 * two Synopsys DesignWare APB watchdogs at ``0xffefc30000`` and
   ``0xffefc31000``.  They count at 125 MHz, connect to PLIC sources 24 and 25,
   and use AP clock IDs 76/77 and reset IDs 3/4.  Each AP leaf gate freezes and
@@ -396,10 +399,15 @@ clear, freezing enabled counters and resuming them when restored.  Component
 version ``0x3231322a`` and eight independent level-high PLIC routes are used.
 
 The model retains the four second-load and protection registers and preserves
-the PWM control bit, but it does not infer cascade wiring or drive a physical
-PWM output.  The second-load value consequently has no waveform effect.  The
-freeze/resume gate behavior is a deterministic QEMU convention pending
-physical comparison.
+the PWM control bit.  Every counter exports a named ``toggle`` line.  In
+user-defined PWM mode, reaching zero alternates reloads from ``LoadCount2``
+for the high half and ``LoadCount`` for the low half; outside PWM mode the
+toggle line still changes at each normal timer expiry.  Toggle level, the
+active half-cycle and its deadline survive migration, and a disabled counter
+or reset drives the line low.  Clock gating freezes that level and the
+remaining half-cycle.  QEMU does not infer cascade wiring or connect a toggle
+line to pinctrl, a header or another counter.  Initial-enable, zero-count,
+optional 0%/100% mode and physical routing remain hardware-validation items.
 
 The documented active-low APB/core pairs at ``0xffef01403c`` and
 ``0xffef014040`` immediately reset timer components 0-3 and 4-7 respectively
@@ -651,16 +659,17 @@ storage, GMAC, the USB miscellaneous and DRD wrappers, DWC3 and xHCI state in
 one stream.
 Focused migration tests additionally preserve an in-flight I2C read and
 EEPROM address pointer, two running watchdogs at different stages, a running
-APB timer with a latched interrupt, a running TH1520 PWM phase with a pending
-update, AP and miscellaneous raw clock-gate levels, gated timer/watchdog
-counts and a gated PWM phase/output, a mailbox event and remote-window data,
+APB timer with a latched interrupt, a running APB timer high/low toggle phase,
+a running TH1520 PWM phase with a pending update, AP and miscellaneous raw
+clock-gate levels, gated timer/watchdog counts and gated output phases, a
+mailbox event and remote-window data,
 plus completed AXI-DMAC
 data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 98 tests in the normal build and
-97 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
+device tests, the complete board gate passes 100 tests in the normal build and
+99 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
 omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
@@ -671,8 +680,9 @@ cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and is not counted as a clean sanitizer finding.
 
-QSPI/XIP, board SPI peripherals and timer PWM outputs, PVT alarm/timer/IRQ and
-analog timing fidelity, non-application watchdogs, USB device/OTG, PHY and
+QSPI/XIP, board SPI peripherals, timer cascade and physical toggle routing,
+PVT alarm/timer/IRQ and analog timing fidelity, non-application watchdogs,
+USB device/OTG, PHY and
 recovery-mode behavior, display, audio, camera, video codecs, GPU, NPU, the
 C906 and E902 auxiliary cores, DSPs, security blocks, the secure DMA
 controller, board buttons, and Wi-Fi/Bluetooth are not modeled yet.

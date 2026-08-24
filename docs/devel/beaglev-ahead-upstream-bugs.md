@@ -110,6 +110,15 @@ are new-board fidelity work under ``CLK-002``.  Focused normal and migration
 tests found no independent defect in a pre-existing upstream machine.  The
 conservative QEMU tally did not change.
 
+The subsequent DesignWare APB timer toggle/PWM milestone also did not add a
+report unit.  The reusable timer model, its named toggle outputs and the
+TH1520 integration are all new on this branch.  Alternating ``LoadCount`` and
+``LoadCount2`` half-cycles, gate freeze/resume and toggle-phase migration are
+therefore feature and patch-series review work, not regressions in an existing
+upstream QEMU device.  Focused tests found no independent defect in QEMU's
+generic ``ptimer`` engine.  The conservative tally remains 11 proposed new
+reports.
+
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
 Zfh while losing its Zfhmin dependency, and its imported XTheadVector helpers
@@ -665,7 +674,7 @@ coverage.  Its freestanding guests:
 The fixed-CPU qtest independently checks an enabled `veyron-v1` and an
 extension-disabled `sifive-u54`.  The normal CSR/migration binary passes 11
 subtests; the full RISC-V qtest gate passes 17 suites with one expected skip,
-including 98 BeagleV Ahead subtests, and the complete RISC-V TCG suite passes.
+including 100 BeagleV Ahead subtests, and the complete RISC-V TCG suite passes.
 Dependency-minimal and ASan/UBSan builds each pass their four available board
 CSR/migration subtests.
 
@@ -773,9 +782,9 @@ HPM counters`) together:
   programmable HPM counters are implemented.
 
 The complete normal RISC-V qtest suite passes 17 test binaries with one skip,
-including 98 BeagleV Ahead and eleven CSR/PMU subtests.  The dependency-minimal
+including 100 BeagleV Ahead and eleven CSR/PMU subtests.  The dependency-minimal
 and ASan/UBSan suites each pass ten binaries with three expected skips,
-including 97 board and four CSR/PMU subtests.  The complete normal RISC-V TCG
+including 99 board and four CSR/PMU subtests.  The complete normal RISC-V TCG
 guest suite also passes.
 
 Run the focused generic regression with:
