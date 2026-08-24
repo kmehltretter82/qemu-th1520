@@ -465,6 +465,21 @@ Required next action:
 The 2026-08-23 public search found issue 3202 for a different NPCM GMAC
 **transmit** overflow, but no matching receive/FCS report.
 
+2026-08-24 triage rechecked the data-buffer contract before recommending any
+submission.  The current upstream network queue allocates exactly the packet
+length (`net/queue.c:qemu_net_queue_append()`), and the socket backend receives
+into a `NET_BUFSIZE` stack buffer but reports only the bytes returned by
+`recv()`.  The NPCM callback therefore reads four bytes beyond the supplied
+packet whenever it appends the FCS length.  This is sufficient to keep UQ-006
+as the highest-priority *new* candidate, but it is not yet a clean upstream
+ASan report: a fresh sanitizer build and the smallest receive qtest still need
+to establish the runtime trace.  The closest public item,
+[QEMU #3202](https://gitlab.com/qemu-project/qemu/-/work_items/3202), is a
+different transmit-side integer-truncation overflow.  No report has been
+filed from this project.  Do not submit UQ-006 until a human reviewer has
+approved a confidential work item and the report declares the AI-assisted
+discovery as required by QEMU policy.
+
 ### UQ-007: NPCM GMAC migration loses PHY state and can restore a stale IRQ
 
 Status: **REPORTABLE; high confidence; branch migration regression passes**
