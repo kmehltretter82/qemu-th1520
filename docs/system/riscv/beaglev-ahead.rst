@@ -257,11 +257,15 @@ no virtual header/pad connection.  Its source is fixed at a provisional
 125 MHz and only the first 0xb0 bytes used by Linux are mapped, even though the
 DT aperture is 16 KiB.
 
-The exact reset/readback and reserved-register behavior, clock rate/gating and
-reset coupling, one-shot/inactive-output semantics, physical pinmux/header
-routing and electrical effects are deliberately not claimed.  The generated
-node has no ``status`` property, matching upstream Linux, but the board DTS
-has no PWM consumer and this documentation does not claim a real output pin.
+The documented active-low AP reset pair at ``0xffef0140c0`` resets the PWM
+model immediately when either of its APB/counter bits is clear.  This is a
+QEMU software contract, not a claim about physical pulse width, held-reset
+accesses, retention or ordering.  The exact reset/readback and reserved-
+register behavior, clock rate/gating, one-shot/inactive-output semantics,
+physical pinmux/header routing and electrical effects are deliberately not
+claimed.  The generated node has no ``status`` property, matching upstream
+Linux, but the board DTS has no PWM consumer and this documentation does not
+claim a real output pin.
 
 The two APB timer components use a reusable four-counter DesignWare model.
 Each counter has load, current-value, control, EOI and interrupt-status
@@ -274,10 +278,14 @@ version ``0x3231322a`` and eight independent level-high PLIC routes.
 The model retains the four second-load and protection registers and preserves
 the PWM control bit, but it does not infer cascade wiring or drive a physical
 PWM output.  The second-load value consequently has no waveform effect.
-Per-counter synthesized clocks, AP clock-gate/reset coupling, pulse-versus-
-level synthesis choices, exact enable/reload/zero-count edges, wider bus
-transactions and cold/warm reset-domain behavior remain hardware-validation
-items.  Only aligned 32-bit accesses are currently accepted.
+The documented active-low APB/core pairs at ``0xffef01403c`` and
+``0xffef014040`` immediately reset timer components 0-3 and 4-7 respectively
+when either bit is clear.  This is likewise a QEMU software contract rather
+than a measured reset waveform.  Per-counter synthesized clocks, AP clock-gate
+coupling, pulse-versus-level synthesis choices, exact enable/reload/zero-count
+edges, wider bus transactions and cold/warm reset-domain behavior remain
+hardware-validation items.  Only aligned 32-bit accesses are currently
+accepted.
 
 Upstream Linux leaves all eight TH1520 nodes disabled.  Its generic
 ``dw_apb_timer_of`` path also tries to create a PLIC-backed clockevent during
@@ -384,7 +392,7 @@ storage and GMAC state in one stream.  Focused migration tests additionally pres
 an in-flight I2C read and EEPROM address pointer, a running APB timer with a
 latched interrupt, a running TH1520 PWM phase with a pending update, plus
 completed AXI-DMAC data/register/interrupt state.  Together with the focused
-device tests, the complete 69-test board gate runs
+device tests, the complete 71-test board gate runs
 in the full, dependency-minimal and ASan/UBSan builds.  The
 instrumented C910 vector/PMU, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
