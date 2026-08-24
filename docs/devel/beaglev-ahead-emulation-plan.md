@@ -75,9 +75,9 @@ remains an open release blocker in the ledger.
 
 ## Current progress estimate
 
-As of 2026-08-24, this branch is approximately **50% complete (plus or minus
+As of 2026-08-24, this branch is approximately **52% complete (plus or minus
 5 percentage points)** against the strict definition above and approximately
-**85% complete for practical C910 Linux and driver development**.  These are
+**86% complete for practical C910 Linux and driver development**.  These are
 weighted engineering estimates, not a ratio of files or register blocks.  The
 strict number remains dominated by authentic boot/reset, exhaustive CPU
 differential validation, USB device/OTG and PHY behavior, display/GPU,
@@ -253,17 +253,21 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   non-cacheable mapping while LR/SC remains valid, and XTheadVector accesses
   reject strong-order mappings, including fault-only-first truncation after a
   valid first element.  With MAEE clear, the five PTE bits are ignored as the
-  RTL requires; QEMU does not yet substitute the TH1520 physical-system-map
-  attributes because that SoC-specific map is not established.  Guarded Sv39
-  coverage checks these rules plus
+  RTL requires.  QEMU now provides the immutable eight-region fallback-map
+  path required by the RTL, but the BeagleV Ahead machine deliberately leaves
+  it invalid because the actual TH1520 ranges and attributes are not
+  established.  Guarded Sv39 coverage checks these rules plus
   alignment-versus-page-fault priority in S and U modes, including delegated
   traps;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
   machine/supervisor overflow CSRs, delegable local cause 17, exact Linux DT
   event maps, and focused CSR/fixed-counter overflow tests.  The overflow test
   uses instruction counting so its near-wrap deadline is independent of host
-  speed; microarchitectural event values remain an explicit
-  hardware-differential task;
+  speed.  A generic duplicate-selector regression proves counters 3 and 4 can
+  count the same event and that clearing one selector preserves the other; it
+  fails freshly fetched upstream `master` and passes this branch.
+  Microarchitectural event values remain an explicit hardware-differential
+  task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
   and CSR behavior, debugger/migration integration, naturally aligned vector
   load/store enforcement independent of MXSTATUS.MM, and focused qtest/TCG

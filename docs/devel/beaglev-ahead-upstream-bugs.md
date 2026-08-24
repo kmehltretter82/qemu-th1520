@@ -9,6 +9,11 @@ The audit baseline is QEMU `staging` commit
 into this workspace by `2d7bb62c70`.  Recheck every item against current
 `master` immediately before reporting it.
 
+`UQ-002` was additionally rechecked against freshly fetched QEMU `master`
+commit `bde2492aace2b5acb755a5b057013e915163a77f` on 2026-08-24.  Its generic
+reproducer fails there and passes on this branch; the remaining pre-filing
+step is a human duplicate review and report/patch preparation.
+
 ## Snapshot and counting rules
 
 The current conservative tally is:
@@ -28,9 +33,9 @@ the files implicated by UQ-001 through UQ-010.  The incoming Zicclsm CPU-option
 work and `minstret` exception-accounting fixes do not address the zero-ID,
 duplicate-event-map or overflow-width findings.  None of the SDHCI, AT24C,
 NPCM GMAC, DWC3 or xHCI candidate paths changed in that range.  The
-conservative report tally therefore remains 10 after the staging merge; this
-path audit is not a substitute for the required current-master reproducer and
-duplicate search.
+conservative report tally therefore did not change after the staging merge;
+this path audit is not a substitute for the required current-master
+reproducer and duplicate search.
 
 A subsequent focused CSR audit on that merged baseline found `UQ-011`.  Two
 freestanding M-mode payloads independently prove both sides of the defect:
@@ -53,7 +58,7 @@ The 2026-08-24 X-Gene/TH1520 RTC milestone also did not add a report unit.
 Upstream had no X-Gene RTC device model, so the new register/timer/migration
 implementation has no pre-existing QEMU regression to report.  Mainline
 Linux's missing TH1520 node and 32.768 kHz prescaler setup are Linux
-integration gaps, not QEMU bugs.  The conservative QEMU tally remains 10.
+integration gaps, not QEMU bugs.  The conservative QEMU tally did not change.
 
 The 2026-08-24 board-LED milestone did not add a QEMU report unit either.
 Upstream's generic LED device already accepts GPIO input and migrates its
@@ -61,21 +66,21 @@ intensity; exposing that intensity read-only through QOM and wiring board
 consumers are feature work.  An older vendor Linux DTS calls the five user
 LEDs green, while the schematic, BOM and pinned mainline DTS identify them as
 blue.  That stale cross-project label is recorded under ``BOARD-002`` and is
-not a defect in pre-existing QEMU.  The conservative QEMU tally remains 10.
+not a defect in pre-existing QEMU.  The conservative QEMU tally did not change.
 
 The 2026-08-24 reset-coupling milestone also did not add a QEMU report unit.
 It connects Linux-described TH1520 AP and storage reset groups to devices
 introduced or integrated on this branch.  The collapsed whole-device reset
 scope and remaining hardware unknowns are new-board fidelity work under
 ``RST-001``, not defects in QEMU's pre-existing machines or reusable devices.
-The conservative QEMU tally remains 10.
+The conservative QEMU tally did not change.
 
 The 2026-08-24 clock-gate milestone did not add a QEMU report unit.  Exporting
 TH1520 leaf-gate state, wiring new SoC clock links and defining provisional
 pause/resume behavior for the branch's PWM, timer and watchdog integrations
 are new-board fidelity work under ``CLK-002``.  Focused normal and migration
 tests found no independent defect in a pre-existing upstream machine.  The
-conservative QEMU tally remains 10.
+conservative QEMU tally did not change.
 
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
@@ -197,7 +202,8 @@ No matching public issue was found in the 2026-08-23 quick search.
 
 ### UQ-002: the RISC-V PMU event map loses duplicate counter selections
 
-Status: **REPORTABLE; high source-level confidence; isolate a generic test**
+Status: **REPORTABLE; generic fail-before/pass-after reproducer; final human
+duplicate review required**
 
 Affected upstream code:
 
@@ -214,18 +220,37 @@ Branch fix and evidence:
 
 * commit `3354b9818d` (`target/riscv: model C910 performance counters`)
   changes each hash value into a counter bitmask and removes only the counter
-  being reprogrammed; and
-* the modified code is exercised by the C910 PMU test, but that test does not
-  yet isolate this generic duplicate-selection case.
+  being reprogrammed;
+* `tests/tcg/riscv64/test-riscv-pmu-duplicates.S` uses the generic `rv64` CPU,
+  selects standard instruction event 2 in counters 3 and 4, and requires both
+  values to be nonzero and equal after a bounded loop;
+* the payload then clears only `mhpmevent3`, zeros both counters, and proves
+  counter 3 stays zero while counter 4 continues counting; and
+* the branch exits 0 both with deterministic instruction counting and ordinary
+  timing, and the complete normal `check-tcg` gate passes with the test enabled.
 
-Upstream isolation task:
+The exact deterministic invocation is:
 
-* use a generic RISC-V CPU with at least two HPM counters;
-* select the same instruction event in counters 3 and 4, execute a bounded
-  instruction sequence, and require both counters to advance; and
-* reprogram only one counter and prove the other mapping remains active.
+```
+qemu-system-riscv64 -icount shift=0 -smp 1 \
+  -cpu rv64,pmu-mask=0x18 -M virt -display none -semihosting \
+  -device loader,file=test-riscv-pmu-duplicates
+```
 
-No matching public issue was found in the 2026-08-23 quick search.
+Freshly fetched upstream `master`
+`bde2492aace2b5acb755a5b057013e915163a77f` exits 2 because counter 4 remains
+zero.  The same revision also exits 2 without `-icount`, while the branch exits
+0 in both modes.  The dependency-minimal ASan/UBSan project configuration
+intentionally excludes the generic `virt` machine, so this generic test is not
+applicable to that gate; the full normal TCG suite supplies the integration
+gate and the two timing modes rule out an `-icount`-only observation.
+
+A quick GitLab/qemu-devel web search on 2026-08-24 for
+`riscv_pmu_update_event_map`, `pmu_event_ctr_map`, duplicate `mhpmevent`, and
+duplicate RISC-V PMU counters found no matching report.  This is not an
+exhaustive duplicate search.  Before filing, a human reviewer must repeat that
+search, split the generic bitmask fix out of the board series, run the upstream
+CI-relevant tests, and disclose the agent-assisted analysis as required above.
 
 ### UQ-003: RISC-V PMU overflow scheduling uses unsafe width arithmetic
 
