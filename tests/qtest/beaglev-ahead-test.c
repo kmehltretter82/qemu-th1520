@@ -6418,6 +6418,112 @@ static void test_dw_gpio_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static int64_t board_led_intensity(QTestState *qts, const char *name)
+{
+    g_autofree char *path = g_strdup_printf("/machine/%s", name);
+    QDict *response = qtest_qmp(
+        qts, "{ 'execute': 'qom-get', 'arguments': { 'path': %s, "
+        "'property': 'intensity-percent' } }", path);
+    int64_t value;
+
+    g_assert_nonnull(response);
+    g_assert_true(qdict_haskey(response, "return"));
+    value = qdict_get_int(response, "return");
+    qobject_unref(response);
+    return value;
+}
+
+static void assert_board_led_metadata(QTestState *qts, const char *name,
+                                      const char *color)
+{
+    g_autofree char *path = g_strdup_printf("/machine/%s", name);
+    QDict *response = qtest_qmp(
+        qts, "{ 'execute': 'qom-get', 'arguments': { 'path': %s, "
+        "'property': 'color' } }", path);
+
+    g_assert_nonnull(response);
+    g_assert_cmpstr(qdict_get_str(response, "return"), ==, color);
+    qobject_unref(response);
+
+    response = qtest_qmp(
+        qts, "{ 'execute': 'qom-get', 'arguments': { 'path': %s, "
+        "'property': 'gpio-active-high' } }", path);
+    g_assert_nonnull(response);
+    g_assert_true(qdict_get_bool(response, "return"));
+    qobject_unref(response);
+}
+
+static void assert_user_led_pattern(QTestState *qts, uint32_t pattern)
+{
+    for (unsigned int i = 0; i < 5; i++) {
+        g_autofree char *name = g_strdup_printf("usr%u", i);
+
+        g_assert_cmpint(board_led_intensity(qts, name), ==,
+                        pattern & BIT(i) ? 100 : 0);
+    }
+}
+
+static void test_board_leds(void)
+{
+    const uint32_t user_mask = 0x1f00;
+    const uint32_t source_pattern = BIT(8) | BIT(10) | BIT(12);
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-leds-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    for (unsigned int i = 0; i < 5; i++) {
+        g_autofree char *name = g_strdup_printf("usr%u", i);
+
+        assert_board_led_metadata(src, name, "blue");
+    }
+    assert_board_led_metadata(src, "power", "green");
+    assert_user_led_pattern(src, 0);
+    g_assert_cmpint(board_led_intensity(src, "power"), ==, 100);
+
+    /* Data does not reach an LED until its GPIO is configured as output. */
+    qtest_writel(src, TH1520_GPIO4_BASE + DW_GPIO_SWPORTA_DR, user_mask);
+    assert_user_led_pattern(src, 0);
+    qtest_writel(src, TH1520_GPIO4_BASE + DW_GPIO_SWPORTA_DDR, user_mask);
+    assert_user_led_pattern(src, 0x1f);
+
+    qtest_writel(src, TH1520_GPIO4_BASE + DW_GPIO_SWPORTA_DR,
+                  source_pattern);
+    assert_user_led_pattern(src, BIT(0) | BIT(2) | BIT(4));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_GPIO4_BASE +
+                                DW_GPIO_SWPORTA_DR), ==, source_pattern);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GPIO4_BASE +
+                                DW_GPIO_SWPORTA_DDR), ==, user_mask);
+    assert_user_led_pattern(dst, BIT(0) | BIT(2) | BIT(4));
+    g_assert_cmpint(board_led_intensity(dst, "power"), ==, 100);
+
+    qtest_system_reset(dst);
+    assert_user_led_pattern(dst, 0);
+    g_assert_cmpint(board_led_intensity(dst, "power"), ==, 100);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_ap_cpr_migration(void)
 {
     g_autofree char *path = NULL;
@@ -7215,6 +7321,7 @@ int main(int argc, char **argv)
                        test_dw_gpio_interrupts);
         qtest_add_func("/beaglev-ahead/dw-gpio/migration",
                        test_dw_gpio_migration);
+        qtest_add_func("/beaglev-ahead/board/leds", test_board_leds);
         qtest_add_func("/beaglev-ahead/dw-i2c/registers",
                        test_dw_i2c_registers);
         qtest_add_func("/beaglev-ahead/dw-i2c/eeprom",
