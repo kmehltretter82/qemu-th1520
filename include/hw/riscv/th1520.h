@@ -21,6 +21,7 @@
 #include "hw/net/th1520_gmac.h"
 #include "hw/riscv/riscv_hart.h"
 #include "hw/sd/dwcmshc.h"
+#include "hw/sensor/mr75203.h"
 #include "hw/ssi/dw_apb_ssi.h"
 #include "hw/timer/dw_apb_timer.h"
 #include "hw/timer/th1520_pwm.h"
@@ -48,6 +49,8 @@ struct TH1520SoCState {
     TH1520APClockState ap_clock;
     TH1520APResetState ap_reset;
     TH1520MboxState mbox;
+    MR75203State pvt;
+    Clock *pvt_clk;
     DWAPBUARTState uart[TH1520_UART_COUNT];
     DWAPBGPIOState gpio[TH1520_GPIO_COUNT];
     TH1520PadCtrlState padctrl[TH1520_PADCTRL_COUNT];
@@ -109,6 +112,10 @@ enum {
     TH1520_DEV_MBOX_REMOTE0,
     TH1520_DEV_MBOX_REMOTE1,
     TH1520_DEV_MBOX_REMOTE2,
+    TH1520_DEV_PVT_COMMON,
+    TH1520_DEV_PVT_TS,
+    TH1520_DEV_PVT_PD,
+    TH1520_DEV_PVT_VM,
     TH1520_DEV_DMAC0,
     TH1520_DEV_GMAC0,
     TH1520_DEV_GMAC1,
@@ -200,6 +207,18 @@ enum {
 #define TH1520_CLK_MBOX1 73
 #define TH1520_CLK_MBOX2 74
 #define TH1520_CLK_MBOX3 75
+
+#define TH1520_PVT_INPUT_FREQ 73728000
+#define TH1520_PVT_COMPONENT_ID 0x9b487060
+#define TH1520_PVT_ID_NUMBER 0x12345678
+#define TH1520_PVT_TS_COUNT 2
+#define TH1520_PVT_PD_COUNT 11
+#define TH1520_PVT_VM_COUNT 1
+#define TH1520_PVT_VM_CHANNELS 16
+#define TH1520_PVT_TS_COEFF_G 42740
+#define TH1520_PVT_TS_COEFF_H 220500
+#define TH1520_PVT_TS_COEFF_J (-160)
+#define TH1520_PVT_TS_COEFF_CAL5 4094
 
 #define BEAGLEV_AHEAD_EEPROM_ADDRESS 0x50
 #define BEAGLEV_AHEAD_EEPROM_SIZE 4096

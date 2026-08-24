@@ -81,6 +81,10 @@ static const MemMapEntry th1520_memmap[] = {
                                    TH1520_MBOX_REMOTE1_MMIO_SIZE },
     [TH1520_DEV_MBOX_REMOTE2] = { 0xffffc54000,
                                    TH1520_MBOX_REMOTE2_MMIO_SIZE },
+    [TH1520_DEV_PVT_COMMON] = { 0xfffff4e000, 0x00000080 },
+    [TH1520_DEV_PVT_TS]     = { 0xfffff4e080, 0x00000100 },
+    [TH1520_DEV_PVT_PD]     = { 0xfffff4e180, 0x00000680 },
+    [TH1520_DEV_PVT_VM]     = { 0xfffff4e800, 0x00000600 },
     [TH1520_DEV_DMAC0] = { 0xffefc00000, 0x00001000 },
     [TH1520_DEV_GMAC0] = { 0xffe7070000, 0x00002000 },
     [TH1520_DEV_GMAC1] = { 0xffe7060000, 0x00002000 },
@@ -372,6 +376,35 @@ static void th1520_soc_init(Object *obj)
         qdev_connect_clock_in(DEVICE(&s->timer[i]), "timer", s->timer_clk);
     }
     object_initialize_child(obj, "mbox", &s->mbox, TYPE_TH1520_MBOX);
+    object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
+    qdev_prop_set_uint8(DEVICE(&s->pvt), "ts-count", TH1520_PVT_TS_COUNT);
+    qdev_prop_set_uint8(DEVICE(&s->pvt), "pd-count", TH1520_PVT_PD_COUNT);
+    qdev_prop_set_uint8(DEVICE(&s->pvt), "vm-count", TH1520_PVT_VM_COUNT);
+    qdev_prop_set_uint8(DEVICE(&s->pvt), "vm-channels",
+                        TH1520_PVT_VM_CHANNELS);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "common-mmio-size",
+                         th1520_memmap[TH1520_DEV_PVT_COMMON].size);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "ts-mmio-size",
+                         th1520_memmap[TH1520_DEV_PVT_TS].size);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "pd-mmio-size",
+                         th1520_memmap[TH1520_DEV_PVT_PD].size);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "vm-mmio-size",
+                         th1520_memmap[TH1520_DEV_PVT_VM].size);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "component-id",
+                         TH1520_PVT_COMPONENT_ID);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "id-number",
+                         TH1520_PVT_ID_NUMBER);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "ts-coeff-g",
+                         TH1520_PVT_TS_COEFF_G);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "ts-coeff-h",
+                         TH1520_PVT_TS_COEFF_H);
+    qdev_prop_set_int32(DEVICE(&s->pvt), "ts-coeff-j",
+                        TH1520_PVT_TS_COEFF_J);
+    qdev_prop_set_uint32(DEVICE(&s->pvt), "ts-coeff-cal5",
+                         TH1520_PVT_TS_COEFF_CAL5);
+    s->pvt_clk = clock_new(obj, "pvt-clock");
+    clock_set_hz(s->pvt_clk, TH1520_PVT_INPUT_FREQ);
+    qdev_connect_clock_in(DEVICE(&s->pvt), "clock", s->pvt_clk);
     object_initialize_child(obj, "dmac0", &s->dmac0, TYPE_DW_AXI_DMAC);
     qdev_prop_set_uint32(DEVICE(&s->dmac0), "num-channels",
                          TH1520_DMAC_CHANNELS);
@@ -609,6 +642,18 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->mbox), 0,
                        qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                               TH1520_MBOX_IRQ));
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pvt), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pvt), MR75203_WINDOW_COMMON,
+                    th1520_memmap[TH1520_DEV_PVT_COMMON].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pvt), MR75203_WINDOW_TS,
+                    th1520_memmap[TH1520_DEV_PVT_TS].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pvt), MR75203_WINDOW_PD,
+                    th1520_memmap[TH1520_DEV_PVT_PD].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pvt), MR75203_WINDOW_VM,
+                    th1520_memmap[TH1520_DEV_PVT_VM].base);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
         return;
@@ -942,6 +987,9 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         "clk-local", "clk-remote-icu0", "clk-remote-icu1",
         "clk-remote-icu2"
     };
+    static const char *const pvt_reg_names[] = {
+        "common", "ts", "pd", "vm"
+    };
     MachineState *ms = MACHINE(s);
     uint32_t intc_phandles[TH1520_C910_HARTS];
     uint32_t plic_cells[TH1520_C910_HARTS * 4];
@@ -1122,6 +1170,36 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                               padctrl_phandles, &led_pins_phandle,
                               &gmac0_pins_phandle, &uart0_pins_phandle,
                               &wifi_pins_phandle);
+
+    qemu_fdt_add_subnode(ms->fdt, "/soc/pvt@fffff4e000");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/pvt@fffff4e000", "compatible",
+                            "moortec,mr75203");
+    qemu_fdt_setprop_sized_cells(
+        ms->fdt, "/soc/pvt@fffff4e000", "reg",
+        2, th1520_memmap[TH1520_DEV_PVT_COMMON].base,
+        2, th1520_memmap[TH1520_DEV_PVT_COMMON].size,
+        2, th1520_memmap[TH1520_DEV_PVT_TS].base,
+        2, th1520_memmap[TH1520_DEV_PVT_TS].size,
+        2, th1520_memmap[TH1520_DEV_PVT_PD].base,
+        2, th1520_memmap[TH1520_DEV_PVT_PD].size,
+        2, th1520_memmap[TH1520_DEV_PVT_VM].base,
+        2, th1520_memmap[TH1520_DEV_PVT_VM].size);
+    qemu_fdt_setprop_string_array(ms->fdt, "/soc/pvt@fffff4e000",
+                                  "reg-names", (char **)&pvt_reg_names,
+                                  ARRAY_SIZE(pvt_reg_names));
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000", "clocks",
+                          aonsys_clock_phandle);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000",
+                          "#thermal-sensor-cells", 1);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000",
+                          "moortec,ts-coeff-g", TH1520_PVT_TS_COEFF_G);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000",
+                          "moortec,ts-coeff-h", TH1520_PVT_TS_COEFF_H);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000",
+                          "moortec,ts-coeff-j", TH1520_PVT_TS_COEFF_J);
+    qemu_fdt_setprop_cell(ms->fdt, "/soc/pvt@fffff4e000",
+                          "moortec,ts-coeff-cal5",
+                          TH1520_PVT_TS_COEFF_CAL5);
 
     for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
         const TH1520GPIOInfo *info = &th1520_gpio_info[i];
