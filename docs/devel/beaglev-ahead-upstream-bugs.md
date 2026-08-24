@@ -471,9 +471,15 @@ length (`net/queue.c:qemu_net_queue_append()`), and the socket backend receives
 into a `NET_BUFSIZE` stack buffer but reports only the bytes returned by
 `recv()`.  The NPCM callback therefore reads four bytes beyond the supplied
 packet whenever it appends the FCS length.  This is sufficient to keep UQ-006
-as the highest-priority *new* candidate, but it is not yet a clean upstream
-ASan report: a fresh sanitizer build and the smallest receive qtest still need
-to establish the runtime trace.  The closest public item,
+as the highest-priority *new* candidate.  A disposable ASan/UBSan
+`aarch64-softmmu` build from `eea8fe61b8` (the affected paths are unchanged
+from current master `bde2492aace`) ran the smallest receive qtest: it copied
+the packet plus four zero bytes and emitted no sanitizer diagnostic.  This is
+expected for the direct socket path because ASan sees the whole
+`NET_BUFSIZE` stack object, and this build deliberately zero-initializes
+automatic variables.  The run proves the wrong FCS but does not by itself
+prove host-data disclosure; a queued exact-size heap path or a backend with a
+strict packet allocation is still needed.  The closest public item,
 [QEMU #3202](https://gitlab.com/qemu-project/qemu/-/work_items/3202), is a
 different transmit-side integer-truncation overflow.  No report has been
 filed from this project.  Do not submit UQ-006 until a human reviewer has
