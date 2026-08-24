@@ -28,6 +28,8 @@ config BEAGLEV_AHEAD
     select TH1520_CPR
     select TH1520_MBOX
     select TH1520_PINCTRL
+    select TH1520_MISCSYS
+    select TH1520_USB
     select MR75203
     select THEAD_C900_CLINT
     select THEAD_C900_PLIC

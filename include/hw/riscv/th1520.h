@@ -16,6 +16,7 @@
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_mbox.h"
+#include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_pinctrl.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
@@ -25,6 +26,7 @@
 #include "hw/ssi/dw_apb_ssi.h"
 #include "hw/timer/dw_apb_timer.h"
 #include "hw/timer/th1520_pwm.h"
+#include "hw/usb/th1520_usb.h"
 #include "hw/watchdog/dw_apb_wdt.h"
 
 #define TH1520_MSHC_COUNT 3
@@ -50,6 +52,8 @@ struct TH1520SoCState {
     THeadC900PLICState plic;
     TH1520APClockState ap_clock;
     TH1520APResetState ap_reset;
+    TH1520MiscSysState miscsys;
+    TH1520USBState usb;
     TH1520MboxState mbox;
     MR75203State pvt;
     Clock *pvt_clk;
@@ -87,6 +91,9 @@ enum {
     TH1520_DEV_SRAM,
     TH1520_DEV_AP_CLOCK,
     TH1520_DEV_AP_RESET,
+    TH1520_DEV_MISCSYS,
+    TH1520_DEV_USB_DRD,
+    TH1520_DEV_USB_CORE,
     TH1520_DEV_UART0,
     TH1520_DEV_UART1,
     TH1520_DEV_UART2,
@@ -217,6 +224,8 @@ enum {
 #define TH1520_RESET_ID_WDT1 4
 #define TH1520_WDT_COMPONENT_PARAM_1 DW_APB_WDT_PARAM_1_USE_FIX_TOP
 #define TH1520_WDT_COUNTER_RESET 0x0000ffff
+
+#define TH1520_USB_IRQ 68
 
 #define TH1520_MBOX_IRQ 28
 #define TH1520_CLK_MBOX0 72

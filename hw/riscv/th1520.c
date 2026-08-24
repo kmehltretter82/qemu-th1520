@@ -48,6 +48,9 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
     [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
+    [TH1520_DEV_MISCSYS] = { 0xffec02c000, 0x00001000 },
+    [TH1520_DEV_USB_DRD] = { 0xffec03f000, 0x00001000 },
+    [TH1520_DEV_USB_CORE] = { 0xffe7040000, 0x00010000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
     [TH1520_DEV_UART1] = { 0xffe7f00000, 0x00000100 },
     [TH1520_DEV_UART2] = { 0xffec010000, 0x00004000 },
@@ -336,6 +339,9 @@ static void th1520_soc_init(Object *obj)
                             TYPE_TH1520_AP_CLOCK);
     object_initialize_child(obj, "ap-reset", &s->ap_reset,
                             TYPE_TH1520_AP_RESET);
+    object_initialize_child(obj, "miscsys", &s->miscsys,
+                            TYPE_TH1520_MISCSYS);
+    object_initialize_child(obj, "usb", &s->usb, TYPE_TH1520_USB);
     for (int i = 0; i < TH1520_UART_COUNT; i++) {
         object_initialize_child(obj, uart_names[i], &s->uart[i],
                                 TYPE_DW_APB_UART);
@@ -537,6 +543,30 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_reset), 0,
                     th1520_memmap[TH1520_DEV_AP_RESET].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->miscsys), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->miscsys), 0,
+                    th1520_memmap[TH1520_DEV_MISCSYS].base);
+
+    object_property_set_link(OBJECT(&s->usb), "dma", OBJECT(system_memory),
+                             &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->usb), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->usb), 0,
+                    th1520_memmap[TH1520_DEV_USB_DRD].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->usb), 1,
+                    th1520_memmap[TH1520_DEV_USB_CORE].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->usb), 0,
+                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                              TH1520_USB_IRQ));
+    for (int i = 0; i < TH1520_MISCSYS_USB_RESET_COUNT; i++) {
+        qdev_connect_gpio_out_named(
+            DEVICE(&s->miscsys), "usb-reset", i,
+            qdev_get_gpio_in_named(DEVICE(&s->usb), "reset", i));
+    }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->clint), errp)) {
         return;
@@ -1040,6 +1070,12 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const pvt_reg_names[] = {
         "common", "ts", "pd", "vm"
     };
+    static const char *const misc_sysreg_compat[] = {
+        "thead,light-misc-sysreg", "syscon"
+    };
+    static const char *const usb_drd_compat[] = {
+        "thead,light-usb3-drd", "syscon"
+    };
     MachineState *ms = MACHINE(s);
     uint32_t intc_phandles[TH1520_C910_HARTS];
     uint32_t plic_cells[TH1520_C910_HARTS * 4];
@@ -1473,6 +1509,49 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                info->reset_id);
         qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
     }
+
+    qemu_fdt_add_subnode(ms->fdt, "/soc/syscon@ffec02c000");
+    qemu_fdt_setprop_string_array(ms->fdt, "/soc/syscon@ffec02c000",
+                                  "compatible", (char **)&misc_sysreg_compat,
+                                  ARRAY_SIZE(misc_sysreg_compat));
+    qemu_fdt_setprop_sized_cells(
+        ms->fdt, "/soc/syscon@ffec02c000", "reg",
+        2, th1520_memmap[TH1520_DEV_MISCSYS].base,
+        2, th1520_memmap[TH1520_DEV_MISCSYS].size);
+
+    qemu_fdt_add_subnode(ms->fdt, "/soc/syscon@ffec03f000");
+    qemu_fdt_setprop_string_array(ms->fdt, "/soc/syscon@ffec03f000",
+                                  "compatible", (char **)&usb_drd_compat,
+                                  ARRAY_SIZE(usb_drd_compat));
+    qemu_fdt_setprop_sized_cells(
+        ms->fdt, "/soc/syscon@ffec03f000", "reg",
+        2, th1520_memmap[TH1520_DEV_USB_DRD].base,
+        2, th1520_memmap[TH1520_DEV_USB_DRD].size);
+
+    /*
+     * Mainline Linux has neither a TH1520 glue binding nor a driver.  Keep
+     * the accurately located generic core disabled until that parent contract
+     * exists instead of silently bypassing the required clock/reset sequence.
+     */
+    qemu_fdt_add_subnode(ms->fdt, "/soc/usb@ffe7040000");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/usb@ffe7040000", "compatible",
+                            "snps,dwc3");
+    qemu_fdt_setprop_sized_cells(
+        ms->fdt, "/soc/usb@ffe7040000", "reg",
+        2, th1520_memmap[TH1520_DEV_USB_CORE].base,
+        2, th1520_memmap[TH1520_DEV_USB_CORE].size);
+    qemu_fdt_setprop_cells(ms->fdt, "/soc/usb@ffe7040000", "interrupts",
+                           TH1520_USB_IRQ, 4);
+    qemu_fdt_setprop_string(ms->fdt, "/soc/usb@ffe7040000",
+                            "interrupt-names", "dwc_usb3");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/usb@ffe7040000",
+                            "maximum-speed", "super-speed");
+    qemu_fdt_setprop_string(ms->fdt, "/soc/usb@ffe7040000", "dr_mode",
+                            "host");
+    qemu_fdt_setprop(ms->fdt, "/soc/usb@ffe7040000",
+                     "snps,usb3_lpm_capable", NULL, 0);
+    qemu_fdt_setprop_string(ms->fdt, "/soc/usb@ffe7040000", "status",
+                            "disabled");
 
     qemu_fdt_add_subnode(ms->fdt, "/soc/mailbox@ffffc38000");
     qemu_fdt_setprop_string(ms->fdt, "/soc/mailbox@ffffc38000",
