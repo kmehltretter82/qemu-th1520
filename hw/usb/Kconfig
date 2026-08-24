@@ -139,6 +139,10 @@ config USB_DWC3
     select USB_XHCI_SYSBUS
     select REGISTER
 
+config TH1520_USB
+    bool
+    select USB_DWC3
+
 config XLNX_USB_SUBSYS
     bool
     select USB_DWC3
