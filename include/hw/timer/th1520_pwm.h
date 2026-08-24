@@ -27,6 +27,7 @@ typedef struct TH1520PWMChannel {
     uint32_t active_ctrl;
     uint32_t active_period;
     uint32_t active_fp;
+    int64_t remaining_ns;
     bool running;
     bool update_pending;
     bool edge_is_boundary;

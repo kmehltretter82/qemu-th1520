@@ -7,12 +7,13 @@
  * later period.  START is likewise a strobe; the Linux driver issues it in a
  * separate transaction when it enables a previously inactive channel.
  *
- * The currently upstream Linux driver only uses continuous mode.  The
- * one-shot mode, inactive-output control, clock-rate changes, and physical
- * pin routing need hardware validation and are intentionally not inferred
- * here.  The TH1520 board model wires the documented AP reset pair to an
- * immediate model reset, but its hardware pulse/hold semantics remain
- * unproved.
+ * The currently upstream Linux driver only uses continuous mode.  A stopped
+ * input clock freezes the virtual phase and output level, then resumes the
+ * remaining edge delay when the clock returns.  That deterministic gate
+ * convention, one-shot mode, inactive-output control, arbitrary rate changes
+ * and physical pin routing still need hardware validation.  The TH1520 board
+ * model wires the documented AP reset pair to an immediate model reset, but
+ * its hardware pulse/hold semantics remain unproved.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -85,6 +86,7 @@ static void th1520_pwm_schedule(TH1520PWMChannel *channel,
         delay = 1;
     }
     channel->edge_is_boundary = edge_is_boundary;
+    channel->remaining_ns = 0;
     timer_mod_ns(&channel->timer, now + delay);
 }
 
@@ -120,6 +122,11 @@ static void th1520_pwm_begin_period(TH1520PWMChannel *channel)
         th1520_pwm_set_output(channel, false);
         return;
     }
+    if (!clock_is_enabled(channel->parent->pwm_clk)) {
+        channel->remaining_ns = 0;
+        timer_del(&channel->timer);
+        return;
+    }
 
     th1520_pwm_set_output(channel, th1520_pwm_initial_level(channel));
     if (channel->active_fp > 0 &&
@@ -135,6 +142,7 @@ static void th1520_pwm_timer(void *opaque)
 {
     TH1520PWMChannel *channel = opaque;
 
+    channel->remaining_ns = 0;
     if (!channel->running) {
         return;
     }
@@ -233,6 +241,36 @@ static const MemoryRegionOps th1520_pwm_ops = {
     },
 };
 
+static void th1520_pwm_clock_update(void *opaque, ClockEvent event)
+{
+    TH1520PWMState *s = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    for (unsigned int i = 0; i < TH1520_PWM_CHANNELS; i++) {
+        TH1520PWMChannel *channel = &s->channel[i];
+
+        if (event == ClockPreUpdate) {
+            if (channel->running && timer_pending(&channel->timer)) {
+                channel->remaining_ns = MAX(
+                    (int64_t)timer_expire_time_ns(&channel->timer) - now,
+                    INT64_C(1));
+                timer_del(&channel->timer);
+            }
+            continue;
+        }
+        if (!channel->running || !clock_is_enabled(s->pwm_clk)) {
+            timer_del(&channel->timer);
+            continue;
+        }
+        if (channel->remaining_ns > 0) {
+            timer_mod_ns(&channel->timer, now + channel->remaining_ns);
+            channel->remaining_ns = 0;
+        } else {
+            th1520_pwm_begin_period(channel);
+        }
+    }
+}
+
 static void th1520_pwm_reset(DeviceState *dev)
 {
     TH1520PWMState *s = TH1520_PWM(dev);
@@ -247,6 +285,7 @@ static void th1520_pwm_reset(DeviceState *dev)
         channel->active_ctrl = 0;
         channel->active_period = 0;
         channel->active_fp = 0;
+        channel->remaining_ns = 0;
         channel->running = false;
         channel->update_pending = false;
         channel->edge_is_boundary = false;
@@ -265,20 +304,24 @@ static int th1520_pwm_post_load(void *opaque, int version_id)
 {
     TH1520PWMState *s = opaque;
 
-    if (!clock_get_hz(s->pwm_clk)) {
-        return -EINVAL;
-    }
     for (unsigned int i = 0; i < TH1520_PWM_CHANNELS; i++) {
         TH1520PWMChannel *channel = &s->channel[i];
 
-        if (!channel->running) {
+        if (!channel->running || channel->remaining_ns < 0) {
+            if (channel->remaining_ns < 0) {
+                return -EINVAL;
+            }
             timer_del(&channel->timer);
+            channel->remaining_ns = 0;
             th1520_pwm_set_output(channel, false);
             continue;
         }
         if (!(channel->active_ctrl & TH1520_PWM_CTRL_CONTINUOUS) ||
             !channel->active_period) {
             return -EINVAL;
+        }
+        if (!clock_is_enabled(s->pwm_clk)) {
+            timer_del(&channel->timer);
         }
         th1520_pwm_set_output(channel, channel->output_level);
     }
@@ -287,7 +330,7 @@ static int th1520_pwm_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_th1520_pwm_channel = {
     .name = TYPE_TH1520_PWM "/channel",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_TIMER(timer, TH1520PWMChannel),
@@ -297,6 +340,7 @@ static const VMStateDescription vmstate_th1520_pwm_channel = {
         VMSTATE_UINT32(active_ctrl, TH1520PWMChannel),
         VMSTATE_UINT32(active_period, TH1520PWMChannel),
         VMSTATE_UINT32(active_fp, TH1520PWMChannel),
+        VMSTATE_INT64_V(remaining_ns, TH1520PWMChannel, 2),
         VMSTATE_BOOL(running, TH1520PWMChannel),
         VMSTATE_BOOL(update_pending, TH1520PWMChannel),
         VMSTATE_BOOL(edge_is_boundary, TH1520PWMChannel),
@@ -307,7 +351,7 @@ static const VMStateDescription vmstate_th1520_pwm_channel = {
 
 static const VMStateDescription vmstate_th1520_pwm = {
     .name = TYPE_TH1520_PWM,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .post_load = th1520_pwm_post_load,
     .fields = (const VMStateField[]) {
@@ -329,8 +373,8 @@ static void th1520_pwm_realize(DeviceState *dev, Error **errp)
         return;
     }
     hz = clock_get_hz(s->pwm_clk);
-    if (!hz || hz > NANOSECONDS_PER_SECOND) {
-        error_setg(errp, "%s: PWM clock must be between 1 Hz and 1 GHz",
+    if (hz > NANOSECONDS_PER_SECOND) {
+        error_setg(errp, "%s: PWM clock must not exceed 1 GHz",
                    TYPE_TH1520_PWM);
         return;
     }
@@ -343,7 +387,9 @@ static void th1520_pwm_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &th1520_pwm_ops, s,
                           TYPE_TH1520_PWM, TH1520_PWM_REG_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
-    s->pwm_clk = qdev_init_clock_in(DEVICE(s), "pwm", NULL, NULL, 0);
+    s->pwm_clk = qdev_init_clock_in(DEVICE(s), "pwm",
+                                    th1520_pwm_clock_update, s,
+                                    ClockPreUpdate | ClockUpdate);
     qdev_init_gpio_in_named(DEVICE(s), th1520_pwm_reset_input, "reset", 1);
     qdev_init_gpio_out_named(DEVICE(s), s->output, "pwm",
                              TH1520_PWM_CHANNELS);

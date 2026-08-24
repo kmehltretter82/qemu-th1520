@@ -6,7 +6,8 @@
  * watchdog action.  In interrupt mode the first timeout asserts the IRQ and
  * starts another TOP period; an uncleared interrupt at the next timeout
  * requests the watchdog action.  Reading EOI clears the interrupt without
- * restarting the counter, while a valid CRR kick does both.
+ * restarting the counter, while a valid CRR kick does both.  A disabled input
+ * clock freezes an enabled counter and a later non-zero clock resumes it.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -38,7 +39,7 @@ static void dw_apb_wdt_reload(DWAPBWDTState *s, uint32_t count, bool run)
 {
     ptimer_transaction_begin(s->timer);
     ptimer_set_count(s->timer, count);
-    if (run) {
+    if (run && clock_is_enabled(s->pclk)) {
         ptimer_run(s->timer, 1);
     }
     ptimer_transaction_commit(s->timer);
@@ -242,7 +243,16 @@ static void dw_apb_wdt_clock_update(void *opaque, ClockEvent event)
         return;
     }
     ptimer_transaction_begin(s->timer);
+    if (event == ClockPreUpdate) {
+        ptimer_stop(s->timer);
+        ptimer_transaction_commit(s->timer);
+        return;
+    }
     ptimer_set_period_from_clock(s->timer, s->pclk, 1);
+    if (clock_is_enabled(s->pclk) &&
+        (s->cr & DW_APB_WDT_CR_ENABLE)) {
+        ptimer_run(s->timer, 1);
+    }
     ptimer_transaction_commit(s->timer);
 }
 
@@ -312,7 +322,8 @@ static void dw_apb_wdt_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
     s->pclk = qdev_init_clock_in(DEVICE(s), "pclk",
-                                 dw_apb_wdt_clock_update, s, ClockUpdate);
+                                 dw_apb_wdt_clock_update, s,
+                                 ClockPreUpdate | ClockUpdate);
     qdev_init_gpio_in_named(DEVICE(s), dw_apb_wdt_reset_input, "reset", 1);
 }
 

@@ -2,8 +2,9 @@
  * Synopsys DesignWare APB timer
  *
  * This models the software-visible four-counter component used by TH1520.
- * Cascade wiring, per-counter synthesized clocks, and physical PWM outputs
- * are integration options and are deliberately not inferred here.
+ * A disabled input clock freezes enabled counters and a later non-zero clock
+ * resumes them.  Cascade wiring, per-counter synthesized clocks, and physical
+ * PWM outputs are integration options and are deliberately not inferred here.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -122,7 +123,8 @@ static void dw_apb_timer_write_control(DWAPBTimerState *s,
     }
 
     s->control[channel] = value;
-    if (value & DW_APB_TIMER_CONTROL_ENABLE) {
+    if ((value & DW_APB_TIMER_CONTROL_ENABLE) &&
+        clock_is_enabled(s->timer_clk)) {
         ptimer_run(timer, 0);
     }
     ptimer_transaction_commit(timer);
@@ -285,7 +287,16 @@ static void dw_apb_timer_clk_update(void *opaque, ClockEvent event)
             continue;
         }
         ptimer_transaction_begin(s->timer[i]);
+        if (event == ClockPreUpdate) {
+            ptimer_stop(s->timer[i]);
+            ptimer_transaction_commit(s->timer[i]);
+            continue;
+        }
         ptimer_set_period_from_clock(s->timer[i], s->timer_clk, 1);
+        if (clock_is_enabled(s->timer_clk) &&
+            (s->control[i] & DW_APB_TIMER_CONTROL_ENABLE)) {
+            ptimer_run(s->timer[i], 0);
+        }
         ptimer_transaction_commit(s->timer[i]);
     }
 }
@@ -375,7 +386,7 @@ static void dw_apb_timer_init(Object *obj)
     }
     s->timer_clk = qdev_init_clock_in(DEVICE(s), "timer",
                                       dw_apb_timer_clk_update, s,
-                                      ClockUpdate);
+                                      ClockPreUpdate | ClockUpdate);
     qdev_init_gpio_in_named(DEVICE(s), dw_apb_timer_reset_input, "reset", 1);
 }
 
