@@ -7,12 +7,13 @@
  * alignment after translation.  Instruction fetch from a strong-order page
  * raises an access fault.  AMO read-modify-write operations require a
  * cacheable page, while LR/SC do not; vector accesses reject strong-order
- * pages.  With MAEE disabled, all five PTE bits are reserved.
+ * pages.  With MAEE disabled, C910 ignores all five PTE bits and substitutes
+ * attributes from its physical system map.
  *
  * This test covers those architecturally visible rules in S and U mode.  M
  * mode owns MAEE and checks both reset state and the on/off transition.  It
  * deliberately does not claim cache, ordering, shareability or security-bus
- * effects which QEMU cannot yet represent.
+ * effects, or the TH1520 physical PMA map, which QEMU cannot yet represent.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -64,7 +65,6 @@
 #define CAUSE_STORE_ACCESS	7
 #define CAUSE_ECALL_U		8
 #define CAUSE_ECALL_S		9
-#define CAUSE_LOAD_PAGE_FAULT	13
 #define DELEGATED_EXCEPTIONS	0xb0f2
 
 /*
@@ -217,11 +217,25 @@ _start:
 	li	t1, 0x12345678
 	sw	t1, 48(t0)
 	sw	zero, 52(t0)
+	sw	zero, 60(t0)
+	li	t1, 0x0102030405060708
+	sd	t1, 64(t0)
+	li	t1, 7
+	sd	t1, 72(t0)
+	li	t1, 0x8877665544332211
+	sd	t1, 80(t0)
+	sd	zero, 88(t0)
+	sd	zero, 96(t0)
+	sw	zero, 112(t0)
+	li	t1, 4
+	sw	t1, 116(t0)
 	.word	0x0000100f	/* fence.i */
 
 	lla	t0, cross_page_a
 	li	t1, 4093
 	add	t0, t0, t1
+	li	t1, 0x77665544
+	sw	t1, -5(t0)
 	sb	zero, -1(t0)
 	li	t1, 0x11
 	sb	t1, 0(t0)
@@ -230,8 +244,10 @@ _start:
 	li	t1, 0x33
 	sb	t1, 2(t0)
 	lla	t0, cross_page_b
-	li	t1, 0x44
-	sb	t1, 0(t0)
+	li	t1, 0x77665544
+	sw	t1, 0(t0)
+	li	t1, 0xbbaa9988
+	sw	t1, 4(t0)
 
 	lla	t0, root_pt
 	srli	t0, t0, 12
@@ -255,7 +271,7 @@ after_s_maee_on:
 	li	t0, MXSTATUS_MAEE
 	csrc	CSR_TH_MXSTATUS, t0
 	sfence.vma
-	li	s6, 20
+	li	s6, 50
 	lla	s7, after_s_maee_off
 	lla	t0, s_mode_maee_off
 	csrw	mepc, t0
@@ -270,7 +286,7 @@ after_s_maee_off:
 	/* U exceptions use the S handler; its completion ecall returns to M. */
 	li	t0, DELEGATED_EXCEPTIONS
 	csrw	medeleg, t0
-	li	s6, 30
+	li	s6, 60
 	lla	s7, after_u_maee_on
 	lla	t0, u_mode_maee_on
 	li	t1, USER_ALIAS_DELTA
@@ -280,8 +296,8 @@ after_s_maee_off:
 	mret
 
 after_u_maee_on:
-	li	s6, 40
-	li	t0, 16
+	li	s6, 70
+	li	t0, 31
 	bne	s3, t0, fail
 	li	t0, MXSTATUS_MAEE | MXSTATUS_MM
 	csrr	t1, CSR_TH_MXSTATUS
@@ -442,25 +458,233 @@ s_after_strong_fetch:
 	lw	a2, 0(t2)
 	li	t0, 0x33221100
 	bne	a2, t0, lower_fail
+
+	/* Repeat the atomic rules at double-word width with aq/rl set. */
+	li	s6, 17
+	li	s0, S_NORMAL_VA
+	addi	t4, s0, 64
+	ld	a2, 0(t4)
+	li	t0, 0x0102030405060708
+	bne	a2, t0, lower_fail
+	li	t6, 1
+	amoadd.d.aqrl a2, t6, (t4)
+	bne	a2, t0, lower_fail
+	ld	a2, 0(t4)
+	addi	t0, t0, 1
+	bne	a2, t0, lower_fail
+	li	s0, S_NONCACHE_VA
+	addi	t4, s0, 64
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	amoadd.d.aqrl a2, t6, (t4)
+	CHECK_TRAP
+	ld	a2, 0(t4)
+	li	t0, 0x0102030405060709
+	bne	a2, t0, lower_fail
+	addi	t4, s0, 72
+	lr.d	a2, (t4)
+	li	t0, 7
+	bne	a2, t0, lower_fail
+	li	t6, 9
+	sc.d	a3, t6, (t4)
+	bnez	a3, lower_fail
+	ld	a2, 0(t4)
+	bne	a2, t6, lower_fail
+
+	/* Every element width takes the same non-cacheable/SO decision. */
+	li	s6, 18
+	li	t1, 1
+	.word	0x000372d7	/* th.vsetvli t0, t1, e8, m1 */
+	li	t2, S_NONCACHE_VA + 80
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	li	t2, S_NONCACHE_VA + 88
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	lbu	a2, 0(t2)
+	li	t0, 0x11
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 80
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	CHECK_TRAP
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	CHECK_TRAP
+
+	li	s6, 19
+	li	t1, 1
+	.word	0x004372d7	/* th.vsetvli t0, t1, e16, m1 */
+	li	t2, S_NONCACHE_VA + 80
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	li	t2, S_NONCACHE_VA + 88
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	lhu	a2, 0(t2)
+	li	t0, 0x2211
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 80
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	CHECK_TRAP
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	CHECK_TRAP
+
+	li	s6, 20
+	li	t1, 1
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	li	t2, S_NONCACHE_VA + 80
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	li	t2, S_NONCACHE_VA + 88
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	lwu	a2, 0(t2)
+	li	t0, 0x44332211
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 80
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	CHECK_TRAP
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	CHECK_TRAP
+
+	li	s6, 21
+	li	t1, 1
+	.word	0x00c372d7	/* th.vsetvli t0, t1, e64, m1 */
+	li	t2, S_NONCACHE_VA + 80
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	li	t2, S_NONCACHE_VA + 88
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	ld	a2, 0(t2)
+	li	t0, 0x8877665544332211
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 80
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x0203f087	/* th.vle.v v1, (t2) */
+	CHECK_TRAP
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0203f0a7	/* th.vse.v v1, (t2) */
+	CHECK_TRAP
+
+	/* Strided and indexed paths use the same low-level MAEE checks. */
+	li	s6, 22
+	li	t1, 2
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	li	t3, 4
+	li	t2, S_NONCACHE_VA + 48
+	.word	0x0bc3f087	/* th.vlse.v v1, (t2), t3 */
+	li	t2, S_NONCACHE_VA + 56
+	.word	0x0bc3f0a7	/* th.vsse.v v1, (t2), t3 */
+	lwu	a2, 0(t2)
+	li	t0, 0x12345678
+	bne	a2, t0, lower_fail
+	lwu	a2, 4(t2)
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 48
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x0bc3f087	/* th.vlse.v v1, (t2), t3 */
+	CHECK_TRAP
+	li	t2, S_STRONG_VA + 56
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0bc3f0a7	/* th.vsse.v v1, (t2), t3 */
+	CHECK_TRAP
+
+	li	s6, 23
+	li	t2, S_NONCACHE_VA + 112
+	.word	0x0203f107	/* th.vle.v v2, (t2) */
+	li	t2, S_NONCACHE_VA + 48
+	.word	0x0e23f207	/* th.vlxe.v v4, (t2), v2 */
+	li	t2, S_NONCACHE_VA + 64
+	.word	0x0e23f227	/* th.vsxe.v v4, (t2), v2 */
+	lwu	a2, 0(t2)
+	li	t0, 0x12345678
+	bne	a2, t0, lower_fail
+	lwu	a2, 4(t2)
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 48
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x0e23f207	/* th.vlxe.v v4, (t2), v2 */
+	CHECK_TRAP
+	li	t2, S_STRONG_VA + 64
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x0e23f227	/* th.vsxe.v v4, (t2), v2 */
+	CHECK_TRAP
+
+	/* Two-field unit segments cover every field, not just field zero. */
+	li	s6, 24
+	li	t1, 1
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	li	t2, S_NONCACHE_VA + 80
+	.word	0x2203f207	/* th.vlseg2e.v v4, (t2) */
+	li	t2, S_NONCACHE_VA + 96
+	.word	0x2203f227	/* th.vsseg2e.v v4, (t2) */
+	lwu	a2, 0(t2)
+	li	t0, 0x44332211
+	bne	a2, t0, lower_fail
+	lwu	a2, 4(t2)
+	li	t0, 0x88776655
+	bne	a2, t0, lower_fail
+	li	t2, S_STRONG_VA + 80
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x2203f207	/* th.vlseg2e.v v4, (t2) */
+	CHECK_TRAP
+	li	t2, S_STRONG_VA + 96
+	EXPECT	0, CAUSE_STORE_ACCESS, zero
+	.word	0x2203f227	/* th.vsseg2e.v v4, (t2) */
+	CHECK_TRAP
+
+	/* Segment FOF traps in element 0 field 1, then truncates at i=1. */
+	li	s6, 25
+	li	t1, 2
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	li	t2, S_CROSS_NORMAL_VA + 4092
+	EXPECT	0, CAUSE_LOAD_ACCESS, zero
+	.word	0x2303f207	/* th.vlseg2eff.v v4, (t2) */
+	CHECK_TRAP
+	li	s6, 26
+	li	t1, 2
+	.word	0x008372d7	/* th.vsetvli t0, t1, e32, m1 */
+	li	t2, S_CROSS_NORMAL_VA + 4088
+	mv	s4, s3
+	.word	0x2303f207	/* th.vlseg2eff.v v4, (t2) */
+	CHECK_NO_TRAP
+	csrr	t0, 0xc20	/* th.vl */
+	li	t1, 1
+	bne	t0, t1, lower_fail
+	li	t2, S_NONCACHE_VA + 96
+	.word	0x2203f227	/* th.vsseg2e.v v4, (t2) */
+	lwu	a2, 0(t2)
+	li	t0, 0x77665544
+	bne	a2, t0, lower_fail
+	lwu	a2, 4(t2)
+	li	t0, 0x33221100
+	bne	a2, t0, lower_fail
 	li	s9, 1
 	ecall
 	j	lower_fail
 
-/* With MAEE clear, PTE[63:59] is reserved and produces a page fault. */
+/* With MAEE clear, PTE[63:59] is ignored in favor of the physical PMA. */
 s_mode_maee_off:
-	li	s6, 21
+	li	s6, 51
 	li	s0, S_NORMAL_VA
-	mv	t4, s0
-	EXPECT 0, CAUSE_LOAD_PAGE_FAULT, t4
-	ld	a2, 0(s0)
-	CHECK_TRAP
+	mv	s4, s3
+	ld	a2, 16(s0)
+	li	t0, 0x8877665544332211
+	bne	a2, t0, lower_fail
+	li	s0, S_NONCACHE_VA
+	ld	a2, 16(s0)
+	bne	a2, t0, lower_fail
+	li	s0, S_STRONG_VA
+	ld	a2, 16(s0)
+	bne	a2, t0, lower_fail
+	li	s0, S_NONSHARE_VA
+	ld	a2, 16(s0)
+	bne	a2, t0, lower_fail
+	CHECK_NO_TRAP
 	li	s9, 1
 	ecall
 	j	lower_fail
 
 /* Repeat the observable attribute behavior with U-to-S delegated traps. */
 u_mode_maee_on:
-	li	s6, 31
+	li	s6, 61
 	li	s0, U_NORMAL_VA
 	lwu	a2, 17(s0)
 	li	t0, 0x55443322
@@ -472,7 +696,7 @@ u_mode_maee_on:
 	lwu	a2, 17(s0)
 	bne	a2, t0, lower_fail
 
-	li	s6, 32
+	li	s6, 62
 	li	s0, U_STRONG_VA
 	ld	a2, 16(s0)
 	li	t0, 0x8877665544332211
@@ -486,7 +710,7 @@ u_mode_maee_on:
 	sw	t6, 17(s0)
 	CHECK_TRAP
 
-	li	s6, 33
+	li	s6, 63
 	li	s0, U_CROSS_NORMAL_VA
 	li	t1, 4093
 	add	t4, s0, t1
@@ -499,7 +723,7 @@ u_mode_maee_on:
 	lwu	a2, 0(t4)
 	CHECK_TRAP
 
-	li	s6, 34
+	li	s6, 64
 	li	t4, U_NORMAL_VA
 	jalr	ra, t4, 0
 	li	t0, 42
@@ -511,7 +735,7 @@ u_mode_maee_on:
 	jalr	ra, t4, 0
 	bne	a0, t0, lower_fail
 
-	li	s6, 35
+	li	s6, 65
 	li	t4, U_STRONG_VA
 	EXPECT_INSN 1, t4, u_after_strong_fetch
 	jalr	ra, t4, 0
@@ -520,7 +744,7 @@ u_after_strong_fetch:
 	CHECK_TRAP
 
 	/* Repeat the new access-fault causes through U-to-S delegation. */
-	li	s6, 36
+	li	s6, 66
 	li	s0, U_NONCACHE_VA
 	addi	t4, s0, 32
 	li	t6, 1
