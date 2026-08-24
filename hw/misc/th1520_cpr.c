@@ -11,21 +11,28 @@
  * exact distribution, calibration state machine, invalid configurations and
  * voltage/frequency coupling still require physical differential tests.
  *
+ * Leaf gate bits for currently modeled AP peripherals are exported as
+ * active-high GPIO levels.  The PWM, timer and watchdog leaves additionally
+ * drive QEMU Clock outputs at their established 125 MHz rate, so those timed
+ * engines can pause while gated.  Effects on untimed engines and bus accesses
+ * remain hardware-validation work rather than being inferred here.
+ *
  * Reset registers preserve the silicon defaults and active-low programming
- * convention.  The documented watchdog lines, PWM pair and two DesignWare
- * timer APB/core pairs drive QEMU reset outputs.  An asserted output
- * immediately resets its consumer's modeled state; this is intentionally not
- * a claim about silicon pulse width, bus behavior while reset is held,
- * retention, or the many remaining reset domains.  In particular, the
- * silicon default releases only C910 core 0, whereas the
- * current direct-boot machine deliberately starts all four harts.  That
- * boot/reset discrepancy is tracked in the hardware-validation ledger.
+ * convention.  Mainline-described resets for currently modeled AP children
+ * drive QEMU reset outputs.  An asserted output immediately resets its
+ * consumer's modeled state; this is intentionally not a claim about silicon
+ * pulse width, bus behavior while reset is held, retention, or the many
+ * remaining reset domains.  In particular, the silicon default releases only
+ * C910 core 0, whereas the current direct-boot machine deliberately starts
+ * all four harts.  That boot/reset discrepancy is tracked in the
+ * hardware-validation ledger.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
 
+#include "hw/core/qdev-clock.h"
 #include "hw/misc/th1520_cpr.h"
 #include "migration/vmstate.h"
 #include "qemu/bitops.h"
@@ -40,6 +47,7 @@
 #define TH1520_PLL_CFG1_MASK 0x7bffffff
 #define TH1520_PLL_CFG2_MASK 0x3ffff000
 #define TH1520_PLL_CFG3_MASK 0xfffff700
+#define TH1520_AP_TIMED_GATE_HZ 125000000
 
 typedef struct TH1520RegInfo {
     uint16_t offset;
@@ -119,6 +127,49 @@ static const uint32_t th1520_pll_lock_mask[TH1520_AP_PLL_COUNT] = {
     BIT(1), BIT(4), BIT(3), BIT(7), BIT(8), BIT(9), BIT(10),
 };
 
+typedef struct TH1520ClockGateInfo {
+    uint16_t offset;
+    uint32_t mask;
+} TH1520ClockGateInfo;
+
+/* Leaf gates and bit positions are from clk-th1520-ap.c. */
+static const TH1520ClockGateInfo
+th1520_ap_clock_gate_info[TH1520_AP_CLOCK_GATE_COUNT] = {
+    [TH1520_AP_CLOCK_GATE_EMMC_SDIO] = { 0x204, BIT(30) },
+    [TH1520_AP_CLOCK_GATE_GMAC1] = { 0x204, BIT(26) },
+    [TH1520_AP_CLOCK_GATE_PADCTRL1] = { 0x204, BIT(24) },
+    [TH1520_AP_CLOCK_GATE_PADCTRL0] = { 0x204, BIT(22) },
+    [TH1520_AP_CLOCK_GATE_GMAC_AXI] = { 0x204, BIT(21) },
+    [TH1520_AP_CLOCK_GATE_GPIO3] = { 0x204, BIT(20) },
+    [TH1520_AP_CLOCK_GATE_GMAC0] = { 0x204, BIT(19) },
+    [TH1520_AP_CLOCK_GATE_PWM] = { 0x204, BIT(18) },
+    [TH1520_AP_CLOCK_GATE_SPI] = { 0x204, BIT(15) },
+    [TH1520_AP_CLOCK_GATE_UART0] = { 0x204, BIT(14) },
+    [TH1520_AP_CLOCK_GATE_UART1] = { 0x204, BIT(13) },
+    [TH1520_AP_CLOCK_GATE_UART2] = { 0x204, BIT(12) },
+    [TH1520_AP_CLOCK_GATE_UART3] = { 0x204, BIT(11) },
+    [TH1520_AP_CLOCK_GATE_UART4] = { 0x204, BIT(10) },
+    [TH1520_AP_CLOCK_GATE_UART5] = { 0x204, BIT(9) },
+    [TH1520_AP_CLOCK_GATE_GPIO0] = { 0x204, BIT(8) },
+    [TH1520_AP_CLOCK_GATE_GPIO1] = { 0x204, BIT(7) },
+    [TH1520_AP_CLOCK_GATE_GPIO2] = { 0x204, BIT(6) },
+    [TH1520_AP_CLOCK_GATE_I2C0] = { 0x204, BIT(5) },
+    [TH1520_AP_CLOCK_GATE_I2C1] = { 0x204, BIT(4) },
+    [TH1520_AP_CLOCK_GATE_I2C2] = { 0x204, BIT(3) },
+    [TH1520_AP_CLOCK_GATE_I2C3] = { 0x204, BIT(2) },
+    [TH1520_AP_CLOCK_GATE_I2C4] = { 0x204, BIT(1) },
+    [TH1520_AP_CLOCK_GATE_I2C5] = { 0x204, BIT(0) },
+    [TH1520_AP_CLOCK_GATE_DMA] = { 0x208, BIT(8) },
+    [TH1520_AP_CLOCK_GATE_MBOX0] = { 0x208, BIT(7) },
+    [TH1520_AP_CLOCK_GATE_MBOX1] = { 0x208, BIT(6) },
+    [TH1520_AP_CLOCK_GATE_MBOX2] = { 0x208, BIT(5) },
+    [TH1520_AP_CLOCK_GATE_MBOX3] = { 0x208, BIT(4) },
+    [TH1520_AP_CLOCK_GATE_WDT0] = { 0x208, BIT(3) },
+    [TH1520_AP_CLOCK_GATE_WDT1] = { 0x208, BIT(2) },
+    [TH1520_AP_CLOCK_GATE_TIMER0] = { 0x208, BIT(1) },
+    [TH1520_AP_CLOCK_GATE_TIMER1] = { 0x208, BIT(0) },
+};
+
 static const TH1520RegInfo *th1520_reginfo_find(const TH1520RegInfo *info,
                                                 size_t count,
                                                 hwaddr offset)
@@ -130,6 +181,51 @@ static const TH1520RegInfo *th1520_reginfo_find(const TH1520RegInfo *info,
     }
 
     return NULL;
+}
+
+static Clock *th1520_ap_clock_timed_output(TH1520APClockState *s,
+                                           unsigned int output)
+{
+    if (output == TH1520_AP_CLOCK_GATE_PWM) {
+        return s->pwm_clock;
+    }
+    if (output >= TH1520_AP_CLOCK_GATE_WDT0 &&
+        output <= TH1520_AP_CLOCK_GATE_WDT1) {
+        return s->wdt_clock[output - TH1520_AP_CLOCK_GATE_WDT0];
+    }
+    if (output >= TH1520_AP_CLOCK_GATE_TIMER0 &&
+        output <= TH1520_AP_CLOCK_GATE_TIMER1) {
+        return s->timer_clock[output - TH1520_AP_CLOCK_GATE_TIMER0];
+    }
+    return NULL;
+}
+
+static void th1520_ap_clock_update_gate(TH1520APClockState *s,
+                                        unsigned int output, bool force,
+                                        bool update_clock)
+{
+    const TH1520ClockGateInfo *info = &th1520_ap_clock_gate_info[output];
+    bool enabled = s->regs[info->offset / 4] & info->mask;
+    Clock *clock = th1520_ap_clock_timed_output(s, output);
+
+    if (force || s->clock_enabled[output] != enabled) {
+        s->clock_enabled[output] = enabled;
+        qemu_set_irq(s->peripheral_clock_enable[output], enabled);
+    }
+    if (clock && update_clock) {
+        clock_update_hz(clock, enabled ? TH1520_AP_TIMED_GATE_HZ : 0);
+    }
+}
+
+static void th1520_ap_clock_update_gates(TH1520APClockState *s,
+                                         hwaddr offset, bool force,
+                                         bool update_clocks)
+{
+    for (unsigned int i = 0; i < TH1520_AP_CLOCK_GATE_COUNT; i++) {
+        if (force || th1520_ap_clock_gate_info[i].offset == offset) {
+            th1520_ap_clock_update_gate(s, i, force, update_clocks);
+        }
+    }
 }
 
 static void th1520_ap_clock_schedule_next(TH1520APClockState *s)
@@ -234,6 +330,9 @@ static void th1520_ap_clock_write(void *opaque, hwaddr offset,
     }
 
     s->regs[offset / 4] = next;
+    if (old != next) {
+        th1520_ap_clock_update_gates(s, offset, false, true);
+    }
     if (old == next || offset > 0x064) {
         return;
     }
@@ -288,6 +387,7 @@ static void th1520_ap_clock_reset(DeviceState *dev)
             th1520_ap_clock_restart_pll(s, pll);
         }
     }
+    th1520_ap_clock_update_gates(s, 0, true, true);
 }
 
 static int th1520_ap_clock_pre_save(void *opaque)
@@ -315,6 +415,8 @@ static int th1520_ap_clock_post_load(void *opaque, int version_id)
     }
 
     th1520_ap_clock_schedule_next(s);
+    /* Raw levels and output periods are derived entirely from the registers. */
+    th1520_ap_clock_update_gates(s, 0, true, true);
     return 0;
 }
 
@@ -344,6 +446,19 @@ static void th1520_ap_clock_init(Object *obj)
                           TYPE_TH1520_AP_CLOCK,
                           TH1520_AP_CLOCK_MMIO_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    qdev_init_gpio_out_named(DEVICE(s), s->peripheral_clock_enable,
+                             "peripheral-clock-enable",
+                             TH1520_AP_CLOCK_GATE_COUNT);
+    s->pwm_clock = qdev_init_clock_out(DEVICE(s),
+                                       TH1520_AP_CLOCK_PWM_OUTPUT);
+    s->timer_clock[0] = qdev_init_clock_out(
+        DEVICE(s), TH1520_AP_CLOCK_TIMER0_OUTPUT);
+    s->timer_clock[1] = qdev_init_clock_out(
+        DEVICE(s), TH1520_AP_CLOCK_TIMER1_OUTPUT);
+    s->wdt_clock[0] = qdev_init_clock_out(
+        DEVICE(s), TH1520_AP_CLOCK_WDT0_OUTPUT);
+    s->wdt_clock[1] = qdev_init_clock_out(
+        DEVICE(s), TH1520_AP_CLOCK_WDT1_OUTPUT);
 }
 
 static void th1520_ap_clock_class_init(ObjectClass *klass, const void *data)

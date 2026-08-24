@@ -7,6 +7,7 @@
 #ifndef HW_MISC_TH1520_CPR_H
 #define HW_MISC_TH1520_CPR_H
 
+#include "hw/core/clock.h"
 #include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 #include "qemu/timer.h"
@@ -23,6 +24,55 @@ OBJECT_DECLARE_SIMPLE_TYPE(TH1520APResetState, TH1520_AP_RESET)
 #define TH1520_AP_CLOCK_REGS (TH1520_AP_CLOCK_MMIO_SIZE / sizeof(uint32_t))
 #define TH1520_AP_RESET_REGS (TH1520_AP_RESET_MMIO_SIZE / sizeof(uint32_t))
 #define TH1520_AP_PLL_COUNT 7
+
+#define TH1520_AP_CLOCK_PWM_OUTPUT "pwm"
+#define TH1520_AP_CLOCK_TIMER0_OUTPUT "timer0"
+#define TH1520_AP_CLOCK_TIMER1_OUTPUT "timer1"
+#define TH1520_AP_CLOCK_WDT0_OUTPUT "wdt0"
+#define TH1520_AP_CLOCK_WDT1_OUTPUT "wdt1"
+
+/*
+ * Active-high leaf-clock enables backed by the mainline TH1520 AP clock
+ * driver.  Only gates whose consumers currently exist in this machine are
+ * exported; shared parent gates and clocks for absent devices remain
+ * software-visible register state.
+ */
+enum {
+    TH1520_AP_CLOCK_GATE_EMMC_SDIO,
+    TH1520_AP_CLOCK_GATE_GMAC1,
+    TH1520_AP_CLOCK_GATE_PADCTRL1,
+    TH1520_AP_CLOCK_GATE_PADCTRL0,
+    TH1520_AP_CLOCK_GATE_GMAC_AXI,
+    TH1520_AP_CLOCK_GATE_GPIO3,
+    TH1520_AP_CLOCK_GATE_GMAC0,
+    TH1520_AP_CLOCK_GATE_PWM,
+    TH1520_AP_CLOCK_GATE_SPI,
+    TH1520_AP_CLOCK_GATE_UART0,
+    TH1520_AP_CLOCK_GATE_UART1,
+    TH1520_AP_CLOCK_GATE_UART2,
+    TH1520_AP_CLOCK_GATE_UART3,
+    TH1520_AP_CLOCK_GATE_UART4,
+    TH1520_AP_CLOCK_GATE_UART5,
+    TH1520_AP_CLOCK_GATE_GPIO0,
+    TH1520_AP_CLOCK_GATE_GPIO1,
+    TH1520_AP_CLOCK_GATE_GPIO2,
+    TH1520_AP_CLOCK_GATE_I2C0,
+    TH1520_AP_CLOCK_GATE_I2C1,
+    TH1520_AP_CLOCK_GATE_I2C2,
+    TH1520_AP_CLOCK_GATE_I2C3,
+    TH1520_AP_CLOCK_GATE_I2C4,
+    TH1520_AP_CLOCK_GATE_I2C5,
+    TH1520_AP_CLOCK_GATE_DMA,
+    TH1520_AP_CLOCK_GATE_MBOX0,
+    TH1520_AP_CLOCK_GATE_MBOX1,
+    TH1520_AP_CLOCK_GATE_MBOX2,
+    TH1520_AP_CLOCK_GATE_MBOX3,
+    TH1520_AP_CLOCK_GATE_WDT0,
+    TH1520_AP_CLOCK_GATE_WDT1,
+    TH1520_AP_CLOCK_GATE_TIMER0,
+    TH1520_AP_CLOCK_GATE_TIMER1,
+    TH1520_AP_CLOCK_GATE_COUNT,
+};
 
 /*
  * Software-visible reset outputs backed by exact Linux reset IDs.  An output
@@ -66,10 +116,15 @@ struct TH1520APClockState {
 
     MemoryRegion iomem;
     QEMUTimer pll_lock_timer;
+    qemu_irq peripheral_clock_enable[TH1520_AP_CLOCK_GATE_COUNT];
+    Clock *pwm_clock;
+    Clock *timer_clock[2];
+    Clock *wdt_clock[2];
     uint32_t regs[TH1520_AP_CLOCK_REGS];
     uint32_t pll_pending;
     int64_t pll_deadline[TH1520_AP_PLL_COUNT];
     int64_t pll_remaining[TH1520_AP_PLL_COUNT];
+    bool clock_enabled[TH1520_AP_CLOCK_GATE_COUNT];
 };
 
 struct TH1520APResetState {

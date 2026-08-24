@@ -31,15 +31,29 @@ enum {
     TH1520_MISCSYS_STORAGE_RESET_COUNT,
 };
 
+enum {
+    TH1520_MISCSYS_CLOCK_BUS,
+    TH1520_MISCSYS_CLOCK_USB0,
+    TH1520_MISCSYS_CLOCK_USB1,
+    TH1520_MISCSYS_CLOCK_USB2,
+    TH1520_MISCSYS_CLOCK_USB3,
+    TH1520_MISCSYS_CLOCK_EMMC,
+    TH1520_MISCSYS_CLOCK_SDIO0,
+    TH1520_MISCSYS_CLOCK_SDIO1,
+    TH1520_MISCSYS_CLOCK_COUNT,
+};
+
 struct TH1520MiscSysState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
     qemu_irq usb_reset[TH1520_MISCSYS_USB_RESET_COUNT];
     qemu_irq storage_reset[TH1520_MISCSYS_STORAGE_RESET_COUNT];
+    qemu_irq clock_enable[TH1520_MISCSYS_CLOCK_COUNT];
     uint32_t regs[TH1520_MISCSYS_REGS];
     bool usb_reset_asserted[TH1520_MISCSYS_USB_RESET_COUNT];
     bool storage_reset_asserted[TH1520_MISCSYS_STORAGE_RESET_COUNT];
+    bool clock_enabled[TH1520_MISCSYS_CLOCK_COUNT];
 };
 
 #endif /* HW_MISC_TH1520_MISCSYS_H */

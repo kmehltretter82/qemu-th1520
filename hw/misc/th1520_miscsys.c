@@ -2,10 +2,12 @@
  * T-Head TH1520 miscellaneous subsystem clock/reset registers
  *
  * This implements the public REE register aperture used by the eMMC, SDIO
- * and USB clock/reset drivers.  Clock bits are software-visible state only;
- * they do not yet stop child devices or alter virtual transfer timing.
- * USB reset bits are exported independently so that their physical effects
- * can be refined after board measurements without changing this ABI.
+ * and USB clock/reset drivers.  The eight leaf-clock bits are exported as
+ * active-high GPIO levels and reconstructed after migration.  Their storage
+ * and USB consumers are not yet connected, so gate writes do not alter
+ * virtual transfers.  USB reset bits are exported independently so that
+ * their physical effects can be refined after board measurements without
+ * changing this ABI.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -32,6 +34,21 @@ static const struct {
     [TH1520_MISCSYS_STORAGE_EMMC] = { 0x000, 0x3 },
     [TH1520_MISCSYS_STORAGE_SDIO0] = { 0x00c, 0x1 },
     [TH1520_MISCSYS_STORAGE_SDIO1] = { 0x010, 0x1 },
+};
+
+/* Active-high gate bits from the public miscellaneous-system registers. */
+static const struct {
+    uint16_t offset;
+    uint8_t mask;
+} th1520_miscsys_clock_info[TH1520_MISCSYS_CLOCK_COUNT] = {
+    [TH1520_MISCSYS_CLOCK_BUS] = { 0x100, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_USB0] = { 0x104, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_USB1] = { 0x104, BIT(1) },
+    [TH1520_MISCSYS_CLOCK_USB2] = { 0x104, BIT(2) },
+    [TH1520_MISCSYS_CLOCK_USB3] = { 0x104, BIT(3) },
+    [TH1520_MISCSYS_CLOCK_EMMC] = { 0x108, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_SDIO0] = { 0x10c, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_SDIO1] = { 0x110, BIT(0) },
 };
 
 typedef struct TH1520MiscSysRegInfo {
@@ -109,6 +126,29 @@ static void th1520_miscsys_update_storage_resets(TH1520MiscSysState *s,
     }
 }
 
+static void th1520_miscsys_update_clock(TH1520MiscSysState *s,
+                                        unsigned int output, bool force)
+{
+    uint16_t offset = th1520_miscsys_clock_info[output].offset;
+    uint8_t mask = th1520_miscsys_clock_info[output].mask;
+    bool enabled = s->regs[offset / 4] & mask;
+
+    if (force || s->clock_enabled[output] != enabled) {
+        s->clock_enabled[output] = enabled;
+        qemu_set_irq(s->clock_enable[output], enabled);
+    }
+}
+
+static void th1520_miscsys_update_clocks(TH1520MiscSysState *s,
+                                         hwaddr offset, bool force)
+{
+    for (unsigned int i = 0; i < TH1520_MISCSYS_CLOCK_COUNT; i++) {
+        if (force || th1520_miscsys_clock_info[i].offset == offset) {
+            th1520_miscsys_update_clock(s, i, force);
+        }
+    }
+}
+
 static uint64_t th1520_miscsys_read(void *opaque, hwaddr offset,
                                     unsigned int size)
 {
@@ -147,6 +187,7 @@ static void th1520_miscsys_write(void *opaque, hwaddr offset,
     }
     if (old != s->regs[offset / 4]) {
         th1520_miscsys_update_storage_resets(s, offset, false);
+        th1520_miscsys_update_clocks(s, offset, false);
     }
 }
 
@@ -178,6 +219,7 @@ static void th1520_miscsys_reset(DeviceState *dev)
     }
     th1520_miscsys_update_usb_resets(s, true);
     th1520_miscsys_update_storage_resets(s, 0, true);
+    th1520_miscsys_update_clocks(s, 0, true);
 }
 
 static int th1520_miscsys_post_load(void *opaque, int version_id)
@@ -186,6 +228,7 @@ static int th1520_miscsys_post_load(void *opaque, int version_id)
 
     th1520_miscsys_update_usb_resets(s, true);
     th1520_miscsys_update_storage_resets(s, 0, true);
+    th1520_miscsys_update_clocks(s, 0, true);
     return 0;
 }
 
@@ -213,6 +256,8 @@ static void th1520_miscsys_init(Object *obj)
                              TH1520_MISCSYS_USB_RESET_COUNT);
     qdev_init_gpio_out_named(DEVICE(s), s->storage_reset, "storage-reset",
                              TH1520_MISCSYS_STORAGE_RESET_COUNT);
+    qdev_init_gpio_out_named(DEVICE(s), s->clock_enable, "clock-enable",
+                             TH1520_MISCSYS_CLOCK_COUNT);
 }
 
 static void th1520_miscsys_class_init(ObjectClass *klass, const void *data)
