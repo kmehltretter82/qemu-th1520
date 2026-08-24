@@ -434,16 +434,40 @@ typedef struct TH1520ResetOutputInfo {
 } TH1520ResetOutputInfo;
 
 /*
- * Pairs are from reset-th1520.c: one APB and one core/counter reset per
- * modeled block.  Treat either active-low member as a whole-device reset
- * until hardware establishes a finer-grained distinction.
+ * Reset membership comes from reset-th1520.c.  Treat any active-low member
+ * represented by a QEMU device as a whole-device reset until hardware
+ * establishes the individual APB/core/AXI effects (ledger item RST-001).
  */
-static const TH1520ResetOutputInfo th1520_ap_reset_output_info[] = {
+static const TH1520ResetOutputInfo
+th1520_ap_reset_output_info[TH1520_AP_RESET_OUTPUT_COUNT] = {
     [TH1520_AP_RESET_WDT0] = { 0x034, 0x1 },
     [TH1520_AP_RESET_WDT1] = { 0x038, 0x1 },
     [TH1520_AP_RESET_PWM] = { 0x0c0, 0x3 },
     [TH1520_AP_RESET_TIMER0_3] = { 0x03c, 0x3 },
     [TH1520_AP_RESET_TIMER4_7] = { 0x040, 0x3 },
+    [TH1520_AP_RESET_UART0] = { 0x070, 0x3 },
+    [TH1520_AP_RESET_UART1] = { 0x074, 0x3 },
+    [TH1520_AP_RESET_UART2] = { 0x078, 0x3 },
+    [TH1520_AP_RESET_UART3] = { 0x07c, 0x3 },
+    [TH1520_AP_RESET_UART4] = { 0x080, 0x3 },
+    [TH1520_AP_RESET_UART5] = { 0x084, 0x3 },
+    [TH1520_AP_RESET_I2C0] = { 0x098, 0x3 },
+    [TH1520_AP_RESET_I2C1] = { 0x09c, 0x3 },
+    [TH1520_AP_RESET_I2C2] = { 0x0a0, 0x3 },
+    [TH1520_AP_RESET_I2C3] = { 0x0a4, 0x3 },
+    [TH1520_AP_RESET_I2C4] = { 0x0a8, 0x3 },
+    [TH1520_AP_RESET_I2C5] = { 0x0ac, 0x3 },
+    [TH1520_AP_RESET_SPI0] = { 0x094, 0x3 },
+    [TH1520_AP_RESET_GPIO0] = { 0x0b0, 0x3 },
+    [TH1520_AP_RESET_GPIO1] = { 0x0b4, 0x3 },
+    [TH1520_AP_RESET_GPIO2] = { 0x0b8, 0x3 },
+    [TH1520_AP_RESET_GPIO3] = { 0x1a8, 0x3 },
+    [TH1520_AP_RESET_PADCTRL0] = { 0x0c4, 0x1 },
+    [TH1520_AP_RESET_PADCTRL1] = { 0x20c, 0x1 },
+    [TH1520_AP_RESET_DMAC0] = { 0x14c, 0x3 },
+    [TH1520_AP_RESET_GMAC0] = { 0x068, 0xf },
+    [TH1520_AP_RESET_GMAC1] = { 0x204, 0xf },
+    [TH1520_AP_RESET_GMAC_SHARED] = { 0x208, 0x3 },
 };
 
 static void th1520_ap_reset_update_output(TH1520APResetState *s,

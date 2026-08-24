@@ -20,6 +20,20 @@
 
 #define TH1520_MISCSYS_USB_SWRST 0x014
 
+/*
+ * Linux defines these active-low storage reset members, but not their split
+ * core/bus effects or held-reset MMIO behavior.  The SoC therefore collapses
+ * each entry to a whole-controller cold reset pending RST-001 validation.
+ */
+static const struct {
+    uint16_t offset;
+    uint8_t mask;
+} th1520_miscsys_storage_reset_info[TH1520_MISCSYS_STORAGE_RESET_COUNT] = {
+    [TH1520_MISCSYS_STORAGE_EMMC] = { 0x000, 0x3 },
+    [TH1520_MISCSYS_STORAGE_SDIO0] = { 0x00c, 0x1 },
+    [TH1520_MISCSYS_STORAGE_SDIO1] = { 0x010, 0x1 },
+};
+
 typedef struct TH1520MiscSysRegInfo {
     uint16_t offset;
     uint32_t reset;
@@ -71,6 +85,30 @@ static void th1520_miscsys_update_usb_resets(TH1520MiscSysState *s,
     }
 }
 
+static void th1520_miscsys_update_storage_reset(TH1520MiscSysState *s,
+                                                 unsigned int output,
+                                                 bool force)
+{
+    uint16_t offset = th1520_miscsys_storage_reset_info[output].offset;
+    uint8_t mask = th1520_miscsys_storage_reset_info[output].mask;
+    bool asserted = (s->regs[offset / 4] & mask) != mask;
+
+    if (force || s->storage_reset_asserted[output] != asserted) {
+        s->storage_reset_asserted[output] = asserted;
+        qemu_set_irq(s->storage_reset[output], asserted);
+    }
+}
+
+static void th1520_miscsys_update_storage_resets(TH1520MiscSysState *s,
+                                                  hwaddr offset, bool force)
+{
+    for (unsigned int i = 0; i < TH1520_MISCSYS_STORAGE_RESET_COUNT; i++) {
+        if (force || th1520_miscsys_storage_reset_info[i].offset == offset) {
+            th1520_miscsys_update_storage_reset(s, i, force);
+        }
+    }
+}
+
 static uint64_t th1520_miscsys_read(void *opaque, hwaddr offset,
                                     unsigned int size)
 {
@@ -107,6 +145,9 @@ static void th1520_miscsys_write(void *opaque, hwaddr offset,
         old != s->regs[offset / 4]) {
         th1520_miscsys_update_usb_resets(s, false);
     }
+    if (old != s->regs[offset / 4]) {
+        th1520_miscsys_update_storage_resets(s, offset, false);
+    }
 }
 
 static const MemoryRegionOps th1520_miscsys_ops = {
@@ -136,6 +177,7 @@ static void th1520_miscsys_reset(DeviceState *dev)
         s->regs[info->offset / 4] = info->reset;
     }
     th1520_miscsys_update_usb_resets(s, true);
+    th1520_miscsys_update_storage_resets(s, 0, true);
 }
 
 static int th1520_miscsys_post_load(void *opaque, int version_id)
@@ -143,6 +185,7 @@ static int th1520_miscsys_post_load(void *opaque, int version_id)
     TH1520MiscSysState *s = opaque;
 
     th1520_miscsys_update_usb_resets(s, true);
+    th1520_miscsys_update_storage_resets(s, 0, true);
     return 0;
 }
 
@@ -168,6 +211,8 @@ static void th1520_miscsys_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
     qdev_init_gpio_out_named(DEVICE(s), s->usb_reset, "usb-reset",
                              TH1520_MISCSYS_USB_RESET_COUNT);
+    qdev_init_gpio_out_named(DEVICE(s), s->storage_reset, "storage-reset",
+                             TH1520_MISCSYS_STORAGE_RESET_COUNT);
 }
 
 static void th1520_miscsys_class_init(ObjectClass *klass, const void *data)

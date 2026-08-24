@@ -25,9 +25,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(TH1520APResetState, TH1520_AP_RESET)
 #define TH1520_AP_PLL_COUNT 7
 
 /*
- * Software-visible reset outputs currently backed by exact Linux reset IDs.
- * Each output is asserted when either member of its documented APB/core pair
- * is active low.  Other TH1520 reset words remain register-only.
+ * Software-visible reset outputs backed by exact Linux reset IDs.  An output
+ * is asserted when any reset member represented by that QEMU device is active
+ * low.  Other reset words remain register-only.
  */
 enum {
     TH1520_AP_RESET_PWM,
@@ -35,6 +35,29 @@ enum {
     TH1520_AP_RESET_TIMER4_7,
     TH1520_AP_RESET_WDT0,
     TH1520_AP_RESET_WDT1,
+    TH1520_AP_RESET_UART0,
+    TH1520_AP_RESET_UART1,
+    TH1520_AP_RESET_UART2,
+    TH1520_AP_RESET_UART3,
+    TH1520_AP_RESET_UART4,
+    TH1520_AP_RESET_UART5,
+    TH1520_AP_RESET_I2C0,
+    TH1520_AP_RESET_I2C1,
+    TH1520_AP_RESET_I2C2,
+    TH1520_AP_RESET_I2C3,
+    TH1520_AP_RESET_I2C4,
+    TH1520_AP_RESET_I2C5,
+    TH1520_AP_RESET_SPI0,
+    TH1520_AP_RESET_GPIO0,
+    TH1520_AP_RESET_GPIO1,
+    TH1520_AP_RESET_GPIO2,
+    TH1520_AP_RESET_GPIO3,
+    TH1520_AP_RESET_PADCTRL0,
+    TH1520_AP_RESET_PADCTRL1,
+    TH1520_AP_RESET_DMAC0,
+    TH1520_AP_RESET_GMAC0,
+    TH1520_AP_RESET_GMAC1,
+    TH1520_AP_RESET_GMAC_SHARED,
     TH1520_AP_RESET_OUTPUT_COUNT,
 };
 

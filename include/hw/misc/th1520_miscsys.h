@@ -24,13 +24,22 @@ enum {
     TH1520_MISCSYS_USB_RESET_COUNT,
 };
 
+enum {
+    TH1520_MISCSYS_STORAGE_EMMC,
+    TH1520_MISCSYS_STORAGE_SDIO0,
+    TH1520_MISCSYS_STORAGE_SDIO1,
+    TH1520_MISCSYS_STORAGE_RESET_COUNT,
+};
+
 struct TH1520MiscSysState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
     qemu_irq usb_reset[TH1520_MISCSYS_USB_RESET_COUNT];
+    qemu_irq storage_reset[TH1520_MISCSYS_STORAGE_RESET_COUNT];
     uint32_t regs[TH1520_MISCSYS_REGS];
     bool usb_reset_asserted[TH1520_MISCSYS_USB_RESET_COUNT];
+    bool storage_reset_asserted[TH1520_MISCSYS_STORAGE_RESET_COUNT];
 };
 
 #endif /* HW_MISC_TH1520_MISCSYS_H */
