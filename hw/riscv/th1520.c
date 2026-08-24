@@ -30,6 +30,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
+#include "hw/misc/led.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
 #include "hw/nvram/eeprom_at24c.h"
@@ -1811,6 +1812,28 @@ static void beaglev_ahead_attach_eeprom(BeagleVAheadState *s)
                           BEAGLEV_AHEAD_EEPROM_SIZE);
 }
 
+static void beaglev_ahead_attach_leds(BeagleVAheadState *s)
+{
+    static const char *const user_led_names[] = {
+        "USR0", "USR1", "USR2", "USR3", "USR4",
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(user_led_names); i++) {
+        LEDState *led = led_create_simple(OBJECT(s),
+                                          GPIO_POLARITY_ACTIVE_HIGH,
+                                          LED_COLOR_BLUE,
+                                          user_led_names[i]);
+
+        qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[4]), "gpio-out",
+                                    8 + i,
+                                    qdev_get_gpio_in(DEVICE(led), 0));
+    }
+
+    /* LED6 is the always-on green power indicator in the board schematic. */
+    led_set_state(led_create_simple(OBJECT(s), GPIO_POLARITY_ACTIVE_HIGH,
+                                    LED_COLOR_GREEN, "POWER"), true);
+}
+
 static void beaglev_ahead_machine_done(Notifier *notifier, void *data)
 {
     BeagleVAheadState *s = container_of(notifier, BeagleVAheadState,
@@ -1882,6 +1905,7 @@ static void beaglev_ahead_machine_init(MachineState *ms)
 
     beaglev_ahead_attach_storage(s);
     beaglev_ahead_attach_eeprom(s);
+    beaglev_ahead_attach_leds(s);
 
     if (ms->dtb) {
         ms->fdt = load_device_tree(ms->dtb, &fdt_size);

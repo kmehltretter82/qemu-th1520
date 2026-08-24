@@ -24,6 +24,7 @@ config BEAGLEV_AHEAD
     select DW_AXI_DMAC
     select DWCMSHC
     select AT24C
+    select LED
     select TH1520_GMAC
     select TH1520_CPR
     select TH1520_MBOX
