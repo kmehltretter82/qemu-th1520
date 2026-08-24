@@ -1799,6 +1799,7 @@ F: hw/intc/thead_c900_plic.c
 F: hw/misc/th1520_cpr.c
 F: hw/net/th1520_gmac.c
 F: hw/riscv/th1520.c
+F: hw/rtc/xgene_rtc.c
 F: hw/ssi/dw_apb_ssi.c
 F: hw/timer/dw_apb_timer.c
 F: hw/timer/th1520_pwm.c
@@ -1811,6 +1812,7 @@ F: include/hw/intc/thead_c900_plic.h
 F: include/hw/misc/th1520_cpr.h
 F: include/hw/net/th1520_gmac.h
 F: include/hw/riscv/th1520.h
+F: include/hw/rtc/xgene_rtc.h
 F: include/hw/ssi/dw_apb_ssi.h
 F: include/hw/timer/dw_apb_timer.h
 F: include/hw/timer/th1520_pwm.h
