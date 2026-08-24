@@ -55,6 +55,19 @@ test-thead-c910-pmu: test-thead-c910-pmu.o
 run-test-thead-c910-pmu: test-thead-c910-pmu
 	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
 
+THEAD_C910_MM_MARCH = \
+	-march=rv64imafdc_zfh_xtheadfmemidx_xtheadmemidx_xtheadmempair
+CLEANFILES += test-thead-c910-mxstatus-mm
+
+test-thead-c910-mxstatus-mm: test-thead-c910-mxstatus-mm.S $(LINK_SCRIPT)
+	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
+	$(LD) $(LDFLAGS) $@.o -o $@
+
+EXTRA_RUNS += run-test-thead-c910-mxstatus-mm
+run-test-thead-c910-mxstatus-mm: test-thead-c910-mxstatus-mm
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 EXTRA_RUNS += run-test-thead-c900-clint
 test-thead-c900-clint: test-thead-c900-clint.o
 run-test-thead-c900-clint: test-thead-c900-clint
