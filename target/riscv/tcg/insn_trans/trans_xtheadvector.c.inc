@@ -1043,25 +1043,21 @@ static bool opivv_widen_check_th(DisasContext *s, arg_rmrr *a)
  *    delete VTA and VMA.
  */
 static bool do_opivv_widen_th(DisasContext *s, arg_rmrr *a,
-                              gen_helper_gvec_4_ptr *fn,
-                              bool (*checkfn)(DisasContext *, arg_rmrr *))
+                              gen_helper_gvec_4_ptr *fn)
 {
-    if (checkfn(s, a)) {
-        uint32_t data = 0;
+    uint32_t data = 0;
 
-        data = FIELD_DP32(data, VDATA_TH, MLEN, s->mlen);
-        data = FIELD_DP32(data, VDATA_TH, VM, a->vm);
-        data = FIELD_DP32(data, VDATA_TH, LMUL, s->lmul);
-        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),
-                           vreg_ofs(s, a->rs1),
-                           vreg_ofs(s, a->rs2),
-                           tcg_env, s->cfg_ptr->vlenb,
-                           s->cfg_ptr->vlenb,
-                           data, fn);
-        finalize_rvv_inst(s);
-        return true;
-    }
-    return false;
+    data = FIELD_DP32(data, VDATA_TH, MLEN, s->mlen);
+    data = FIELD_DP32(data, VDATA_TH, VM, a->vm);
+    data = FIELD_DP32(data, VDATA_TH, LMUL, s->lmul);
+    tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),
+                       vreg_ofs(s, a->rs1),
+                       vreg_ofs(s, a->rs2),
+                       tcg_env, s->cfg_ptr->vlenb,
+                       s->cfg_ptr->vlenb,
+                       data, fn);
+    finalize_rvv_inst(s);
+    return true;
 }
 
 #define GEN_OPIVV_WIDEN_TRANS_TH(NAME, CHECK)                \
@@ -1072,7 +1068,10 @@ static bool trans_##NAME(DisasContext *s, arg_rmrr *a)       \
         gen_helper_##NAME##_h,                               \
         gen_helper_##NAME##_w                                \
     };                                                       \
-    return do_opivv_widen_th(s, a, fns[s->sew], CHECK);      \
+    if (!CHECK(s, a)) {                                      \
+        return false;                                        \
+    }                                                        \
+    return do_opivv_widen_th(s, a, fns[s->sew]);             \
 }
 
 GEN_OPIVV_WIDEN_TRANS_TH(th_vwaddu_vv, opivv_widen_check_th)
@@ -1130,21 +1129,18 @@ static bool opiwv_widen_check_th(DisasContext *s, arg_rmrr *a)
 static bool do_opiwv_widen_th(DisasContext *s, arg_rmrr *a,
                               gen_helper_gvec_4_ptr *fn)
 {
-    if (opiwv_widen_check_th(s, a)) {
-        uint32_t data = 0;
+    uint32_t data = 0;
 
-        data = FIELD_DP32(data, VDATA_TH, MLEN, s->mlen);
-        data = FIELD_DP32(data, VDATA_TH, VM, a->vm);
-        data = FIELD_DP32(data, VDATA_TH, LMUL, s->lmul);
-        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),
-                           vreg_ofs(s, a->rs1),
-                           vreg_ofs(s, a->rs2),
-                           tcg_env, s->cfg_ptr->vlenb,
-                           s->cfg_ptr->vlenb, data, fn);
-        finalize_rvv_inst(s);
-        return true;
-    }
-    return false;
+    data = FIELD_DP32(data, VDATA_TH, MLEN, s->mlen);
+    data = FIELD_DP32(data, VDATA_TH, VM, a->vm);
+    data = FIELD_DP32(data, VDATA_TH, LMUL, s->lmul);
+    tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),
+                       vreg_ofs(s, a->rs1),
+                       vreg_ofs(s, a->rs2),
+                       tcg_env, s->cfg_ptr->vlenb,
+                       s->cfg_ptr->vlenb, data, fn);
+    finalize_rvv_inst(s);
+    return true;
 }
 
 #define GEN_OPIWV_WIDEN_TRANS_TH(NAME)                       \
@@ -1155,6 +1151,9 @@ static bool trans_##NAME(DisasContext *s, arg_rmrr *a)       \
         gen_helper_##NAME##_h,                               \
         gen_helper_##NAME##_w                                \
     };                                                       \
+    if (!opiwv_widen_check_th(s, a)) {                        \
+        return false;                                         \
+    }                                                         \
     return do_opiwv_widen_th(s, a, fns[s->sew]);             \
 }
 
@@ -1178,10 +1177,7 @@ static bool opiwx_widen_check_th(DisasContext *s, arg_rmrr *a)
 static bool do_opiwx_widen_th(DisasContext *s, arg_rmrr *a,
                               gen_helper_opivx_th *fn)
 {
-    if (opiwx_widen_check_th(s, a)) {
-        return opivx_trans_th(a->rd, a->rs1, a->rs2, a->vm, fn, s);
-    }
-    return false;
+    return opivx_trans_th(a->rd, a->rs1, a->rs2, a->vm, fn, s);
 }
 
 #define GEN_OPIWX_WIDEN_TRANS_TH(NAME)                       \
@@ -1192,6 +1188,9 @@ static bool trans_##NAME(DisasContext *s, arg_rmrr *a)       \
         gen_helper_##NAME##_h,                               \
         gen_helper_##NAME##_w                                \
     };                                                       \
+    if (!opiwx_widen_check_th(s, a)) {                        \
+        return false;                                         \
+    }                                                         \
     return do_opiwx_widen_th(s, a, fns[s->sew]);             \
 }
 
@@ -2473,6 +2472,7 @@ static bool reduction_check_th(DisasContext *s, arg_rmrr *a)
 {
     return require_xtheadvector(s) &&
            vext_check_isa_ill(s) &&
+           s->vstart_eq_zero &&
            th_check_reg(s, a->rs2, false);
 }
 
@@ -2486,8 +2486,13 @@ GEN_OPIVV_TRANS_TH(th_vredor_vs, reduction_check_th)
 GEN_OPIVV_TRANS_TH(th_vredxor_vs, reduction_check_th)
 
 /* Vector Widening Integer Reduction Instructions */
-GEN_OPIVV_WIDEN_TRANS_TH(th_vwredsum_vs, reduction_check_th)
-GEN_OPIVV_WIDEN_TRANS_TH(th_vwredsumu_vs, reduction_check_th)
+static bool reduction_widen_check_th(DisasContext *s, arg_rmrr *a)
+{
+    return reduction_check_th(s, a) && s->sew < MO_64;
+}
+
+GEN_OPIVV_WIDEN_TRANS_TH(th_vwredsum_vs, reduction_widen_check_th)
+GEN_OPIVV_WIDEN_TRANS_TH(th_vwredsumu_vs, reduction_widen_check_th)
 
 /* Vector Single-Width Floating-Point Reduction Instructions */
 static bool freduction_check_th(DisasContext *s, arg_rmrr *a)
@@ -2505,8 +2510,7 @@ GEN_OPFVV_TRANS_TH_BF(th_vfredmin_vs, freduction_check_th)
 static bool freduction_widen_check_th(DisasContext *s, arg_rmrr *a)
 {
     return freduction_check_th(s, a) &&
-           s->sew < MO_64 &&
-           s->lmul < 3;
+           s->sew < MO_64;
 }
 
 GEN_OPFVV_WIDEN_TRANS_TH(th_vfwredsum_vs, freduction_widen_check_th)

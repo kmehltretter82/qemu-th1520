@@ -3702,6 +3702,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,          \
     uint32_t tot = env_archcpu(env)->cfg.vlenb;           \
     TD s1 =  *((TD *)vs1 + HD(0));                        \
                                                           \
+    VSTART_CHECK_EARLY_EXIT(env);                         \
+                                                          \
     for (i = env->vstart; i < vl; i++) {                  \
         TS2 s2 = *((TS2 *)vs2 + HS2(i));                  \
         if (!vm && !th_elem_mask(v0, mlen, i)) {          \
@@ -3787,6 +3789,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1,           \
     FloatExceptionFlags pre_fflag =                        \
         get_float_exception_flags(&env->fp_status);        \
     TD s1 =  *((TD *)vs1 + HD(0));                         \
+                                                           \
+    VSTART_CHECK_EARLY_EXIT(env);                          \
                                                            \
     for (i = env->vstart; i < vl; i++) {                   \
         TS2 s2 = *((TS2 *)vs2 + HS2(i));                   \
