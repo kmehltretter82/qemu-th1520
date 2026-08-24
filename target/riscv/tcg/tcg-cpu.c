@@ -298,7 +298,7 @@ const TCGCPUOps riscv_tcg_ops = {
     .mmu_index = riscv_cpu_mmu_index,
 
 #ifndef CONFIG_USER_ONLY
-    .tlb_fill = riscv_cpu_tlb_fill,
+    .tlb_fill_align = riscv_cpu_tlb_fill_align,
     .pointer_wrap = riscv_pointer_wrap,
     .cpu_exec_interrupt = riscv_cpu_exec_interrupt,
     .cpu_exec_halt = riscv_cpu_has_work,

@@ -139,6 +139,24 @@ static inline bool scalar_misaligned_access_enabled(DisasContext *ctx)
     return ctx->cfg_ptr->ext_zicclsm || ctx->thead_mm;
 }
 
+static inline MemOp scalar_memop_alignment(DisasContext *ctx)
+{
+    if (!scalar_misaligned_access_enabled(ctx)) {
+        return MO_ALIGN;
+    }
+
+    /*
+     * C910 scalar accesses may be unaligned on non-strong-order pages.  With
+     * MXSTATUS.MM set, a strong-order MAEE page still requires natural
+     * alignment, after address translation has completed.
+     */
+    if (ctx->thead_mm) {
+        return MO_ALIGN | MO_ALIGN_TLB_ONLY;
+    }
+
+    return MO_UNALN;
+}
+
 #ifdef TARGET_RISCV32
 #define get_xl(ctx)    MXL_RV32
 #elif defined(CONFIG_USER_ONLY)

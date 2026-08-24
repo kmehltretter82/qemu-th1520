@@ -741,6 +741,11 @@ typedef enum {
     (svrsw60t59b ? 0x07C0000000000000ULL : 0x1FC0000000000000ULL) /* Reserved bits */
 #define PTE_ATTR            (PTE_N | PTE_PBMT) /* All attributes bits */
 #define PTE_THEAD_MAEE      MAKE_64BIT_MASK(59, 5)
+#define PTE_THEAD_SEC       BIT_ULL(59)
+#define PTE_THEAD_SH        BIT_ULL(60)
+#define PTE_THEAD_B         BIT_ULL(61)
+#define PTE_THEAD_C         BIT_ULL(62)
+#define PTE_THEAD_SO        BIT_ULL(63)
 
 /* T-Head C9xx machine-extension status bits. */
 #define THEAD_MXSTATUS_MAEE       BIT_ULL(21)

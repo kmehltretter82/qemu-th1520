@@ -260,7 +260,7 @@ static void check_zicbom_access(CPURISCVState *env,
     /*
      * Since not readable, must be writable. On failure, store
      * fault/store guest amo fault will be raised by
-     * riscv_cpu_tlb_fill(). PMP exceptions will be caught
+     * riscv_cpu_tlb_fill_align(). PMP exceptions will be caught
      * there as well.
      */
     probe_write(env, address, cbomlen, mmu_idx, ra);

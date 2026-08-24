@@ -129,7 +129,7 @@ static bool test_thead_mvendorid(RISCVCPU *cpu)
 static RISCVException read_th_mxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
-    /* We don't set MAEE here, because QEMU does not implement MAEE. */
+    /* This legacy generic T-Head CSR surface does not model MAEE. */
     *val = TH_MXSTATUS_UCME | THEAD_MXSTATUS_THEADISAEE;
     return RISCV_EXCP_NONE;
 }
@@ -144,7 +144,7 @@ static RISCVException read_unimp_th_csr(CPURISCVState *env, int csrno,
 static RISCVException read_th_sxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
-    /* We don't set MAEE here, because QEMU does not implement MAEE. */
+    /* This legacy generic T-Head CSR surface does not model MAEE. */
     *val = TH_SXSTATUS_UCME | TH_SXSTATUS_THEADISAEE;
     return RISCV_EXCP_NONE;
 }

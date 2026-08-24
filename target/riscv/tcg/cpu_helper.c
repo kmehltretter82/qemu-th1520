@@ -26,6 +26,7 @@
 #include "exec/cputlb.h"
 #include "exec/page-protection.h"
 #include "exec/target_page.h"
+#include "exec/tlb-flags.h"
 #include "system/memory.h"
 #include "instmap.h"
 #include "tcg/tcg-op.h"
@@ -997,13 +998,19 @@ static bool check_svukte_addr(CPURISCVState *env, vaddr addr)
  *               Second stage is used for hypervisor guest translation
  * @two_stage: Are we going to perform two stage translation
  * @is_debug: Is this access from a debugger or the monitor?
+ * @mmu_attrs: If not NULL, the page-table attributes for this translation
  */
+typedef struct RISCVMmuAttrs {
+    uint8_t thead_pma;
+} RISCVMmuAttrs;
+
 static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                                 int *ret_prot, vaddr addr,
                                 hwaddr *fault_pte_addr,
                                 int access_type, int mmu_idx,
                                 bool first_stage, bool two_stage,
-                                bool is_debug, bool is_probe)
+                                bool is_debug, bool is_probe,
+                                RISCVMmuAttrs *mmu_attrs)
 {
     /*
      * NOTE: the env->pc value visible here will not be
@@ -1020,6 +1027,10 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     target_ulong napot_mask;
     bool is_sstack_idx = ((mmu_idx & MMU_IDX_SS_WRITE) == MMU_IDX_SS_WRITE);
     bool sstack_page = false;
+
+    if (mmu_attrs) {
+        *mmu_attrs = (RISCVMmuAttrs) { 0 };
+    }
 
     if (do_svukte_check(env, first_stage, mode, virt) &&
         !check_svukte_addr(env, addr)) {
@@ -1161,7 +1172,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
             int vbase_ret = get_physical_address(env, &vbase, &vbase_prot,
                                                  base, NULL, MMU_DATA_LOAD,
                                                  MMUIdx_U, false, true,
-                                                 is_debug, false);
+                                                 is_debug, false, NULL);
 
             if (vbase_ret != TRANSLATE_SUCCESS) {
                 if (fault_pte_addr) {
@@ -1503,6 +1514,26 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     if (access_type != MMU_DATA_STORE && !(pte & PTE_D)) {
         prot &= ~PAGE_WRITE;
     }
+
+    if (thead_maee) {
+        uint8_t thead_pma = (pte & PTE_THEAD_MAEE) >> 59;
+
+        /*
+         * openC910 reports an instruction access fault for a strong-order
+         * mapping.  Also prevent a data-side fill from installing an
+         * executable TLB entry which could bypass that check later.
+         */
+        if (pte & PTE_THEAD_SO) {
+            prot &= ~PAGE_EXEC;
+            if (access_type == MMU_INST_FETCH) {
+                return TRANSLATE_PMP_FAIL;
+            }
+        }
+
+        if (mmu_attrs) {
+            mmu_attrs->thead_pma = thead_pma;
+        }
+    }
     *ret_prot = prot;
 
     return TRANSLATE_SUCCESS;
@@ -1562,13 +1593,14 @@ bool riscv_cpu_translate_for_debug(CPUState *cs, vaddr addr,
     int mmu_idx = riscv_env_mmu_index(&cpu->env, false);
 
     if (get_physical_address(env, &phys_addr, &prot, addr, NULL, 0, mmu_idx,
-                             true, env->virt_enabled, true, false)) {
+                             true, env->virt_enabled, true, false, NULL)) {
         return false;
     }
 
     if (env->virt_enabled) {
         if (get_physical_address(env, &phys_addr, &prot, phys_addr, NULL,
-                                 0, MMUIdx_U, false, true, true, false)) {
+                                 0, MMUIdx_U, false, true, true, false,
+                                 NULL)) {
             return false;
         }
     }
@@ -1667,9 +1699,10 @@ static void pmu_tlb_fill_incr_ctr(RISCVCPU *cpu, MMUAccessType access_type)
     riscv_pmu_incr_ctr(cpu, pmu_event_type);
 }
 
-bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
-                        MMUAccessType access_type, int mmu_idx,
-                        bool probe, uintptr_t retaddr)
+bool riscv_cpu_tlb_fill_align(CPUState *cs, CPUTLBEntryFull *out,
+                              vaddr address, MMUAccessType access_type,
+                              int mmu_idx, MemOp memop, int size,
+                              bool probe, uintptr_t retaddr)
 {
     RISCVCPU *cpu = RISCV_CPU(cs);
     CPURISCVState *env = &cpu->env;
@@ -1681,9 +1714,21 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
     bool two_stage_lookup = mmuidx_2stage(mmu_idx);
     bool two_stage_indirect_error = false;
     int ret = TRANSLATE_FAIL;
+    RISCVMmuAttrs attrs = { 0 };
     privilege_mode_t mode = mmuidx_priv(mmu_idx);
     /* default TLB page size */
     hwaddr tlb_size = TARGET_PAGE_SIZE;
+    unsigned align_bits;
+
+    /* Preserve RISC-V's existing alignment-before-translation behavior. */
+    align_bits = memop_alignment_bits(memop);
+    if (address & ((1u << align_bits) - 1)) {
+        if (probe) {
+            return false;
+        }
+        riscv_cpu_do_unaligned_access(cs, address, access_type, mmu_idx,
+                                      retaddr);
+    }
 
     env->guest_phys_fault_addr = 0;
 
@@ -1695,7 +1740,7 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
         /* Two stage lookup */
         ret = get_physical_address(env, &pa, &prot, address,
                                    &env->guest_phys_fault_addr, access_type,
-                                   mmu_idx, true, true, false, probe);
+                                   mmu_idx, true, true, false, probe, &attrs);
         /*
          * A G-stage exception may be triggered during two state lookup.
          * And the env->guest_phys_fault_addr has already been set in
@@ -1717,7 +1762,7 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
 
             ret = get_physical_address(env, &pa, &prot2, im_address, NULL,
                                        access_type, MMUIdx_U, false, true,
-                                       false, probe);
+                                       false, probe, NULL);
 
             qemu_log_mask(CPU_LOG_MMU,
                           "%s 2nd-stage address=%" VADDR_PRIx
@@ -1755,7 +1800,7 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
         /* Single stage lookup */
         ret = get_physical_address(env, &pa, &prot, address, NULL,
                                    access_type, mmu_idx, true, false, false,
-                                   probe);
+                                   probe, &attrs);
 
         qemu_log_mask(CPU_LOG_MMU,
                       "%s address=%" VADDR_PRIx " ret %d physical "
@@ -1781,8 +1826,26 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
     }
 
     if (ret == TRANSLATE_SUCCESS) {
-        tlb_set_page(cs, address & ~(tlb_size - 1), pa & ~(tlb_size - 1),
-                     prot, mmu_idx, tlb_size);
+        *out = (CPUTLBEntryFull) {
+            .phys_addr = pa & ~(tlb_size - 1),
+            .attrs = MEMTXATTRS_UNSPECIFIED,
+            .prot = prot,
+            .lg_page_size = ctz64(tlb_size),
+        };
+
+        if (attrs.thead_pma & (PTE_THEAD_SO >> 59)) {
+            out->tlb_fill_flags = TLB_CHECK_ALIGNED;
+        }
+
+        align_bits = memop_tlb_alignment_bits(
+            memop, out->tlb_fill_flags & TLB_CHECK_ALIGNED);
+        if (address & ((1u << align_bits) - 1)) {
+            if (probe) {
+                return false;
+            }
+            riscv_cpu_do_unaligned_access(cs, address, access_type, mmu_idx,
+                                          retaddr);
+        }
         return true;
     } else if (probe) {
         return false;

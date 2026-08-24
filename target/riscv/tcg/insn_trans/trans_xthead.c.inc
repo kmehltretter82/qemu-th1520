@@ -105,10 +105,7 @@ static TCGv get_th_address_indexed(DisasContext *ctx, int rs1, int rs2,
 
 static MemOp get_th_scalar_memop(DisasContext *ctx, MemOp memop)
 {
-    if (!scalar_misaligned_access_enabled(ctx)) {
-        memop |= MO_ALIGN;
-    }
-    return memop | ctx->mo_endianness;
+    return memop | scalar_memop_alignment(ctx) | ctx->mo_endianness;
 }
 
 /* XTheadBa */
