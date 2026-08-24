@@ -16,6 +16,8 @@
 
 #include "qemu/osdep.h"
 #include "libqtest.h"
+#include "migration/riscv64/c910-pmu-guest.h"
+#include "migration/riscv64/riscv-pmu-guest.h"
 
 #define CSR_MVENDORID       0xf11
 #define CSR_MARCHID         0xf12
@@ -49,6 +51,38 @@
 #define CSR_TH_SCOUNTEROF   0x5c5
 #define CSR_TH_CPUID        0xfc0
 
+#define PMU_TEST_ARM_OFFSET  8
+#define PMU_TEST_GO_OFFSET   16
+#define PMU_TEST_READY       1
+#define PMU_TEST_ARMED       2
+#define PMU_TEST_PASS        3
+
+typedef struct PMUMigrationTest {
+    const char *machine_args;
+    const uint8_t *guest;
+    size_t guest_size;
+    uint64_t load_addr;
+    uint64_t status_addr;
+} PMUMigrationTest;
+
+static const PMUMigrationTest riscv_pmu_migration = {
+    .machine_args = "-machine virt "
+                    "-cpu rv64,pmu-mask=0x8,sscofpmf=true,smcntrpmf=true "
+                    "-smp 1 -bios none",
+    .guest = riscv_pmu_guest_bin,
+    .guest_size = sizeof(riscv_pmu_guest_bin),
+    .load_addr = 0x80000000,
+    .status_addr = 0x80200000,
+};
+
+static const PMUMigrationTest c910_pmu_migration = {
+    .machine_args = "-machine beaglev-ahead -bios none",
+    .guest = c910_pmu_guest_bin,
+    .guest_size = sizeof(c910_pmu_guest_bin),
+    .load_addr = 0,
+    .status_addr = 0x200000,
+};
+
 static uint64_t get_csr(QTestState *qts, uint32_t csrno)
 {
     uint64_t val = 0;
@@ -60,6 +94,43 @@ static uint64_t get_csr(QTestState *qts, uint32_t csrno)
 static void set_csr(QTestState *qts, uint32_t csrno, uint64_t val)
 {
     g_assert_cmpint(qtest_csr_call(qts, "set_csr", 0, csrno, &val), ==, 0);
+}
+
+static void wait_for_migration_complete(QTestState *qts)
+{
+    int64_t deadline = g_get_monotonic_time() + 30 * G_USEC_PER_SEC;
+
+    while (g_get_monotonic_time() < deadline) {
+        QDict *result = qtest_qmp_assert_success_ref(
+            qts, "{ 'execute': 'query-migrate' }");
+        const char *status = qdict_get_str(result, "status");
+
+        if (!strcmp(status, "completed")) {
+            qobject_unref(result);
+            return;
+        }
+        g_assert_cmpstr(status, !=, "failed");
+        qobject_unref(result);
+        g_usleep(10000);
+    }
+    g_error("migration did not complete within 30 seconds");
+}
+
+static uint64_t wait_for_guest_status_change(QTestState *qts,
+                                             uint64_t status_addr,
+                                             uint64_t old_status)
+{
+    int64_t deadline = g_get_monotonic_time() + 30 * G_USEC_PER_SEC;
+    uint64_t status = old_status;
+
+    while (g_get_monotonic_time() < deadline) {
+        status = qtest_readq(qts, status_addr);
+        if (status != old_status) {
+            return status;
+        }
+        g_usleep(1000);
+    }
+    g_error("guest status did not change from 0x%" PRIx64, old_status);
 }
 
 #define CSR_SEED           0x015
@@ -196,6 +267,61 @@ static void run_test_thead_c910_csrs(void)
     qtest_quit(qts);
 }
 
+static void run_test_pmu_migration(const void *opaque)
+{
+    const PMUMigrationTest *test = opaque;
+    g_autofree char *args = NULL;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *dst_args = NULL;
+    QTestState *src;
+    QTestState *dst;
+    uint64_t status;
+    int fd;
+
+    args = g_strdup_printf(
+        "%s -accel tcg,thread=single -icount shift=0 -S",
+        test->machine_args);
+
+    fd = g_file_open_tmp("riscv-pmu-migration-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+    dst_args = g_strdup_printf("%s -incoming defer", args);
+
+    src = qtest_init(args);
+    dst = qtest_init(dst_args);
+    qtest_memwrite(src, test->load_addr, test->guest, test->guest_size);
+    qtest_qmp_assert_success(src, "{ 'execute': 'cont' }");
+
+    status = wait_for_guest_status_change(src, test->status_addr, 0);
+    g_assert_cmphex(status, ==, PMU_TEST_READY);
+    qtest_writeq(src, test->status_addr + PMU_TEST_ARM_OFFSET, 1);
+    status = wait_for_guest_status_change(src, test->status_addr,
+                                          PMU_TEST_READY);
+    g_assert_cmphex(status, ==, PMU_TEST_ARMED);
+    qtest_qmp_assert_success(src, "{ 'execute': 'stop' }");
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readq(dst, test->status_addr), ==, PMU_TEST_ARMED);
+    qtest_writeq(dst, test->status_addr + PMU_TEST_GO_OFFSET, 1);
+    qtest_qmp_assert_success(dst, "{ 'execute': 'cont' }");
+    status = wait_for_guest_status_change(dst, test->status_addr,
+                                          PMU_TEST_ARMED);
+    g_assert_cmphex(status, ==, PMU_TEST_PASS);
+
+    qtest_quit(src);
+    qtest_quit(dst);
+    unlink(path);
+}
+
 static void run_test_seed_csr(void)
 {
     uint64_t val = 0;
@@ -222,9 +348,13 @@ int main(int argc, char **argv)
     if (qtest_has_machine("virt")) {
         qtest_add_func("/cpu/csr", run_test_csr);
         qtest_add_func("/cpu/csr/seed", run_test_seed_csr);
+        qtest_add_data_func("/cpu/pmu-migration", &riscv_pmu_migration,
+                            run_test_pmu_migration);
     }
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/cpu/thead-c910-csr", run_test_thead_c910_csrs);
+        qtest_add_data_func("/cpu/thead-c910-pmu-migration",
+                            &c910_pmu_migration, run_test_pmu_migration);
     }
 
     return g_test_run();

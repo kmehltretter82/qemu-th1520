@@ -24,6 +24,9 @@
 #include "migration/cpu.h"
 #include "exec/icount.h"
 #include "target/riscv/tcg/debug.h"
+#ifdef CONFIG_TCG
+#include "target/riscv/tcg/pmu.h"
+#endif
 #include "hw/riscv/machines-qom.h"
 #ifdef CONFIG_KVM
 #include "kvm/kvm_riscv.h"
@@ -347,12 +350,29 @@ static const VMStateDescription vmstate_debug = {
     }
 };
 
+static int riscv_cpu_pre_save(void *opaque)
+{
+#ifdef CONFIG_TCG
+    RISCVCPU *cpu = opaque;
+
+    if (tcg_enabled() && cpu->cfg.pmu_mask) {
+        riscv_pmu_prepare_save(&cpu->env);
+    }
+#endif
+    return 0;
+}
+
 static int riscv_cpu_post_load(void *opaque, int version_id)
 {
     RISCVCPU *cpu = opaque;
     CPURISCVState *env = &cpu->env;
 
     env->xl = cpu_recompute_xl(env);
+#ifdef CONFIG_TCG
+    if (tcg_enabled() && cpu->cfg.pmu_mask) {
+        return riscv_pmu_post_load(env);
+    }
+#endif
     return 0;
 }
 
@@ -436,6 +456,25 @@ static const VMStateDescription vmstate_pmu_ctr_state = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64(mhpmcounter_val, PMUCTRState),
         VMSTATE_UINT64(mhpmcounter_prev, PMUCTRState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static bool pmu_config_needed(void *opaque)
+{
+    RISCVCPU *cpu = opaque;
+
+    return cpu->env.mcyclecfg || cpu->env.minstretcfg;
+}
+
+static const VMStateDescription vmstate_pmu_config = {
+    .name = "cpu/pmu-config",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = pmu_config_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT64(env.mcyclecfg, RISCVCPU),
+        VMSTATE_UINT64(env.minstretcfg, RISCVCPU),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -544,6 +583,7 @@ const VMStateDescription vmstate_riscv_cpu = {
 #ifdef CONFIG_KVM
     .pre_load = riscv_cpu_kvm_pre_load,
 #endif
+    .pre_save = riscv_cpu_pre_save,
     .post_load = riscv_cpu_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64_ARRAY(env.gpr, RISCVCPU, 32),
@@ -611,6 +651,7 @@ const VMStateDescription vmstate_riscv_cpu = {
         &vmstate_kvm_mp_state,
 #endif
         &vmstate_envcfg,
+        &vmstate_pmu_config,
         &vmstate_debug,
         &vmstate_smstateen,
         &vmstate_jvt,

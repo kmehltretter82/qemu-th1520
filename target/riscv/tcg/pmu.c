@@ -324,6 +324,70 @@ bool riscv_pmu_ctr_monitor_cycles(CPURISCVState *env, uint32_t target_ctr)
     return ctr_mask & BIT(target_ctr);
 }
 
+uint64_t riscv_pmu_ctr_get_fixed_counters_val(CPURISCVState *env,
+                                               int counter_idx)
+{
+    int inst = riscv_pmu_ctr_monitor_instructions(env, counter_idx);
+    uint64_t *counter_arr_virt = env->pmu_fixed_ctrs[inst].counter_virt;
+    uint64_t *counter_arr = env->pmu_fixed_ctrs[inst].counter;
+    uint64_t curr_val = 0;
+    uint64_t cfg_val = 0;
+
+    if (counter_idx == 0) {
+        cfg_val = env->mcyclecfg;
+    } else if (counter_idx == 2) {
+        cfg_val = env->minstretcfg;
+    } else {
+        cfg_val = env->mhpmevent_val[counter_idx];
+        cfg_val &= MHPMEVENT_FILTER_MASK;
+    }
+
+    if (riscv_cpu_cfg(env)->thead_c9xx_pmu) {
+        cfg_val = 0;
+        cfg_val |= env->th_mxstatus & THEAD_MXSTATUS_PMDM ?
+                   MCYCLECFG_BIT_MINH : 0;
+        cfg_val |= env->th_mxstatus & THEAD_MXSTATUS_PMDS ?
+                   MCYCLECFG_BIT_SINH | MCYCLECFG_BIT_VSINH : 0;
+        cfg_val |= env->th_mxstatus & THEAD_MXSTATUS_PMDU ?
+                   MCYCLECFG_BIT_UINH | MCYCLECFG_BIT_VUINH : 0;
+    }
+
+    if (!cfg_val) {
+        if (icount_enabled()) {
+            curr_val = inst ? icount_get_raw() : icount_get();
+        } else {
+            curr_val = cpu_get_host_ticks();
+        }
+
+        return curr_val;
+    }
+
+    /* Update counter before reading. */
+    riscv_pmu_update_fixed_ctrs(env, env->priv, env->virt_enabled);
+
+    if (!(cfg_val & MCYCLECFG_BIT_MINH)) {
+        curr_val += counter_arr[PRV_M];
+    }
+
+    if (!(cfg_val & MCYCLECFG_BIT_SINH)) {
+        curr_val += counter_arr[PRV_S];
+    }
+
+    if (!(cfg_val & MCYCLECFG_BIT_UINH)) {
+        curr_val += counter_arr[PRV_U];
+    }
+
+    if (!(cfg_val & MCYCLECFG_BIT_VSINH)) {
+        curr_val += counter_arr_virt[PRV_S];
+    }
+
+    if (!(cfg_val & MCYCLECFG_BIT_VUINH)) {
+        curr_val += counter_arr_virt[PRV_U];
+    }
+
+    return curr_val;
+}
+
 static void pmu_remove_counter_from_event_map(RISCVCPU *cpu,
                                               uint32_t ctr_idx)
 {
@@ -532,6 +596,111 @@ int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value, uint32_t ctr_idx)
     return 0;
 }
 
+static bool riscv_pmu_migration_counter_enabled(RISCVCPU *cpu,
+                                                 uint32_t ctr_idx)
+{
+    CPURISCVState *env = &cpu->env;
+
+    return (ctr_idx == 0 || ctr_idx == 2 ||
+            riscv_pmu_counter_valid(cpu, ctr_idx)) &&
+           !(env->mcountinhibit & BIT(ctr_idx));
+}
+
+void riscv_pmu_prepare_save(CPURISCVState *env)
+{
+    RISCVCPU *cpu = env_archcpu(env);
+    uint32_t counters = cpu->pmu_avail_ctrs | COUNTEREN_CY | COUNTEREN_IR;
+
+    while (counters) {
+        uint32_t ctr_idx = ctz32(counters);
+        PMUCTRState *counter = &env->pmu_ctrs[ctr_idx];
+        uint64_t current;
+
+        counters &= ~BIT(ctr_idx);
+        if (!riscv_pmu_migration_counter_enabled(cpu, ctr_idx) ||
+            (!riscv_pmu_ctr_monitor_cycles(env, ctr_idx) &&
+             !riscv_pmu_ctr_monitor_instructions(env, ctr_idx))) {
+            continue;
+        }
+
+        /* Materialize the derived value and preserve source continuation. */
+        current = riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx);
+        counter->mhpmcounter_val += current - counter->mhpmcounter_prev;
+        counter->mhpmcounter_prev = current;
+    }
+}
+
+static void riscv_pmu_rebase_fixed_counters(CPURISCVState *env)
+{
+    uint64_t cycles;
+    uint64_t instructions;
+
+    if (icount_enabled()) {
+        cycles = icount_get();
+        instructions = icount_get_raw();
+    } else {
+        cycles = cpu_get_host_ticks();
+        instructions = cycles;
+    }
+
+    memset(env->pmu_fixed_ctrs, 0, sizeof(env->pmu_fixed_ctrs));
+    if (env->virt_enabled) {
+        g_assert(env->priv <= PRV_S);
+        env->pmu_fixed_ctrs[0].counter_virt_prev[env->priv] = cycles;
+        env->pmu_fixed_ctrs[1].counter_virt_prev[env->priv] = instructions;
+    } else {
+        env->pmu_fixed_ctrs[0].counter_prev[env->priv] = cycles;
+        env->pmu_fixed_ctrs[1].counter_prev[env->priv] = instructions;
+    }
+}
+
+int riscv_pmu_post_load(CPURISCVState *env)
+{
+    RISCVCPU *cpu = env_archcpu(env);
+    uint32_t counters = cpu->pmu_avail_ctrs | COUNTEREN_CY | COUNTEREN_IR;
+
+    if (!cpu->pmu_event_ctr_map) {
+        return 0;
+    }
+
+    /* Reconstruct PMU state derived from the architectural CSR values. */
+    g_hash_table_remove_all(cpu->pmu_event_ctr_map);
+    for (uint32_t ctr_idx = 3; ctr_idx < RV_MAX_MHPMCOUNTERS; ctr_idx++) {
+        if (!(cpu->pmu_avail_ctrs & BIT(ctr_idx))) {
+            continue;
+        }
+        /* Unsupported raw selectors remain architectural state, not a map. */
+        riscv_pmu_update_event_map(env, env->mhpmevent_val[ctr_idx], ctr_idx);
+    }
+
+    riscv_pmu_rebase_fixed_counters(env);
+    if (cpu->pmu_timer) {
+        timer_del(cpu->pmu_timer);
+    }
+
+    while (counters) {
+        uint32_t ctr_idx = ctz32(counters);
+        PMUCTRState *counter = &env->pmu_ctrs[ctr_idx];
+
+        counters &= ~BIT(ctr_idx);
+        counter->irq_overflow_left = 0;
+        if (!riscv_pmu_migration_counter_enabled(cpu, ctr_idx) ||
+            (!riscv_pmu_ctr_monitor_cycles(env, ctr_idx) &&
+             !riscv_pmu_ctr_monitor_instructions(env, ctr_idx))) {
+            continue;
+        }
+
+        counter->mhpmcounter_prev =
+            riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx);
+        if (cpu->pmu_timer &&
+            (ctr_idx > 2 || cpu->cfg.thead_c9xx_pmu) &&
+            !riscv_pmu_overflow_pending(cpu, ctr_idx)) {
+            riscv_pmu_setup_timer(env, counter->mhpmcounter_val, ctr_idx);
+        }
+    }
+
+    return 0;
+}
 
 void riscv_pmu_init(RISCVCPU *cpu, Error **errp)
 {
