@@ -107,6 +107,15 @@ static const Property led_properties[] = {
     DEFINE_PROP_BOOL("gpio-active-high", LEDState, gpio_active_high, true),
 };
 
+static void led_init(Object *obj)
+{
+    LEDState *s = LED(obj);
+
+    object_property_add_uint8_ptr(obj, "intensity-percent",
+                                  &s->intensity_percent,
+                                  OBJ_PROP_FLAG_READ);
+}
+
 static void led_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -123,6 +132,7 @@ static const TypeInfo led_info = {
     .name = TYPE_LED,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(LEDState),
+    .instance_init = led_init,
     .class_init = led_class_init
 };
 
