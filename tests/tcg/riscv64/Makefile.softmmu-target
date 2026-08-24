@@ -58,7 +58,8 @@ run-test-thead-c910-pmu: test-thead-c910-pmu
 
 THEAD_C910_MM_MARCH = \
 	-march=rv64imafdc_zfh_xtheadfmemidx_xtheadmemidx_xtheadmempair
-CLEANFILES += test-thead-c910-mxstatus-mm test-thead-c910-mm-priority
+CLEANFILES += test-thead-c910-mxstatus-mm test-thead-c910-mm-priority \
+	test-thead-c910-maee
 
 test-thead-c910-mxstatus-mm: test-thead-c910-mxstatus-mm.S $(LINK_SCRIPT)
 	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
@@ -75,6 +76,15 @@ test-thead-c910-mm-priority: test-thead-c910-mm-priority.S $(LINK_SCRIPT)
 
 EXTRA_RUNS += run-test-thead-c910-mm-priority
 run-test-thead-c910-mm-priority: test-thead-c910-mm-priority
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
+test-thead-c910-maee: test-thead-c910-maee.S $(LINK_SCRIPT)
+	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
+	$(LD) $(LDFLAGS) $@.o -o $@
+
+EXTRA_RUNS += run-test-thead-c910-maee
+run-test-thead-c910-maee: test-thead-c910-maee
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 
