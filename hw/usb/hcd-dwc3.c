@@ -347,6 +347,19 @@ REG32(GUSB2RHBCTL, 0x540)
     FIELD(GUSB2RHBCTL, OVRD_L1TIMEOUT, 0, 4)
 
 #define DWC3_GLOBAL_OFFSET 0xC100
+#define DWC3_DEVICE_OFFSET 0xC700
+
+REG32(DCTL, 0x04)
+    FIELD(DCTL, RUN_STOP, 31, 1)
+    FIELD(DCTL, CSFTRST, 30, 1)
+
+static void usb_dwc3_reset_device_regs(USBDWC3 *s)
+{
+    for (unsigned int i = 0; i < USB_DWC3_DEVICE_R_MAX; i++) {
+        register_reset(&s->device_regs_info[i]);
+    }
+}
+
 static void reset_csr(USBDWC3 * s)
 {
     int i = 0;
@@ -379,6 +392,7 @@ static void reset_csr(USBDWC3 * s)
         }
     }
 
+    usb_dwc3_reset_device_regs(s);
     xhci_sysbus_reset(DEVICE(&s->sysbus_xhci));
 }
 
@@ -396,6 +410,16 @@ static void usb_dwc3_guid_postw(RegisterInfo *reg, uint64_t val64)
     USBDWC3 *s = USB_DWC3(reg->opaque);
 
     s->regs[R_GUID] = s->cfg.dwc_usb3_user;
+}
+
+static void usb_dwc3_dctl_postw(RegisterInfo *reg, uint64_t val64)
+{
+    USBDWC3 *s = USB_DWC3(reg->opaque);
+
+    /* The host-only model completes the device-side soft reset immediately. */
+    if (ARRAY_FIELD_EX32(s->device_regs, DCTL, CSFTRST)) {
+        ARRAY_FIELD_DP32(s->device_regs, DCTL, CSFTRST, 0);
+    }
 }
 
 static const RegisterAccessInfo usb_dwc3_regs_info[] = {
@@ -568,6 +592,12 @@ static const RegisterAccessInfo usb_dwc3_regs_info[] = {
     }
 };
 
+static const RegisterAccessInfo usb_dwc3_device_regs_info[] = {
+    {   .name = "DCTL", .addr = A_DCTL,
+        .post_write = usb_dwc3_dctl_postw,
+    },
+};
+
 static void usb_dwc3_reset(DeviceState *dev)
 {
     USBDWC3 *s = USB_DWC3(dev);
@@ -584,6 +614,7 @@ static void usb_dwc3_reset(DeviceState *dev)
         };
     }
 
+    usb_dwc3_reset_device_regs(s);
     xhci_sysbus_reset(DEVICE(&s->sysbus_xhci));
 }
 
@@ -630,10 +661,11 @@ static void usb_dwc3_realize(DeviceState *dev, Error **errp)
 static void usb_dwc3_init(Object *obj)
 {
     USBDWC3 *s = USB_DWC3(obj);
-    RegisterInfoArray *reg_array;
+    RegisterInfoArray *global_reg_array;
+    RegisterInfoArray *device_reg_array;
 
     memory_region_init(&s->iomem, obj, TYPE_USB_DWC3, DWC3_SIZE);
-    reg_array =
+    global_reg_array =
         register_init_block32(DEVICE(obj), usb_dwc3_regs_info,
                               ARRAY_SIZE(usb_dwc3_regs_info),
                               s->regs_info, s->regs,
@@ -642,7 +674,17 @@ static void usb_dwc3_init(Object *obj)
                               USB_DWC3_R_MAX * 4);
     memory_region_add_subregion(&s->iomem,
                                 DWC3_GLOBAL_OFFSET,
-                                &reg_array->mem);
+                                &global_reg_array->mem);
+    device_reg_array =
+        register_init_block32(DEVICE(obj), usb_dwc3_device_regs_info,
+                              ARRAY_SIZE(usb_dwc3_device_regs_info),
+                              s->device_regs_info, s->device_regs,
+                              &usb_dwc3_ops,
+                              USB_DWC3_ERR_DEBUG,
+                              USB_DWC3_DEVICE_R_MAX * 4);
+    memory_region_add_subregion(&s->iomem,
+                                DWC3_DEVICE_OFFSET,
+                                &device_reg_array->mem);
     object_initialize_child(obj, "dwc3-xhci", &s->sysbus_xhci,
                             TYPE_XHCI_SYSBUS);
     qdev_alias_all_properties(DEVICE(&s->sysbus_xhci), obj);
@@ -652,9 +694,12 @@ static void usb_dwc3_init(Object *obj)
 
 static const VMStateDescription vmstate_usb_dwc3 = {
     .name = "usb-dwc3",
-    .version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, USBDWC3, USB_DWC3_R_MAX),
+        VMSTATE_UINT32_ARRAY_V(device_regs, USBDWC3,
+                               USB_DWC3_DEVICE_R_MAX, 2),
         VMSTATE_UINT8(cfg.mode, USBDWC3),
         VMSTATE_UINT32(cfg.dwc_usb3_user, USBDWC3),
         VMSTATE_END_OF_LIST()

@@ -36,6 +36,7 @@
      OBJECT_CHECK(USBDWC3, (obj), TYPE_USB_DWC3)
 
 #define USB_DWC3_R_MAX (0x600 / 4)
+#define USB_DWC3_DEVICE_R_MAX (0x100 / 4)
 #define DWC3_SIZE 0x10000
 
 typedef struct USBDWC3 {
@@ -45,6 +46,8 @@ typedef struct USBDWC3 {
 
     uint32_t regs[USB_DWC3_R_MAX];
     RegisterInfo regs_info[USB_DWC3_R_MAX];
+    uint32_t device_regs[USB_DWC3_DEVICE_R_MAX];
+    RegisterInfo device_regs_info[USB_DWC3_DEVICE_R_MAX];
 
     struct {
         uint8_t     mode;
