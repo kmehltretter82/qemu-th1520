@@ -556,6 +556,16 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->pwm), 0,
                     th1520_memmap[TH1520_DEV_PWM].base);
 
+    /*
+     * reset-th1520.c maps these APB/core pairs to the modeled blocks.  An
+     * assertion resets the QEMU device; exact pulse, hold and retention
+     * semantics remain hardware-validation work.
+     */
+    qdev_connect_gpio_out_named(DEVICE(&s->ap_reset), "peripheral-reset",
+                                TH1520_AP_RESET_PWM,
+                                qdev_get_gpio_in_named(DEVICE(&s->pwm),
+                                                       "reset", 0));
+
     for (int i = 0; i < TH1520_TIMER_GROUP_COUNT; i++) {
         const TH1520TimerInfo *info = &th1520_timer_info[i];
         SysBusDevice *timer = SYS_BUS_DEVICE(&s->timer[i]);
@@ -570,6 +580,10 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                 qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                        info->first_irq + channel));
         }
+        qdev_connect_gpio_out_named(
+            DEVICE(&s->ap_reset), "peripheral-reset",
+            TH1520_AP_RESET_TIMER0_3 + i,
+            qdev_get_gpio_in_named(DEVICE(timer), "reset", 0));
     }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->dmac0), errp)) {
