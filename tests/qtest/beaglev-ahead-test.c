@@ -54,6 +54,10 @@
 #define TH1520_MBOX_REMOTE0_BASE    0xffffc40000ULL
 #define TH1520_MBOX_REMOTE1_BASE    0xffffc4c000ULL
 #define TH1520_MBOX_REMOTE2_BASE    0xffffc54000ULL
+#define TH1520_PVT_COMMON_BASE      0xfffff4e000ULL
+#define TH1520_PVT_TS_BASE          0xfffff4e080ULL
+#define TH1520_PVT_PD_BASE          0xfffff4e180ULL
+#define TH1520_PVT_VM_BASE          0xfffff4e800ULL
 #define TH1520_DMAC0_BASE          0xffefc00000ULL
 #define TH1520_GMAC1_BASE          0xffe7060000ULL
 #define TH1520_GMAC0_BASE          0xffe7070000ULL
@@ -177,6 +181,42 @@
     (TH1520_MBOX_LOCAL_BASE + 0x1000 * (channel))
 #define TH1520_MBOX_REMOTE0_CHANNEL (TH1520_MBOX_REMOTE0_BASE + 0x4000)
 
+#define MR75203_COMP_ID             0x00
+#define MR75203_IP_CONFIG           0x04
+#define MR75203_ID_NUM              0x08
+#define MR75203_SCRATCH             0x0c
+#define MR75203_REG_LOCK            0x10
+#define MR75203_LOCK_STATUS         0x14
+#define MR75203_CLK_SYNTH           0x00
+#define MR75203_SDIF_DISABLE        0x04
+#define MR75203_SDIF_STATUS         0x08
+#define MR75203_SDIF_W              0x0c
+#define MR75203_SDIF_HALT           0x10
+#define MR75203_SDIF_CTRL           0x14
+#define MR75203_SAMPLE_CTRL         0x20
+#define MR75203_SAMPLE_CLEAR        0x24
+#define MR75203_SAMPLE_COUNT        0x28
+#define MR75203_SDIF_DONE(n)        (0x54 + 0x40 * (n))
+#define MR75203_SDIF_DATA(n)        (0x58 + 0x40 * (n))
+#define MR75203_VM_DONE(vm)         (0x234 + 0x200 * (vm))
+#define MR75203_VM_DATA(vm, ch)     (0x240 + 0x200 * (vm) + 4 * (ch))
+
+#define MR75203_UNLOCK_VALUE        0x1acce551
+#define MR75203_CLK_SYNTH_VALUE     0x01050505
+#define MR75203_SDIF_LOCK           BIT(1)
+#define MR75203_TS_CONFIG_WRITE     0x89000001
+#define MR75203_TS_TIMER_WRITE      0x8d000100
+#define MR75203_TS_CTRL_WRITE       0x8800010a
+#define MR75203_VM_POLL_WRITE       0x8c10ffff
+#define MR75203_VM_CONFIG_WRITE     0x89000000
+#define MR75203_VM_TIMER_WRITE      0x8d000040
+#define MR75203_VM_CTRL_WRITE       0x8800050a
+#define MR75203_INPUT_FREQUENCY     73728000
+#define MR75203_TS_COEFF_G          42740
+#define MR75203_TS_COEFF_H          220500
+#define MR75203_TS_COEFF_J          (-160)
+#define MR75203_TS_COEFF_CAL5       4094
+
 #define DW_SSI_CTRLR0              0x00
 #define DW_SSI_CTRLR1              0x04
 #define DW_SSI_SSIENR              0x08
@@ -237,6 +277,7 @@
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 #define TH1520_AP_RESET_QOM_PATH   "/machine/soc/ap-reset"
 #define TH1520_MBOX_QOM_PATH       "/machine/soc/mbox"
+#define TH1520_PVT_QOM_PATH        "/machine/soc/pvt"
 #define TH1520_PWM_QOM_PATH        "/machine/soc/pwm"
 
 #define TH1520_UART0_IRQ           36
@@ -1471,6 +1512,61 @@ static void assert_mbox_fdt(const void *fdt, uint32_t clock_phandle)
     g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
 }
 
+static void assert_pvt_fdt(const void *fdt, uint32_t clock_phandle)
+{
+    static const char *const reg_names[] = {
+        "common", "ts", "pd", "vm"
+    };
+    static const uint64_t bases[] = {
+        TH1520_PVT_COMMON_BASE,
+        TH1520_PVT_TS_BASE,
+        TH1520_PVT_PD_BASE,
+        TH1520_PVT_VM_BASE,
+    };
+    static const uint32_t sizes[] = { 0x80, 0x100, 0x680, 0x600 };
+    const fdt32_t *cells;
+    const char *text;
+    int node = fdt_path_offset(fdt, "/soc/pvt@fffff4e000");
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "moortec,mr75203");
+    assert_fdt_stringlist(fdt, node, "reg-names", reg_names,
+                          ARRAY_SIZE(reg_names));
+
+    cells = fdt_getprop(fdt, node, "reg", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, ARRAY_SIZE(bases) * 4 * sizeof(*cells));
+    for (size_t i = 0; i < ARRAY_SIZE(bases); i++) {
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4]), ==, bases[i] >> 32);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4 + 1]), ==,
+                        (uint32_t)bases[i]);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4 + 2]), ==, 0);
+        g_assert_cmphex(fdt32_to_cpu(cells[i * 4 + 3]), ==, sizes[i]);
+    }
+
+    cells = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(cells);
+    g_assert_cmpint(len, ==, sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#thermal-sensor-cells"), ==, 1);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "moortec,ts-coeff-g"), ==,
+                    MR75203_TS_COEFF_G);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "moortec,ts-coeff-h"), ==,
+                    MR75203_TS_COEFF_H);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "moortec,ts-coeff-j"), ==,
+                    (uint32_t)MR75203_TS_COEFF_J);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "moortec,ts-coeff-cal5"), ==,
+                    MR75203_TS_COEFF_CAL5);
+    assert_fdt_bool(fdt, node, "interrupts", false);
+
+    text = fdt_getprop(fdt, node, "status", &len);
+    g_assert_null(text);
+    g_assert_cmpint(len, ==, -FDT_ERR_NOTFOUND);
+}
+
 static uint32_t assert_gpio_fdt(const void *fdt,
                                 const TH1520GPIOController *controller,
                                 uint32_t clock_phandle,
@@ -1719,6 +1815,7 @@ static void test_direct_boot_contract(void)
     assert_spi_fdt(fdt, &th1520_spi0, ap_clock_phandle);
     assert_pwm_fdt(fdt, ap_clock_phandle);
     assert_mbox_fdt(fdt, ap_clock_phandle);
+    assert_pvt_fdt(fdt, aonsys_clock_phandle);
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_timers); i++) {
         assert_timer_fdt(fdt, &th1520_timers[i], ap_clock_phandle);
@@ -2070,6 +2167,206 @@ static void test_th1520_mbox_registers(void)
 
     qtest_system_reset(qts);
     assert_th1520_mbox_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void mr75203_qom_set(QTestState *qts, const char *property,
+                            int64_t value)
+{
+    qtest_qmp_assert_success(
+        qts, "{ 'execute': 'qom-set', 'arguments': { 'path': %s, "
+        "'property': %s, 'value': %" PRId64 " } }",
+        TH1520_PVT_QOM_PATH, property, value);
+}
+
+static int64_t mr75203_qom_get(QTestState *qts, const char *property)
+{
+    QDict *response = qtest_qmp(
+        qts, "{ 'execute': 'qom-get', 'arguments': { 'path': %s, "
+        "'property': %s } }", TH1520_PVT_QOM_PATH, property);
+    int64_t value;
+
+    g_assert_nonnull(response);
+    g_assert_true(qdict_haskey(response, "return"));
+    value = qdict_get_int(response, "return");
+    qobject_unref(response);
+    return value;
+}
+
+static int64_t mr75203_temperature_from_raw(uint16_t raw)
+{
+    const uint64_t ip_frequency = MR75203_INPUT_FREQUENCY / 12;
+
+    return MR75203_TS_COEFF_G +
+           (int64_t)MR75203_TS_COEFF_H * raw / MR75203_TS_COEFF_CAL5 -
+           MR75203_TS_COEFF_H / 2 +
+           (int64_t)MR75203_TS_COEFF_J * (int64_t)ip_frequency / 1000000;
+}
+
+static int32_t mr75203_voltage_from_raw(uint16_t raw)
+{
+    return ((int64_t)90 * raw - 245805) / 1024;
+}
+
+static void mr75203_program_ts(QTestState *qts)
+{
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SAMPLE_CTRL, 0);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_HALT, 0);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_CLK_SYNTH,
+                 MR75203_CLK_SYNTH_VALUE);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_DISABLE, 0);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_W,
+                 MR75203_TS_CONFIG_WRITE);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_W,
+                 MR75203_TS_TIMER_WRITE);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_W,
+                 MR75203_TS_CTRL_WRITE);
+}
+
+static void mr75203_program_vm(QTestState *qts)
+{
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SAMPLE_CTRL, 0);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SDIF_HALT, 0);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_CLK_SYNTH,
+                 MR75203_CLK_SYNTH_VALUE);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SDIF_DISABLE, 0);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SDIF_W,
+                 MR75203_VM_POLL_WRITE);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SDIF_W,
+                 MR75203_VM_CONFIG_WRITE);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SDIF_W,
+                 MR75203_VM_TIMER_WRITE);
+    qtest_writel(qts, TH1520_PVT_VM_BASE + MR75203_SDIF_W,
+                 MR75203_VM_CTRL_WRITE);
+}
+
+static void assert_mr75203_reset_state(QTestState *qts)
+{
+    static const uint64_t macro_bases[] = {
+        TH1520_PVT_TS_BASE,
+        TH1520_PVT_PD_BASE,
+        TH1520_PVT_VM_BASE,
+    };
+
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE + MR75203_COMP_ID),
+                    ==, 0x9b487060);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE + MR75203_IP_CONFIG),
+                    ==, 0x10010b02);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE + MR75203_ID_NUM),
+                    ==, 0x12345678);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE + MR75203_SCRATCH),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE +
+                                MR75203_LOCK_STATUS), ==, 0);
+
+    for (size_t i = 0; i < ARRAY_SIZE(macro_bases); i++) {
+        uint64_t base = macro_bases[i];
+
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_CLK_SYNTH), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_SDIF_DISABLE), ==,
+                        0);
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_SDIF_STATUS), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_SDIF_W), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_SDIF_CTRL), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_SAMPLE_CTRL), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + MR75203_SAMPLE_COUNT), ==, 0);
+    }
+}
+
+static void test_mr75203_registers(void)
+{
+    const int32_t temperatures[] = { -12500, 73000 };
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    uint16_t raw;
+
+    assert_mr75203_reset_state(qts);
+    g_assert_cmpint(mr75203_qom_get(qts, "temperature[0]"), ==, 25000);
+    g_assert_cmpint(mr75203_qom_get(qts, "voltage[0]"), ==, 800);
+
+    qtest_writel(qts, TH1520_PVT_COMMON_BASE + MR75203_ID_NUM, 0xabcdef01);
+    qtest_writel(qts, TH1520_PVT_COMMON_BASE + MR75203_SCRATCH, 0x10203040);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE + MR75203_ID_NUM),
+                    ==, 0xabcdef01);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE + MR75203_SCRATCH),
+                    ==, 0x10203040);
+
+    qtest_writel(qts, TH1520_PVT_COMMON_BASE + MR75203_REG_LOCK, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE +
+                                MR75203_LOCK_STATUS), ==, 1);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_CLK_SYNTH,
+                 MR75203_CLK_SYNTH_VALUE);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_TS_BASE + MR75203_CLK_SYNTH),
+                    ==, 0);
+    qtest_writel(qts, TH1520_PVT_COMMON_BASE + MR75203_REG_LOCK,
+                 MR75203_UNLOCK_VALUE);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_COMMON_BASE +
+                                MR75203_LOCK_STATUS), ==, 0);
+
+    for (size_t i = 0; i < ARRAY_SIZE(temperatures); i++) {
+        g_autofree char *property = g_strdup_printf("temperature[%zu]", i);
+
+        mr75203_qom_set(qts, property, temperatures[i]);
+    }
+    mr75203_program_ts(qts);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_TS_BASE + MR75203_SDIF_STATUS),
+                    ==, MR75203_SDIF_LOCK);
+    for (size_t i = 0; i < ARRAY_SIZE(temperatures); i++) {
+        g_assert_cmphex(qtest_readl(qts,
+                                    TH1520_PVT_TS_BASE +
+                                    MR75203_SDIF_DONE(i)), ==, 1);
+        raw = qtest_readl(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_DATA(i));
+        g_assert_cmpint(llabs(mr75203_temperature_from_raw(raw) -
+                              temperatures[i]), <=, 55);
+    }
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_TS_BASE +
+                                MR75203_SAMPLE_COUNT), ==, 2);
+
+    /* Counter disable leaves conversion running but freezes the count. */
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SAMPLE_CTRL, BIT(0));
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_TS_BASE + MR75203_SDIF_DONE(0)),
+                    ==, 1);
+    qtest_readl(qts, TH1520_PVT_TS_BASE + MR75203_SDIF_DATA(0));
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_TS_BASE +
+                                MR75203_SAMPLE_COUNT), ==, 2);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SAMPLE_CLEAR, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_TS_BASE +
+                                MR75203_SAMPLE_COUNT), ==, 0);
+    qtest_writel(qts, TH1520_PVT_TS_BASE + MR75203_SAMPLE_CTRL, 0);
+
+    mr75203_qom_set(qts, "voltage[3]", 900);
+    mr75203_program_vm(qts);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_VM_BASE + MR75203_SDIF_STATUS),
+                    ==, MR75203_SDIF_LOCK);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_PVT_VM_BASE + MR75203_VM_DONE(0)),
+                    ==, 1);
+    raw = qtest_readl(qts,
+                      TH1520_PVT_VM_BASE + MR75203_VM_DATA(0, 3));
+    g_assert_cmpint(mr75203_voltage_from_raw(raw), ==, 900);
+
+    qtest_system_reset(qts);
+    assert_mr75203_reset_state(qts);
+    g_assert_cmpint(mr75203_qom_get(qts, "temperature[0]"), ==,
+                    temperatures[0]);
+    g_assert_cmpint(mr75203_qom_get(qts, "temperature[1]"), ==,
+                    temperatures[1]);
+    g_assert_cmpint(mr75203_qom_get(qts, "voltage[3]"), ==, 900);
     qtest_quit(qts);
 }
 
@@ -5325,6 +5622,94 @@ static void test_th1520_mbox_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_mr75203_migration(void)
+{
+    const int32_t temperature = -22222;
+    const int32_t voltage = 1111;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    uint16_t raw;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-pvt-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    mr75203_qom_set(src, "temperature[0]", temperature);
+    mr75203_qom_set(src, "voltage[7]", voltage);
+    mr75203_program_ts(src);
+    mr75203_program_vm(src);
+    qtest_readl(src, TH1520_PVT_TS_BASE + MR75203_SDIF_DATA(0));
+    qtest_readl(src, TH1520_PVT_VM_BASE + MR75203_VM_DATA(0, 7));
+    qtest_writel(src, TH1520_PVT_COMMON_BASE + MR75203_ID_NUM, 0xa5a55a5a);
+    qtest_writel(src, TH1520_PVT_COMMON_BASE + MR75203_SCRATCH, 0x11223344);
+    qtest_writel(src, TH1520_PVT_COMMON_BASE + MR75203_REG_LOCK, 0x55);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_COMMON_BASE + MR75203_ID_NUM),
+                    ==, 0xa5a55a5a);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_COMMON_BASE + MR75203_SCRATCH),
+                    ==, 0x11223344);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_COMMON_BASE + MR75203_REG_LOCK),
+                    ==, 0x55);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_COMMON_BASE +
+                                MR75203_LOCK_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_TS_BASE + MR75203_CLK_SYNTH),
+                    ==, MR75203_CLK_SYNTH_VALUE);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_TS_BASE + MR75203_SDIF_STATUS),
+                    ==, MR75203_SDIF_LOCK);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_VM_BASE + MR75203_CLK_SYNTH),
+                    ==, MR75203_CLK_SYNTH_VALUE);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_VM_BASE + MR75203_SDIF_STATUS),
+                    ==, MR75203_SDIF_LOCK);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_TS_BASE +
+                                MR75203_SAMPLE_COUNT), ==, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_PVT_VM_BASE +
+                                MR75203_SAMPLE_COUNT), ==, 1);
+    g_assert_cmpint(mr75203_qom_get(dst, "temperature[0]"), ==, temperature);
+    g_assert_cmpint(mr75203_qom_get(dst, "voltage[7]"), ==, voltage);
+
+    raw = qtest_readl(dst,
+                      TH1520_PVT_TS_BASE + MR75203_SDIF_DATA(0));
+    g_assert_cmpint(llabs(mr75203_temperature_from_raw(raw) - temperature),
+                    <=, 55);
+    raw = qtest_readl(dst,
+                      TH1520_PVT_VM_BASE + MR75203_VM_DATA(0, 7));
+    g_assert_cmpint(mr75203_voltage_from_raw(raw), ==, voltage);
+
+    qtest_system_reset(dst);
+    assert_mr75203_reset_state(dst);
+    g_assert_cmpint(mr75203_qom_get(dst, "temperature[0]"), ==, temperature);
+    g_assert_cmpint(mr75203_qom_get(dst, "voltage[7]"), ==, voltage);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_c900_plic_migration(void)
 {
     const uint32_t irq = 120;
@@ -5691,6 +6076,10 @@ int main(int argc, char **argv)
                        test_th1520_mbox_registers);
         qtest_add_func("/beaglev-ahead/th1520-mbox/migration",
                        test_th1520_mbox_migration);
+        qtest_add_func("/beaglev-ahead/mr75203/registers",
+                       test_mr75203_registers);
+        qtest_add_func("/beaglev-ahead/mr75203/migration",
+                       test_mr75203_migration);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
