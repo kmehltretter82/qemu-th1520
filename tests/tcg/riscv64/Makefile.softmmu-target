@@ -123,6 +123,16 @@ test-xtheadvector-fp-state: test-xtheadvector-fp-state.o
 run-test-xtheadvector-fp-state: test-xtheadvector-fp-state
 	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
 
+EXTRA_RUNS += run-test-xtheadvector-reduction
+test-xtheadvector-reduction: test-xtheadvector-reduction.o
+run-test-xtheadvector-reduction: test-xtheadvector-reduction
+	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
+
+EXTRA_RUNS += run-test-rvv-widen-illegal
+test-rvv-widen-illegal: test-rvv-widen-illegal.o
+run-test-rvv-widen-illegal: test-rvv-widen-illegal
+	$(call run-test, $<, $(QEMU) -cpu rv64$(comma)v=true $(QEMU_OPTS)$<)
+
 EXTRA_RUNS += run-test-thead-c910-pmu
 test-thead-c910-pmu: test-thead-c910-pmu.o
 run-test-thead-c910-pmu: test-thead-c910-pmu
