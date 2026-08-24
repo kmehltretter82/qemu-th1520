@@ -49,6 +49,62 @@ run-plugin-interruptedmemory: interruptedmemory
 
 EXTRA_RUNS += run-test-crc32
 comma:= ,
+
+CLEANFILES += test-sscofpmf-interrupt test-sscofpmf-warl \
+	test-sscofpmf-aia test-sscofpmf-aia-off \
+	test-sscofpmf-aia-no-cdeleg test-sscofpmf-aia-no-ssccfg
+test-sscofpmf-interrupt: test-sscofpmf-interrupt.o
+test-sscofpmf-warl: test-sscofpmf-warl.o
+test-sscofpmf-aia: test-sscofpmf-aia.o
+
+EXTRA_RUNS += run-test-sscofpmf-interrupt
+run-test-sscofpmf-interrupt: test-sscofpmf-interrupt
+	$(call run-test, $<, $(QEMU) -icount shift=0 -smp 1 \
+	  -cpu rv64$(comma)pmu-mask=0x8$(comma)sscofpmf=true$(comma)pmp=false \
+	  $(QEMU_OPTS)$<)
+
+EXTRA_RUNS += run-test-sscofpmf-warl
+run-test-sscofpmf-warl: test-sscofpmf-warl
+	$(call run-test, $<, $(QEMU) -smp 1 \
+	  -cpu rv64$(comma)sscofpmf=false $(QEMU_OPTS)$<)
+
+SSCOFPMF_AIA_BASE_CPU = rv64$(comma)h=true$(comma)smaia=true$(comma)ssaia=true
+SSCOFPMF_AIA_CPU = $(SSCOFPMF_AIA_BASE_CPU)$(comma)smcdeleg=true$(comma)ssccfg=true
+SSCOFPMF_AIA_NO_CDELEG_CPU = $(SSCOFPMF_AIA_BASE_CPU)$(comma)smcdeleg=false$(comma)ssccfg=false
+SSCOFPMF_AIA_NO_SSCCFG_CPU = $(SSCOFPMF_AIA_BASE_CPU)$(comma)smcdeleg=true$(comma)ssccfg=false
+
+test-sscofpmf-aia-off: test-sscofpmf-aia.S $(LINK_SCRIPT)
+	$(CC) $(CFLAGS) -DSSCOFPMF_DISABLED $< -Wa,--noexecstack -c -o $@.o
+	$(LD) $(LDFLAGS) $@.o -o $@
+
+test-sscofpmf-aia-no-cdeleg: test-sscofpmf-aia.S $(LINK_SCRIPT)
+	$(CC) $(CFLAGS) -DSMCDELEG_DISABLED $< -Wa,--noexecstack -c -o $@.o
+	$(LD) $(LDFLAGS) $@.o -o $@
+
+test-sscofpmf-aia-no-ssccfg: test-sscofpmf-aia.S $(LINK_SCRIPT)
+	$(CC) $(CFLAGS) -DSSCCFG_DISABLED $< -Wa,--noexecstack -c -o $@.o
+	$(LD) $(LDFLAGS) $@.o -o $@
+
+EXTRA_RUNS += run-test-sscofpmf-aia
+run-test-sscofpmf-aia: test-sscofpmf-aia
+	$(call run-test, $<, $(QEMU) -smp 1 \
+	  -cpu $(SSCOFPMF_AIA_CPU)$(comma)sscofpmf=true $(QEMU_OPTS)$<)
+
+EXTRA_RUNS += run-test-sscofpmf-aia-off
+run-test-sscofpmf-aia-off: test-sscofpmf-aia-off
+	$(call run-test, $<, $(QEMU) -smp 1 \
+	  -cpu $(SSCOFPMF_AIA_CPU)$(comma)sscofpmf=false $(QEMU_OPTS)$<)
+
+EXTRA_RUNS += run-test-sscofpmf-aia-no-cdeleg
+run-test-sscofpmf-aia-no-cdeleg: test-sscofpmf-aia-no-cdeleg
+	$(call run-test, $<, $(QEMU) -smp 1 \
+	  -cpu $(SSCOFPMF_AIA_NO_CDELEG_CPU)$(comma)sscofpmf=true $(QEMU_OPTS)$<)
+
+EXTRA_RUNS += run-test-sscofpmf-aia-no-ssccfg
+run-test-sscofpmf-aia-no-ssccfg: test-sscofpmf-aia-no-ssccfg
+	$(call run-test, $<, $(QEMU) -smp 1 \
+	  -cpu $(SSCOFPMF_AIA_NO_SSCCFG_CPU)$(comma)sscofpmf=true $(QEMU_OPTS)$<)
+
 run-test-crc32: test-crc32
 	$(call run-test, $<, $(QEMU) -cpu rv64$(comma)xlrbr=true $(QEMU_OPTS)$<)
 

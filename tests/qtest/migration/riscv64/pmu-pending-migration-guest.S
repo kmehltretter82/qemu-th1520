@@ -20,6 +20,18 @@
     .equ TEST_FAIL_CLEAR,         0xdead3006
     .equ TEST_FAIL_REARM_OF,      0xdead3007
     .equ TEST_FAIL_REARM_MIP,     0xdead3008
+#ifndef C910_PMU
+    .equ TEST_FAIL_SOURCE_MIE,    0xdead3009
+    .equ TEST_FAIL_SOURCE_DELEG,  0xdead300a
+    .equ TEST_FAIL_SOURCE_SIE,    0xdead300b
+    .equ TEST_FAIL_SOURCE_SIP,    0xdead300c
+    .equ TEST_FAIL_DEST_MIE,      0xdead300d
+    .equ TEST_FAIL_DEST_DELEG,    0xdead300e
+    .equ TEST_FAIL_DEST_SIE,      0xdead300f
+    .equ TEST_FAIL_DEST_SIP,      0xdead3010
+    .equ TEST_FAIL_CLEAR_SIP,     0xdead3011
+    .equ TEST_FAIL_REARM_SIP,     0xdead3012
+#endif
     .equ PMU_COUNTER3_BIT,        0x8
     .equ PMU_INITIAL_VALUE,       -0x100000
 #ifdef C910_PMU
@@ -50,6 +62,8 @@ _start:
     csrw    0x7ca, t0              /* th.mcounterinten */
 #else
     li      t1, PMU_MIP_BIT
+    csrs    mie, t1
+    csrs    mideleg, t1
     csrc    mip, t1
 #endif
     li      t1, PMU_INITIAL_VALUE
@@ -83,6 +97,20 @@ wait_for_arm:
     li      t2, PMU_MIP_BIT
     and     t1, t1, t2
     beqz    t1, fail_source_mip
+#ifndef C910_PMU
+    csrr    t1, mie
+    and     t1, t1, t2
+    beqz    t1, fail_source_mie
+    csrr    t1, mideleg
+    and     t1, t1, t2
+    beqz    t1, fail_source_deleg
+    csrr    t1, sie
+    and     t1, t1, t2
+    beqz    t1, fail_source_sie
+    csrr    t1, sip
+    and     t1, t1, t2
+    beqz    t1, fail_source_sip
+#endif
 
     li      t1, TEST_STATUS_ARMED
     fence   rw, rw
@@ -105,6 +133,20 @@ wait_for_go:
     li      t2, PMU_MIP_BIT
     and     t1, t1, t2
     beqz    t1, fail_dest_mip
+#ifndef C910_PMU
+    csrr    t1, mie
+    and     t1, t1, t2
+    beqz    t1, fail_dest_mie
+    csrr    t1, mideleg
+    and     t1, t1, t2
+    beqz    t1, fail_dest_deleg
+    csrr    t1, sie
+    and     t1, t1, t2
+    beqz    t1, fail_dest_sie
+    csrr    t1, sip
+    and     t1, t1, t2
+    beqz    t1, fail_dest_sip
+#endif
 
     /* Clear the pending level, reprogram, and prove a new timer can fire. */
     li      t0, PMU_COUNTER3_BIT
@@ -120,12 +162,17 @@ wait_for_go:
     csrr    t1, mhpmevent3
     bltz    t1, fail_clear
     li      t1, PMU_MIP_BIT
-    csrc    mip, t1
+    csrc    sip, t1
 #endif
     csrr    t1, mip
     li      t2, PMU_MIP_BIT
     and     t1, t1, t2
     bnez    t1, fail_clear
+#ifndef C910_PMU
+    csrr    t1, sip
+    and     t1, t1, t2
+    bnez    t1, fail_clear_sip
+#endif
     li      t1, PMU_INITIAL_VALUE
     csrw    mhpmcounter3, t1
     csrc    mcountinhibit, t0
@@ -146,6 +193,11 @@ wait_for_go:
     li      t2, PMU_MIP_BIT
     and     t1, t1, t2
     beqz    t1, fail_rearm_mip
+#ifndef C910_PMU
+    csrr    t1, sip
+    and     t1, t1, t2
+    beqz    t1, fail_rearm_sip
+#endif
 
     li      t1, TEST_STATUS_PASS
     j       finish
@@ -171,6 +223,38 @@ fail_rearm_of:
 fail_rearm_mip:
     li      t1, TEST_FAIL_REARM_MIP
     j       finish
+#ifndef C910_PMU
+fail_source_mie:
+    li      t1, TEST_FAIL_SOURCE_MIE
+    j       finish
+fail_source_deleg:
+    li      t1, TEST_FAIL_SOURCE_DELEG
+    j       finish
+fail_source_sie:
+    li      t1, TEST_FAIL_SOURCE_SIE
+    j       finish
+fail_source_sip:
+    li      t1, TEST_FAIL_SOURCE_SIP
+    j       finish
+fail_dest_mie:
+    li      t1, TEST_FAIL_DEST_MIE
+    j       finish
+fail_dest_deleg:
+    li      t1, TEST_FAIL_DEST_DELEG
+    j       finish
+fail_dest_sie:
+    li      t1, TEST_FAIL_DEST_SIE
+    j       finish
+fail_dest_sip:
+    li      t1, TEST_FAIL_DEST_SIP
+    j       finish
+fail_clear_sip:
+    li      t1, TEST_FAIL_CLEAR_SIP
+    j       finish
+fail_rearm_sip:
+    li      t1, TEST_FAIL_REARM_SIP
+    j       finish
+#endif
 unexpected_trap:
     li      t1, TEST_FAIL_TRAP
 

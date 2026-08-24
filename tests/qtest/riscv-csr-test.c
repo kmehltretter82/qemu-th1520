@@ -31,9 +31,12 @@
 #define CSR_MSTATUS         0x300
 #define CSR_MISA            0x301
 #define CSR_MIDELEG         0x303
+#define CSR_MIE             0x304
 #define CSR_MCOUNTINHIBIT   0x320
 #define CSR_MIP             0x344
 #define CSR_MHPMEVENT3      0x323
+#define CSR_SIE             0x104
+#define CSR_SIP             0x144
 #define CSR_SATP            0x180
 #define CSR_VSTART          0x008
 #define CSR_VXSAT           0x009
@@ -62,6 +65,7 @@
 #define PMU_TEST_READY       1
 #define PMU_TEST_ARMED       2
 #define PMU_TEST_PASS        3
+#define LCOFI_BIT             (1ULL << 13)
 
 typedef struct PMUMigrationTest {
     const char *machine_args;
@@ -147,6 +151,12 @@ static uint64_t get_csr(QTestState *qts, uint32_t csrno)
 static void set_csr(QTestState *qts, uint32_t csrno, uint64_t val)
 {
     g_assert_cmpint(qtest_csr_call(qts, "set_csr", 0, csrno, &val), ==, 0);
+}
+
+static void assert_csr_mask(QTestState *qts, uint32_t csrno, uint64_t mask,
+                            uint64_t expected)
+{
+    g_assert_cmphex(get_csr(qts, csrno) & mask, ==, expected);
 }
 
 static void wait_for_migration_complete(QTestState *qts)
@@ -320,6 +330,42 @@ static void run_test_thead_c910_csrs(void)
     qtest_quit(qts);
 }
 
+static void run_test_sscofpmf_interrupt_csrs(void)
+{
+    QTestState *qts;
+
+    qts = qtest_init("-machine virt -cpu veyron-v1");
+    set_csr(qts, CSR_MIDELEG, 0);
+    set_csr(qts, CSR_MIE, LCOFI_BIT);
+    set_csr(qts, CSR_MIP, LCOFI_BIT);
+    assert_csr_mask(qts, CSR_MIE, LCOFI_BIT, LCOFI_BIT);
+    assert_csr_mask(qts, CSR_MIP, LCOFI_BIT, LCOFI_BIT);
+
+    set_csr(qts, CSR_MIDELEG, LCOFI_BIT);
+    assert_csr_mask(qts, CSR_MIDELEG, LCOFI_BIT, LCOFI_BIT);
+    assert_csr_mask(qts, CSR_SIE, LCOFI_BIT, LCOFI_BIT);
+    assert_csr_mask(qts, CSR_SIP, LCOFI_BIT, LCOFI_BIT);
+
+    set_csr(qts, CSR_SIE, 0);
+    set_csr(qts, CSR_SIP, 0);
+    assert_csr_mask(qts, CSR_MIE, LCOFI_BIT, 0);
+    assert_csr_mask(qts, CSR_MIP, LCOFI_BIT, 0);
+    qtest_quit(qts);
+
+    qts = qtest_init("-machine virt -cpu sifive-u54");
+    set_csr(qts, CSR_MIDELEG, LCOFI_BIT);
+    set_csr(qts, CSR_MIE, LCOFI_BIT);
+    set_csr(qts, CSR_MIP, LCOFI_BIT);
+    set_csr(qts, CSR_SIE, LCOFI_BIT);
+    set_csr(qts, CSR_SIP, LCOFI_BIT);
+    assert_csr_mask(qts, CSR_MIDELEG, LCOFI_BIT, 0);
+    assert_csr_mask(qts, CSR_MIE, LCOFI_BIT, 0);
+    assert_csr_mask(qts, CSR_MIP, LCOFI_BIT, 0);
+    assert_csr_mask(qts, CSR_SIE, LCOFI_BIT, 0);
+    assert_csr_mask(qts, CSR_SIP, LCOFI_BIT, 0);
+    qtest_quit(qts);
+}
+
 static void run_test_pmu_migration(const void *opaque)
 {
     const PMUMigrationTest *test = opaque;
@@ -404,6 +450,8 @@ int main(int argc, char **argv)
     if (qtest_has_machine("virt")) {
         qtest_add_func("/cpu/csr", run_test_csr);
         qtest_add_func("/cpu/csr/seed", run_test_seed_csr);
+        qtest_add_func("/cpu/sscofpmf-interrupt-csrs",
+                       run_test_sscofpmf_interrupt_csrs);
         qtest_add_data_func("/cpu/fixed-pmu-migration",
                             &riscv_fixed_pmu_migration,
                             run_test_pmu_migration);
