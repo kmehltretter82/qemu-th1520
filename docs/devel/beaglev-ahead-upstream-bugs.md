@@ -794,11 +794,13 @@ sanitizer executions pass.
 
 QEMU still does not know the TH1520 synthesis-specific physical PMA ranges.
 The generic ranges in openC910's generated `sysmap.h` do not match the TH1520
-memory map and must not be copied into the board model.  Until authoritative
-integration data or physical probes establish the map, MAEE-disabled and bare
-accesses use QEMU's ordinary memory attributes.  This explicit limitation is
-tracked under `CPU-004`; it is not evidence that the local fix is complete
-silicon emulation.
+memory map and must not be copied into the board model.  The branch now has an
+immutable eight-region integration path and an explicitly synthetic 38-trap
+M/S/U regression for direct, Bare and Sv39 selection.  The BeagleV machine
+leaves that table invalid until authoritative integration data or physical
+probes establish its values, so MAEE-disabled and Bare accesses retain QEMU's
+ordinary attributes by design.  This explicit limitation is tracked under
+`CPU-004`; plumbing coverage is not evidence of complete silicon emulation.
 
 The upstream baseline has no C910 CPU or XTheadMaee implementation, so it
 cannot reproduce this defect.  Keep the fix and corrected test in the future

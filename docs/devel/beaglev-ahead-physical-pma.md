@@ -1,6 +1,7 @@
 # BeagleV Ahead / TH1520 physical PMA design and probe plan
 
-Status: blocked on TH1520 integration evidence or physical-board results,
+Status: physical-PMA plumbing and synthetic validation implemented; exact
+TH1520 table blocked on integration evidence or physical-board results,
 2026-08-24
 
 This document defines how QEMU should model the C910 physical system map used
@@ -75,10 +76,10 @@ The board's address map alone is insufficient.  A reserved hole can have a
 normal PMA, a mapped ROM can be cacheable, and one sysmap region can cover a
 mixture of implemented and unimplemented bus targets.
 
-## QEMU implementation shape
+## QEMU implementation
 
-Implement the hardware table as C910 integration data, not by asking QEMU
-whether an address currently resolves to RAM or MMIO:
+The branch implements the hardware table as C910 integration data.  It does
+not ask QEMU whether an address currently resolves to RAM or MMIO:
 
 ```c
 typedef struct RISCVTHeadPMARegion {
@@ -87,15 +88,16 @@ typedef struct RISCVTHeadPMARegion {
 } RISCVTHeadPMARegion;
 ```
 
-The C910 configuration should contain eight entries, a default attribute and
-an explicit validity flag.  The TH1520 SoC must supply the values before CPU
-realization.  A generic ``thead-c910`` CPU must not silently inherit either
-the OpenC910 fixture or the TH1520 table; integrations can differ.
+The CPU configuration contains eight entries, a default attribute and an
+explicit validity flag.  A generic ``thead-c910`` CPU and the BeagleV Ahead
+machine both leave it invalid, so neither silently inherits the OpenC910
+fixture or guessed TH1520 data.  Once established, the TH1520 SoC must supply
+its values before CPU realization because integrations can differ.
 
-The lookup and permission application belong in one shared helper in the
+One shared helper now performs lookup and permission application in the
 target's address-translation path.  Every successful first-stage translation
-path must pass through it rather than duplicating the selection around the
-page-table walker:
+path passes through it rather than duplicating selection around the page-table
+walker:
 
 * M-mode, MMU-disabled and ``satp.MODE=Bare`` returns must attach the physical
   attribute before returning from ``get_physical_address()``;
@@ -110,15 +112,13 @@ page-table walker:
   straddle two physical attributes.  Validate this assumption if QEMU is built
   with a target page larger than 4 KiB.
 
-The helper must apply SO instruction permission for both PTE-selected and
-physical attributes.  In particular, the existing direct/Bare returns must
-not install executable mappings before the physical attribute is considered.
-Likewise, ``riscv_thead_maee_check()`` currently returns success immediately
-when MAEE is clear.  That gate must be replaced by the selected full-TLB
-attribute's validity: physical C=0 AMO and physical SO vector restrictions are
-active precisely when the physical table supplied that entry, even though
-MAEE is clear.  Scalar alignment already consumes the retained TLB attribute
-and should remain on the same authority.
+The helper applies SO instruction permission for both PTE-selected and
+physical attributes, so direct/Bare returns cannot install an executable
+mapping before considering the physical attribute.  The AMO/vector check no
+longer returns early merely because MAEE is clear: the selected full-TLB
+attribute's validity is authoritative.  Physical C=0 AMO and physical SO
+vector restrictions are therefore active precisely when the physical table
+supplied that entry.  Scalar alignment consumes the same retained attribute.
 
 An invalid/unconfigured table should preserve today's explicit incomplete
 behavior: PTE bits are ignored with MAEE clear, but no physical attribute is
@@ -126,16 +126,40 @@ marked valid.  It must emit no invented SO/C/B/SH/SEC behavior.  Once TH1520
 values are supplied, add a machine-version compatibility rule before changing
 them in a released machine.
 
-Do not make the table a mutable guest property.  OpenC910's generated C910
-sysmap is synthesis input rather than an architected CSR bank.  A test-only
-QOM override may be useful for unit coverage, but it must be clearly named and
-must not become part of the BeagleV Ahead guest ABI.
+The table is not a mutable guest property.  OpenC910's generated C910 sysmap
+is synthesis input rather than an architected CSR bank.  The experimental TCG
+CPU option used by tests has this form:
 
-## Regression matrix once values are known
+``x-thead-pma=<upper>:<attr>/.../default:<attr>``
 
-Add a freestanding payload distinct from the existing PTE-attribute test.  It
-must run with ``satp.MODE=Bare`` and again with Sv39 plus MAEE clear, and verify
-that both paths classify the same physical sample addresses.
+It requires exactly eight strictly increasing, 4 KiB-aligned physical upper
+addresses within the CPU's physical-address width and a five-bit attribute
+for every region and the default.  It is rejected without XTheadMaee or TCG.
+The option exists to validate integration plumbing and is not set by the
+BeagleV Ahead machine or part of its guest ABI.
+
+## Synthetic regression and remaining hardware matrix
+
+``test-thead-c910-physical-pma`` is a freestanding payload distinct from the
+PTE-attribute test.  Its linker places pages immediately below and at all
+eight synthetic upper bounds, followed by a default-region page.  It checks
+38 exact traps and successful counterparts across:
+
+* M-mode direct access and S-mode ``satp.MODE=Bare`` with MAEE set and clear;
+* S/U Sv39 with MAEE set, where deliberately contrary PTE attributes win;
+* S/U Sv39 with MAEE clear, where the physical table wins;
+* normal, strong-order and C=0 non-cacheable regions, plus the default;
+* strong-order scalar alignment, vector load and instruction-fetch faults;
+* C=0 AMO.W access faults while LR.W/SC.W remains permitted; and
+* first-fill and cached full-TLB paths with exact causes and ``tval`` values.
+
+The configuration is intentionally synthetic and proves QEMU plumbing only.
+It is not a candidate TH1520 table.  The committed focused test passes normal,
+dependency-minimal and ASan/UBSan builds; ASan prints its expected
+``makecontext`` warning.
+
+Once real values are known, adapt a hardware-safe version to classify the
+same physical sample addresses in Bare mode and Sv39 with MAEE clear.
 
 For disposable RAM and SRAM samples, cover:
 
@@ -154,12 +178,11 @@ a specifically reviewed scratch target with trap recovery and a proven reset
 path.  A bus access fault identifies the target response, not the PMA, and
 must not be used to infer an attribute bit.
 
-Qtests should configure a synthetic eight-region table and cover realization,
-the lookup algorithm, every boundary, the default, reset invariance and
-post-migration TLB refill.  TCG tests should then prove the observable SO/C
-rules in M/S/U modes, MAEE on/off, Bare/Sv39, first-miss and cached paths.
-B/SH/SEC require a separate transport or ``MemTxAttrs`` test only after their
-TH1520 meaning is established.
+The TCG test covers realization, lookup, every boundary, the default and the
+observable SO/C rules in M/S/U modes, MAEE on/off, Bare/Sv39, first-miss and
+cached paths.  Reset invariance and post-migration TLB refill remain to be
+added.  B/SH/SEC require a separate transport or ``MemTxAttrs`` test only
+after their TH1520 meaning is established.
 
 ## Physical-board capture procedure
 

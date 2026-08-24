@@ -208,7 +208,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults and MAEE-disabled PTE-bit ignore behavior are implemented; the TH1520 physical PMA map, cache/order/bus effects and PMU fidelity remain | Establish the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -523,10 +523,13 @@ data-side fill suppresses executable permission for a strong-order mapping,
 ensuring a later instruction fetch re-walks and raises the required
 instruction access fault.  The RTL page-fault expression does not reserve
 PTE[63:59]: when MXSTATUS.MAEE is clear, ``ct_mmu_ptw.v`` ignores them and
-selects synthesis-specific physical-system-map flags.  QEMU now matches the
-PTE ignore behavior; the actual TH1520 physical PMA ranges remain deliberately
-unmodeled until authoritative integration evidence or hardware establishes
-them.
+selects synthesis-specific physical-system-map flags.  QEMU now matches that
+selection with an immutable eight-region table plus default.  Direct M-mode,
+MMU-disabled, Bare and final translated physical-address paths share one
+lookup; MAEE-enabled PTE attributes retain precedence.  An unconfigured table
+remains explicitly invalid, so the BeagleV Ahead machine does not invent the
+actual TH1520 ranges while authoritative integration evidence or hardware is
+still absent.
 
 The freestanding payload constructs normal, non-cacheable, strong-order and
 non-shareable aliases and checks M-owned MAEE transitions, S-mode traps,
@@ -546,6 +549,16 @@ remains green.  The complete normal RISC-V TCG suite passes.  The normal qtest
 gate passes 98 board and three CSR subtests; minimal and sanitizer each pass
 their 97 available board and one CSR subtest.  QEMU still does not claim
 cache, buffering, shareability, security-bus or actual memory-order effects.
+
+A separate physical-PMA payload uses only an explicitly experimental
+synthetic CPU configuration.  Its custom linker places pages immediately
+below and at every one of eight upper boundaries and in the default region.
+It checks 38 exact traps and successful counterparts across direct M mode,
+S-mode Bare, S/U Sv39, MAEE on/off and first/cached TLB paths.  It proves
+physical SO scalar/vector/fetch restrictions, C=0 AMO.W faults with LR.W/SC.W
+still allowed, PTE precedence and physical fallback.  Normal,
+dependency-minimal and ASan/UBSan focused runs pass.  These values are test
+fixtures, not a proposed TH1520 map.
 
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
@@ -821,13 +834,16 @@ strong-order type, require a strong-order instruction access fault, reject
 AMO.W/AMO.D RMW on C=0 while allowing LR.W/SC.W and LR.D/SC.D, reject
 strong-order vector accesses across all four element widths and the unit,
 stride, index and two-field segment paths, and cover segment
-fault-only-first behavior.  When MAEE is clear, PTE[63:59] is ignored; the
-TH1520 physical PMA map that replaces it remains open.
+fault-only-first behavior.  When MAEE is clear, PTE[63:59] is ignored and the
+new eight-region integration path supplies physical attributes for direct,
+Bare and Sv39 accesses.  A 38-trap synthetic M/S/U test covers every boundary,
+the default and PTE-versus-physical precedence; the real TH1520 boundaries and
+attributes remain open.
 P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
 privilege combinations, B/SH/SEC effects, remaining scalar/FP/masked/vector
 forms and boundary combinations, cache/CMO and actual ordering effects,
-physical-map PMAs, reset-vector/security behavior, randomized differential
-testing and physical comparison.
+physical-map provenance and migration/reset refills, reset-vector/security
+behavior, randomized differential testing and physical comparison.
 
 ### Phase 3 — XTheadVector / Vector 0.7.1
 
