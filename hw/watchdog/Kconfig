@@ -22,6 +22,10 @@ config K230_WDT
     bool
     select PTIMER
 
+config DW_APB_WDT
+    bool
+    select PTIMER
+
 config WDT_SBSA
     bool
 

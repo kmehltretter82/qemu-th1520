@@ -1802,6 +1802,7 @@ F: hw/riscv/th1520.c
 F: hw/ssi/dw_apb_ssi.c
 F: hw/timer/dw_apb_timer.c
 F: hw/timer/th1520_pwm.c
+F: hw/watchdog/dw_apb_wdt.c
 F: include/hw/char/dw_apb_uart.h
 F: include/hw/dma/dw_axi_dmac.h
 F: include/hw/gpio/dw_apb_gpio.h
@@ -1813,6 +1814,7 @@ F: include/hw/riscv/th1520.h
 F: include/hw/ssi/dw_apb_ssi.h
 F: include/hw/timer/dw_apb_timer.h
 F: include/hw/timer/th1520_pwm.h
+F: include/hw/watchdog/dw_apb_wdt.h
 F: target/riscv/*theadvector*
 F: target/riscv/tcg/*theadvector*
 F: target/riscv/tcg/th_csr.c
