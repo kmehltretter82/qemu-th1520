@@ -222,6 +222,7 @@
 #define C900_CLINT_QOM_PATH        "/machine/soc/clint"
 #define C900_PLIC_QOM_PATH         "/machine/soc/plic"
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
+#define TH1520_AP_RESET_QOM_PATH   "/machine/soc/ap-reset"
 #define TH1520_PWM_QOM_PATH        "/machine/soc/pwm"
 
 #define TH1520_UART0_IRQ           36
@@ -1846,6 +1847,38 @@ static void test_ap_reset_registers(void)
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x004), ==, 0x3);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x0cc), ==, 0x2);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0x8);
+    qtest_quit(qts);
+}
+
+static void test_ap_reset_outputs(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_AP_RESET_QOM_PATH,
+                                  "peripheral-reset");
+
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x03c, 0x2);
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 2));
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x03c, 0x3);
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x1);
+    g_assert_true(qtest_get_irq(qts, 2));
+    g_assert_false(qtest_get_irq(qts, 0));
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x3);
+    g_assert_false(qtest_get_irq(qts, 2));
+
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0c0, 0x2);
+    g_assert_true(qtest_get_irq(qts, 0));
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0c0, 0x3);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_system_reset(qts);
+    for (unsigned int i = 0; i < 3; i++) {
+        g_assert_false(qtest_get_irq(qts, i));
+    }
     qtest_quit(qts);
 }
 
@@ -4447,6 +4480,43 @@ static void test_th1520_pwm_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_ap_reset_peripherals(void)
+{
+    const uint32_t ctrl = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_PWM_QOM_PATH, "pwm");
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+
+    th1520_pwm_stage(qts, 0, ctrl, 10, 3);
+    th1520_pwm_start(qts, 0, ctrl);
+    g_assert_true(qtest_get_irq(qts, 0));
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0c0, 0x2);
+    assert_th1520_pwm_reset_state(qts);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x0c0, 0x3);
+    assert_th1520_pwm_reset_state(qts);
+
+    qtest_writel(qts, TH1520_TIMER0_3_BASE + DW_TIMER_LOAD_COUNT, 10);
+    qtest_writel(qts, TH1520_TIMER0_3_BASE + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_writel(qts, TH1520_TIMER4_7_BASE + DW_TIMER_LOAD_COUNT, 10);
+    qtest_writel(qts, TH1520_TIMER4_7_BASE + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_clock_step(qts, 2 * TH1520_TIMER_TICK_NS + 1);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x03c, 0x2);
+    assert_dw_timer_reset_state(qts, TH1520_TIMER0_3_BASE);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_TIMER4_7_BASE + DW_TIMER_CONTROL),
+                    ==, DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x03c, 0x3);
+
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x1);
+    assert_dw_timer_reset_state(qts, TH1520_TIMER4_7_BASE);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x040, 0x3);
+
+    qtest_quit(qts);
+}
+
 static void test_dw_i2c_migration(void)
 {
     static const uint8_t contents[] = { 0xa5, 0x5a };
@@ -4707,6 +4777,8 @@ static void test_ap_cpr_migration(void)
 
     src = qtest_init("-machine beaglev-ahead -bios none");
     dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(dst, TH1520_AP_RESET_QOM_PATH,
+                                  "peripheral-reset");
 
     g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
     qtest_clock_step(src, TH1520_PLL_LOCK_TIME_NS);
@@ -4724,6 +4796,7 @@ static void test_ap_cpr_migration(void)
     qtest_writel(src, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG, 0);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x004, 0x1f);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x1b0, 1);
+    qtest_writel(src, TH1520_AP_RESET_BASE + 0x0c0, 0x2);
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -4742,6 +4815,10 @@ static void test_ap_cpr_migration(void)
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x004), ==,
                     0x1f);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x1b0), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x0c0), ==, 2);
+    g_assert_true(qtest_get_irq(dst, 0));
+    g_assert_false(qtest_get_irq(dst, 1));
+    g_assert_false(qtest_get_irq(dst, 2));
 
     qtest_clock_step(dst, TH1520_PLL_LOCK_TIME_NS - 10000 - 1);
     g_assert_cmphex(qtest_readl(dst,
@@ -5303,6 +5380,8 @@ int main(int argc, char **argv)
                        test_ap_clock_registers);
         qtest_add_func("/beaglev-ahead/cpr/reset-registers",
                        test_ap_reset_registers);
+        qtest_add_func("/beaglev-ahead/cpr/reset-outputs",
+                       test_ap_reset_outputs);
         qtest_add_func("/beaglev-ahead/cpr/migration",
                        test_ap_cpr_migration);
         qtest_add_func("/beaglev-ahead/padctrl/registers",
@@ -5339,6 +5418,8 @@ int main(int argc, char **argv)
                        test_th1520_pwm_waveform);
         qtest_add_func("/beaglev-ahead/th1520-pwm/migration",
                        test_th1520_pwm_migration);
+        qtest_add_func("/beaglev-ahead/cpr/peripheral-resets",
+                       test_ap_reset_peripherals);
         qtest_add_func("/beaglev-ahead/dw-timer/registers",
                        test_dw_timer_registers);
         qtest_add_func("/beaglev-ahead/dw-timer/timing",
