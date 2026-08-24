@@ -16,8 +16,8 @@ The current conservative tally is:
 * **11 proposed new upstream report units** (`UQ-001` through `UQ-011`);
 * **1 matching public upstream report** (`UQ-K001`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **4 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L004`), which must not be reported as existing
+* **5 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L005`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -110,6 +110,16 @@ reachable.  It is therefore a local patch-series defect, not a defect that can
 be reproduced on released upstream QEMU.  Parking secondary harts in the
 three board payloads also fixed test-data races; that is test hygiene rather
 than another emulator report unit.
+
+The expanded MAEE width/form audit leaves the proposed-report tally at 11 and
+adds local finding `UQ-L005`.  The branch had treated PTE[63:59] as standard
+reserved bits whenever MXSTATUS.MAEE was clear.  Pinned openC910 RTL instead
+shows that C910 always owns those bits: it uses them with MAEE set and ignores
+them in favor of synthesis-specific physical-system-map attributes otherwise.
+The upstream baseline has neither a C910 CPU nor XTheadMaee, so this cannot be
+reported as a regression in released upstream QEMU.  The missing TH1520
+physical PMA ranges are fidelity scope and remain in ledger item `CPU-004`,
+not a sixth local implementation defect.
 
 The 2026-08-24 USB-host milestone added two report units.  Unlike the new
 TH1520 wrappers, `UQ-009` and `UQ-010` affect the pre-existing generic DWC3 and
@@ -755,6 +765,45 @@ state, and upstream does not yet contain this XTheadVector implementation.
 Treat the gate as a required part of the future XTheadVector patch series and
 do not file it as a released-upstream defect unless a baseline-only reproducer
 is found.
+
+### UQ-L005: the local C910 model faulted on MAEE PTE bits while MAEE was clear
+
+Status: **FIXED LOCAL CPU-MODEL DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The branch initially made PTE[63:59] legal only while MXSTATUS.MAEE was set.
+Clearing MAEE therefore reinterpreted the same C910 page-table entry as a
+standard Sv39 entry and raised a page fault for its high attribute bits.  The
+test encoded that provisional assumption, so the implementation and its
+regression agreed with each other but not with the core RTL.
+
+At pinned openC910 commit
+`b91c90914c19f114d35c8f6b73408eb241ed847c`, the page-fault expression in
+`C910_RTL_FACTORY/gen_rtl/mmu/rtl/ct_mmu_ptw.v` does not test PTE[63:59].
+The `ptw_ref_pma` mux takes those bits when `cp0_mmu_maee` is asserted and
+takes `sysmap_mmu_flg3` when it is clear.  The MMU-off data and instruction
+TLB paths independently source the same physical system-map flags.  Thus the
+five bits remain owned by XTheadMaee in either state; disabling MAEE changes
+the selected attributes rather than PTE validity.
+
+The worktree now excludes those bits from reserved/PBMT/NAPOT processing for
+an XTheadMaee-capable first-stage walk regardless of the current MAEE value,
+but applies their attributes only while MAEE is enabled.  The freestanding
+payload clears MAEE, accesses four aliases with distinct PTE attributes and
+requires identical successful data reads with no trap.  Normal, minimal and
+sanitizer executions pass.
+
+QEMU still does not know the TH1520 synthesis-specific physical PMA ranges.
+The generic ranges in openC910's generated `sysmap.h` do not match the TH1520
+memory map and must not be copied into the board model.  Until authoritative
+integration data or physical probes establish the map, MAEE-disabled and bare
+accesses use QEMU's ordinary memory attributes.  This explicit limitation is
+tracked under `CPU-004`; it is not evidence that the local fix is complete
+silicon emulation.
+
+The upstream baseline has no C910 CPU or XTheadMaee implementation, so it
+cannot reproduce this defect.  Keep the fix and corrected test in the future
+C910 series.  Do not file it as an upstream QEMU bug unless an independent
+problem is found in a pre-existing CPU's standard Sv39 handling.
 
 The following are also not counted as upstream QEMU bugs at present:
 

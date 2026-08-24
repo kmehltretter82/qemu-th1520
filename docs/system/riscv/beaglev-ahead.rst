@@ -202,12 +202,17 @@ The XTheadVector engine covers the frozen instruction set, CSR/status layout,
 debug register file, reset, and migration state.  Current regression coverage
 is an architectural smoke test rather than the exhaustive and differential
 coverage needed to claim silicon equivalence.  MAEE PTE bits 63:59 are carried
-through translation.  A strong-order page enforces post-translation natural
-alignment for ordinary scalar accesses and rejects instruction fetches;
-non-cacheable instruction fetch remains valid.  AMO read-modify-write
-operations require a cacheable mapping, while LR/SC remains valid there.
-XTheadVector loads and stores reject strong-order mappings; fault-only-first
-loads trap on element zero and shorten ``vl`` for a later denied element.
+through translation while MAEE is enabled.  When MAEE is clear, C910 ignores
+those PTE bits and obtains attributes from its physical system map; QEMU
+matches the ignore behavior but does not yet model the unknown TH1520 physical
+PMA ranges.  A strong-order page enforces post-translation natural alignment
+for ordinary scalar accesses and rejects instruction fetches; non-cacheable
+instruction fetch remains valid.  AMO read-modify-write operations require a
+cacheable mapping, while LR/SC remains valid there.  XTheadVector loads and
+stores reject strong-order mappings.  Tests cover all four element widths and
+unit-stride, strided, indexed and two-field segment forms; segment
+fault-only-first loads trap on a denied field in element zero and shorten
+``vl`` for a later denied segment.
 Ratified-RVV translation is gated off on this XTheadVector-only CPU even where
 the instruction encodings overlap.  Cacheability, buffering, shareability,
 security-bus and actual ordering effects are not modeled.  Some custom CSRs

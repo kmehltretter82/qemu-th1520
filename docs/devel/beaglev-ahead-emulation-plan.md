@@ -203,7 +203,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing | Implement XTheadVector / RVV 0.7.1 separately from RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE acceptance/migration, strong-order scalar alignment and instruction-access faults are implemented; cache/order/bus effects and PMU fidelity remain | Finish CSR probes, remaining memory-attribute effects, exact counters/events and hardware comparison |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults and MAEE-disabled PTE-bit ignore behavior are implemented; the TH1520 physical PMA map, cache/order/bus effects and PMU fidelity remain | Establish the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -239,7 +239,7 @@ the roadmap as a claim of completion.  At the current milestone it contains:
 * C910 scalar identity, including the T-Head vendor ID and exact zero
   architecture/implementation IDs, 40-bit physical-address constraints, the
   TH1520 no-PMP configuration, Zfh and its Zfhmin dependency, the initial
-  custom CSR bank, migration state, provisional MAEE PTE acceptance, and
+  custom CSR bank, migration state, MAEE PTE ownership/translation, and
   dynamic MXSTATUS/SXSTATUS ``MM`` control of standard integer/FP plus every
   modeled scalar XThead memory path.  The MAEE page attributes survive the
   page walk: strong-order mappings require post-translation scalar alignment
@@ -247,7 +247,10 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   mappings remain executable.  Atomic read-modify-write operations reject a
   non-cacheable mapping while LR/SC remains valid, and XTheadVector accesses
   reject strong-order mappings, including fault-only-first truncation after a
-  valid first element.  Guarded Sv39 coverage checks these rules plus
+  valid first element.  With MAEE clear, the five PTE bits are ignored as the
+  RTL requires; QEMU does not yet substitute the TH1520 physical-system-map
+  attributes because that SoC-specific map is not established.  Guarded Sv39
+  coverage checks these rules plus
   alignment-versus-page-fault priority in S and U modes, including delegated
   traps;
 * the C9xx PMU's 16 programmable counters, raw-selector WARL rules,
@@ -507,30 +510,37 @@ board-compatible subset is the pruning gate.
 
 The following MAEE milestone is grounded in openC910 RTL commit
 ``b91c90914c19f114d35c8f6b73408eb241ed847c`` and mainline Linux's T-Head
-memory-type encodings.  QEMU now carries PTE bits 63:59 through the RISC-V
-page walk and uses the strong-order bit to request page-dependent natural
-alignment from the TCG TLB.  RISC-V uses the alignment-aware TLB-fill hook so
-the first access to a new mapping and a cross-page access cannot bypass that
-rule.  A data-side fill suppresses executable permission for a strong-order
-mapping, ensuring a later instruction fetch re-walks and raises the required
-instruction access fault.  A new payload constructs normal, non-cacheable,
-strong-order and non-shareable aliases and checks M-owned MAEE transitions,
-S-mode traps, delegated U-mode traps, exact trap values, first/second-page
-attribute asymmetry, data-to-instruction TLB reuse and MAEE-disabled reserved
-PTE behavior.  The continuation carries the attributes in full TLB entries,
-requires C=1 for AMO read-modify-write operations without changing LR/SC,
-and rejects strong-order XTheadVector loads and stores.  Fault-only-first
-loads trap on a denied element zero and otherwise shorten ``vl`` before a
-later strong-order element.  The payload parks secondary harts, now checks 16
-exact traps and also distinguishes the legacy vector-store encoding from its
+memory-type encodings.  QEMU carries PTE bits 63:59 through the RISC-V page
+walk and uses the strong-order bit to request page-dependent natural alignment
+from the TCG TLB.  RISC-V uses the alignment-aware TLB-fill hook so the first
+access to a new mapping and a cross-page access cannot bypass that rule.  A
+data-side fill suppresses executable permission for a strong-order mapping,
+ensuring a later instruction fetch re-walks and raises the required
+instruction access fault.  The RTL page-fault expression does not reserve
+PTE[63:59]: when MXSTATUS.MAEE is clear, ``ct_mmu_ptw.v`` ignores them and
+selects synthesis-specific physical-system-map flags.  QEMU now matches the
+PTE ignore behavior; the actual TH1520 physical PMA ranges remain deliberately
+unmodeled until authoritative integration evidence or hardware establishes
+them.
+
+The freestanding payload constructs normal, non-cacheable, strong-order and
+non-shareable aliases and checks M-owned MAEE transitions, S-mode traps,
+delegated U-mode traps, exact trap values, first/second-page attribute
+asymmetry, data-to-instruction TLB reuse and the MAEE-disabled PTE-bit rule.
+It requires C=1 for 32- and 64-bit AMO read-modify-write operations without
+changing LR/SC, and rejects strong-order XTheadVector loads and stores at 8-,
+16-, 32- and 64-bit element widths.  Unit-stride, strided, indexed and
+two-field segment forms are covered.  Segment fault-only-first loads trap when
+field one of element zero is denied and otherwise shorten ``vl`` before a
+later strong-order segment.  The payload parks secondary harts, checks 31
+exact traps, and distinguishes the legacy vector-store encoding from its
 overlapping ratified-RVV encoding.  It passes in the normal,
 dependency-minimal and ASan/UBSan builds together with the older MXSTATUS.MM
 and guarded-priority payloads; generic Zicclsm enabled/disabled coverage also
-remains green.  The complete normal RISC-V TCG suite passes in parallel after
-all three board payloads were made hart-0-only.  The normal qtest gate passes
-98 board and three CSR subtests; minimal and sanitizer each pass their 97
-available board and one CSR subtest.  QEMU still does not claim cache,
-buffering, shareability, security-bus or actual memory-order effects.
+remains green.  The complete normal RISC-V TCG suite passes.  The normal qtest
+gate passes 98 board and three CSR subtests; minimal and sanitizer each pass
+their 97 available board and one CSR subtest.  QEMU still does not claim
+cache, buffering, shareability, security-bus or actual memory-order effects.
 
 Four GMAC tests cover the exact DT/clock/APB/MDIO contract, masked APB writes,
 both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS, extension-word
@@ -803,11 +813,16 @@ M/S/U privilege, delegated traps and a mapped/unmapped page boundary.  MAEE
 tests additionally distinguish normal, non-cacheable, strong-order and
 non-shareable mappings, enforce post-translation scalar alignment on the
 strong-order type, require a strong-order instruction access fault, reject
-AMO RMW on C=0 while allowing LR/SC, and reject strong-order vector accesses.
+AMO.W/AMO.D RMW on C=0 while allowing LR.W/SC.W and LR.D/SC.D, reject
+strong-order vector accesses across all four element widths and the unit,
+stride, index and two-field segment paths, and cover segment
+fault-only-first behavior.  When MAEE is clear, PTE[63:59] is ignored; the
+TH1520 physical PMA map that replaces it remains open.
 P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
-privilege combinations, B/SH/SEC effects, every access width/form, cache/CMO
-and actual ordering effects, physical-map PMAs, reset-vector/security behavior,
-randomized differential testing and physical comparison.
+privilege combinations, B/SH/SEC effects, remaining scalar/FP/masked/vector
+forms and boundary combinations, cache/CMO and actual ordering effects,
+physical-map PMAs, reset-vector/security behavior, randomized differential
+testing and physical comparison.
 
 ### Phase 3 — XTheadVector / Vector 0.7.1
 
@@ -835,12 +850,14 @@ smoke test are present.  Vector loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
 RVV translation is explicitly gated on Zve32x so overlapping store encodings
-reach the legacy decoder, and MAEE coverage includes strong-order unit-stride
-faults plus a fault-only-first page crossing that shortens ``vl``.  P3 is not
-closed: per-instruction boundaries, randomized differential testing, broader
-fault-only-first/segment page-priority cases, OS context/signal/ptrace
-coverage, XTheadZvamo availability and physical-silicon comparison remain
-open.
+reach the legacy decoder.  MAEE coverage includes strong-order faults at every
+element width through unit-stride, strided, indexed and two-field segment
+paths, plus segment fault-only-first crossings that distinguish element-zero
+traps from later-element ``vl`` truncation.  P3 is not closed:
+per-instruction/mask/``vstart`` boundaries, randomized differential testing,
+broader segment/index/fault-only-first page-priority combinations, OS
+context/signal/ptrace coverage, XTheadZvamo availability and physical-silicon
+comparison remain open.
 
 ### Phase 4 — authentic reset and boot
 
