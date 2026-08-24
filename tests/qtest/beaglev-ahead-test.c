@@ -326,6 +326,7 @@
 #define C900_CLINT_QOM_PATH        "/machine/soc/clint"
 #define C900_PLIC_QOM_PATH         "/machine/soc/plic"
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
+#define TH1520_AP_CLOCK_QOM_PATH   "/machine/soc/ap-clock"
 #define TH1520_AP_RESET_QOM_PATH   "/machine/soc/ap-reset"
 #define TH1520_MISCSYS_QOM_PATH    "/machine/soc/miscsys"
 #define TH1520_MBOX_QOM_PATH       "/machine/soc/mbox"
@@ -423,6 +424,9 @@
 #define TH1520_MISCSYS_USB_SWRST   0x014
 #define TH1520_MISCSYS_BUS_CLK     0x100
 #define TH1520_MISCSYS_USB_CLK     0x104
+#define TH1520_MISCSYS_EMMC_CLK    0x108
+#define TH1520_MISCSYS_SDIO0_CLK   0x10c
+#define TH1520_MISCSYS_SDIO1_CLK   0x110
 
 #define TH1520_USB_GCTL            0xc110
 #define TH1520_USB_GSNPSID         0xc120
@@ -721,6 +725,60 @@ typedef struct TH1520ResetTestOutput {
     uint32_t offset;
     uint32_t deasserted;
 } TH1520ResetTestOutput;
+
+typedef struct TH1520ClockGateTestOutput {
+    uint32_t offset;
+    uint32_t mask;
+} TH1520ClockGateTestOutput;
+
+static const TH1520ClockGateTestOutput
+th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_COUNT] = {
+    [TH1520_AP_CLOCK_GATE_EMMC_SDIO] = { 0x204, BIT(30) },
+    [TH1520_AP_CLOCK_GATE_GMAC1] = { 0x204, BIT(26) },
+    [TH1520_AP_CLOCK_GATE_PADCTRL1] = { 0x204, BIT(24) },
+    [TH1520_AP_CLOCK_GATE_PADCTRL0] = { 0x204, BIT(22) },
+    [TH1520_AP_CLOCK_GATE_GMAC_AXI] = { 0x204, BIT(21) },
+    [TH1520_AP_CLOCK_GATE_GPIO3] = { 0x204, BIT(20) },
+    [TH1520_AP_CLOCK_GATE_GMAC0] = { 0x204, BIT(19) },
+    [TH1520_AP_CLOCK_GATE_PWM] = { 0x204, BIT(18) },
+    [TH1520_AP_CLOCK_GATE_SPI] = { 0x204, BIT(15) },
+    [TH1520_AP_CLOCK_GATE_UART0] = { 0x204, BIT(14) },
+    [TH1520_AP_CLOCK_GATE_UART1] = { 0x204, BIT(13) },
+    [TH1520_AP_CLOCK_GATE_UART2] = { 0x204, BIT(12) },
+    [TH1520_AP_CLOCK_GATE_UART3] = { 0x204, BIT(11) },
+    [TH1520_AP_CLOCK_GATE_UART4] = { 0x204, BIT(10) },
+    [TH1520_AP_CLOCK_GATE_UART5] = { 0x204, BIT(9) },
+    [TH1520_AP_CLOCK_GATE_GPIO0] = { 0x204, BIT(8) },
+    [TH1520_AP_CLOCK_GATE_GPIO1] = { 0x204, BIT(7) },
+    [TH1520_AP_CLOCK_GATE_GPIO2] = { 0x204, BIT(6) },
+    [TH1520_AP_CLOCK_GATE_I2C0] = { 0x204, BIT(5) },
+    [TH1520_AP_CLOCK_GATE_I2C1] = { 0x204, BIT(4) },
+    [TH1520_AP_CLOCK_GATE_I2C2] = { 0x204, BIT(3) },
+    [TH1520_AP_CLOCK_GATE_I2C3] = { 0x204, BIT(2) },
+    [TH1520_AP_CLOCK_GATE_I2C4] = { 0x204, BIT(1) },
+    [TH1520_AP_CLOCK_GATE_I2C5] = { 0x204, BIT(0) },
+    [TH1520_AP_CLOCK_GATE_DMA] = { 0x208, BIT(8) },
+    [TH1520_AP_CLOCK_GATE_MBOX0] = { 0x208, BIT(7) },
+    [TH1520_AP_CLOCK_GATE_MBOX1] = { 0x208, BIT(6) },
+    [TH1520_AP_CLOCK_GATE_MBOX2] = { 0x208, BIT(5) },
+    [TH1520_AP_CLOCK_GATE_MBOX3] = { 0x208, BIT(4) },
+    [TH1520_AP_CLOCK_GATE_WDT0] = { 0x208, BIT(3) },
+    [TH1520_AP_CLOCK_GATE_WDT1] = { 0x208, BIT(2) },
+    [TH1520_AP_CLOCK_GATE_TIMER0] = { 0x208, BIT(1) },
+    [TH1520_AP_CLOCK_GATE_TIMER1] = { 0x208, BIT(0) },
+};
+
+static const TH1520ClockGateTestOutput
+th1520_miscsys_clock_test_outputs[TH1520_MISCSYS_CLOCK_COUNT] = {
+    [TH1520_MISCSYS_CLOCK_BUS] = { TH1520_MISCSYS_BUS_CLK, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_USB0] = { TH1520_MISCSYS_USB_CLK, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_USB1] = { TH1520_MISCSYS_USB_CLK, BIT(1) },
+    [TH1520_MISCSYS_CLOCK_USB2] = { TH1520_MISCSYS_USB_CLK, BIT(2) },
+    [TH1520_MISCSYS_CLOCK_USB3] = { TH1520_MISCSYS_USB_CLK, BIT(3) },
+    [TH1520_MISCSYS_CLOCK_EMMC] = { TH1520_MISCSYS_EMMC_CLK, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_SDIO0] = { TH1520_MISCSYS_SDIO0_CLK, BIT(0) },
+    [TH1520_MISCSYS_CLOCK_SDIO1] = { TH1520_MISCSYS_SDIO1_CLK, BIT(0) },
+};
 
 static const TH1520ResetTestOutput
 th1520_ap_reset_test_outputs[TH1520_AP_RESET_OUTPUT_COUNT] = {
@@ -2275,6 +2333,37 @@ static void test_external_dtb(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static uint64_t qtest_qom_clock_period(QTestState *qts, const char *path)
+{
+    QDict *response = qtest_qmp(
+        qts, "{ 'execute': 'qom-get', 'arguments': { 'path': %s, "
+        "'property': 'qtest-clock-period' } }", path);
+    uint64_t period;
+
+    g_assert_nonnull(response);
+    g_assert_true(qdict_haskey(response, "return"));
+    period = qdict_get_int(response, "return");
+    qobject_unref(response);
+    return period;
+}
+
+static void th1520_set_ap_clock_gate(QTestState *qts, uint32_t offset,
+                                     uint32_t mask, bool enabled)
+{
+    uint64_t address = TH1520_AP_CLOCK_BASE + offset;
+    uint32_t value = qtest_readl(qts, address);
+
+    qtest_writel(qts, address, enabled ? value | mask : value & ~mask);
+}
+
+static void assert_dw_timer_reset_state(QTestState *qts, uint64_t base);
+static void assert_dw_wdt_reset_state(QTestState *qts, uint64_t base);
+static void assert_th1520_pwm_reset_state(QTestState *qts);
+static void th1520_pwm_stage(QTestState *qts, unsigned int channel,
+                              uint32_t ctrl, uint32_t period, uint32_t fp);
+static void th1520_pwm_start(QTestState *qts, unsigned int channel,
+                              uint32_t ctrl);
+
 static void test_ap_clock_registers(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -2367,6 +2456,154 @@ static void test_ap_clock_registers(void)
                     0x63000000);
     g_assert_cmphex(qtest_readl(qts,
                                 TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==, 0);
+    qtest_quit(qts);
+}
+
+static void test_ap_clock_gate_outputs(void)
+{
+    static const struct {
+        unsigned int output;
+        const char *path;
+    } timed_clocks[] = {
+        { TH1520_AP_CLOCK_GATE_PWM,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_PWM_OUTPUT },
+        { TH1520_AP_CLOCK_GATE_TIMER0,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_TIMER0_OUTPUT },
+        { TH1520_AP_CLOCK_GATE_TIMER1,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_TIMER1_OUTPUT },
+        { TH1520_AP_CLOCK_GATE_WDT0,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_WDT0_OUTPUT },
+        { TH1520_AP_CLOCK_GATE_WDT1,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_WDT1_OUTPUT },
+    };
+    const uint64_t enabled_period = CLOCK_PERIOD_FROM_HZ(125000000);
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_AP_CLOCK_QOM_PATH,
+                                  "peripheral-clock-enable");
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG, 0);
+    qtest_writel(qts, TH1520_AP_CLOCK_BASE + TH1520_CTRL_CLK_CFG, 0);
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_ap_clock_gate_test_outputs); i++) {
+        g_assert_false(qtest_get_irq(qts, i));
+    }
+    qtest_system_reset(qts);
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_ap_clock_gate_test_outputs); i++) {
+        g_assert_true(qtest_get_irq(qts, i));
+    }
+    for (size_t i = 0; i < ARRAY_SIZE(timed_clocks); i++) {
+        g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
+                         ==, enabled_period);
+    }
+
+    for (size_t output = 0;
+         output < ARRAY_SIZE(th1520_ap_clock_gate_test_outputs); output++) {
+        const TH1520ClockGateTestOutput *info =
+            &th1520_ap_clock_gate_test_outputs[output];
+        uint64_t address = TH1520_AP_CLOCK_BASE + info->offset;
+        uint32_t original = qtest_readl(qts, address);
+
+        qtest_writel(qts, address, original & ~info->mask);
+        for (size_t line = 0;
+             line < ARRAY_SIZE(th1520_ap_clock_gate_test_outputs); line++) {
+            g_assert_cmpint(qtest_get_irq(qts, line), ==, line != output);
+        }
+        qtest_writel(qts, address, original);
+        g_assert_true(qtest_get_irq(qts, output));
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(timed_clocks); i++) {
+        const TH1520ClockGateTestOutput *info =
+            &th1520_ap_clock_gate_test_outputs[timed_clocks[i].output];
+
+        g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
+                         ==, enabled_period);
+        th1520_set_ap_clock_gate(qts, info->offset, info->mask, false);
+        g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
+                         ==, 0);
+        th1520_set_ap_clock_gate(qts, info->offset, info->mask, true);
+        g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
+                         ==, enabled_period);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_ap_clock_timed_gates(void)
+{
+    const TH1520ClockGateTestOutput *timer_gate =
+        &th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_TIMER0];
+    const TH1520ClockGateTestOutput *wdt_gate =
+        &th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_WDT0];
+    const TH1520ClockGateTestOutput *pwm_gate =
+        &th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_PWM];
+    const uint32_t pwm_ctrl = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
+    uint32_t frozen;
+    QTestState *qts = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_PWM_QOM_PATH, "pwm");
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+
+    qtest_writel(qts, TH1520_TIMER0_3_BASE + DW_TIMER_LOAD_COUNT, 5);
+    qtest_writel(qts, TH1520_TIMER0_3_BASE + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_clock_step(qts, 2 * TH1520_TIMER_TICK_NS + 1);
+    frozen = qtest_readl(qts,
+                          TH1520_TIMER0_3_BASE + DW_TIMER_CURRENT_VALUE);
+    g_assert_cmphex(frozen, ==, 3);
+    th1520_set_ap_clock_gate(qts, timer_gate->offset, timer_gate->mask,
+                             false);
+    qtest_clock_step(qts, 100 * TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_TIMER0_3_BASE +
+                                DW_TIMER_CURRENT_VALUE), ==, frozen);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_TIMER0_3_BASE +
+                                DW_TIMER_INT_STATUS), ==, 0);
+    th1520_set_ap_clock_gate(qts, timer_gate->offset, timer_gate->mask,
+                             true);
+    qtest_clock_step(qts, TH1520_TIMER_TICK_NS + 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_TIMER0_3_BASE +
+                                DW_TIMER_CURRENT_VALUE), <, frozen);
+    qtest_writel(qts, TH1520_TIMER0_3_BASE + DW_TIMER_CONTROL, 0);
+
+    qtest_writel(qts, TH1520_WDT0_BASE + DW_WDT_TORR, 0);
+    qtest_writel(qts, TH1520_WDT0_BASE + DW_WDT_CR,
+                  DW_WDT_RMOD | DW_WDT_ENABLE);
+    qtest_clock_step(qts, 3 * DW_WDT_TICK_NS);
+    frozen = qtest_readl(qts, TH1520_WDT0_BASE + DW_WDT_CCVR);
+    g_assert_cmphex(frozen, <, DW_WDT_TOP0_COUNT);
+    th1520_set_ap_clock_gate(qts, wdt_gate->offset, wdt_gate->mask, false);
+    qtest_clock_step(qts, 100 * DW_WDT_TICK_NS);
+    g_assert_cmphex(qtest_readl(qts, TH1520_WDT0_BASE + DW_WDT_CCVR), ==,
+                    frozen);
+    g_assert_cmphex(qtest_readl(qts, TH1520_WDT0_BASE + DW_WDT_STAT), ==,
+                    0);
+    th1520_set_ap_clock_gate(qts, wdt_gate->offset, wdt_gate->mask, true);
+    qtest_clock_step(qts, DW_WDT_TICK_NS + 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_WDT0_BASE + DW_WDT_CCVR), <,
+                    frozen);
+
+    th1520_pwm_stage(qts, 0, pwm_ctrl, 10, 3);
+    th1520_pwm_start(qts, 0, pwm_ctrl);
+    g_assert_true(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, TH1520_PWM_TICK_NS);
+    th1520_set_ap_clock_gate(qts, pwm_gate->offset, pwm_gate->mask, false);
+    qtest_clock_step(qts, 100 * TH1520_PWM_TICK_NS);
+    g_assert_true(qtest_get_irq(qts, 0));
+    th1520_set_ap_clock_gate(qts, pwm_gate->offset, pwm_gate->mask, true);
+    qtest_clock_step(qts, 2 * TH1520_PWM_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+    qtest_clock_step(qts, 1);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_system_reset(qts);
+    assert_dw_timer_reset_state(qts, TH1520_TIMER0_3_BASE);
+    assert_dw_wdt_reset_state(qts, TH1520_WDT0_BASE);
+    assert_th1520_pwm_reset_state(qts);
     qtest_quit(qts);
 }
 
@@ -3412,6 +3649,51 @@ static void test_storage_reset_outputs(void)
     for (size_t i = 0;
          i < ARRAY_SIZE(th1520_storage_reset_test_outputs); i++) {
         g_assert_false(qtest_get_irq(qts, i));
+    }
+    qtest_quit(qts);
+}
+
+static void test_miscsys_clock_outputs(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_MISCSYS_QOM_PATH,
+                                  "clock-enable");
+    qtest_system_reset(qts);
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_miscsys_clock_test_outputs); i++) {
+        g_assert_true(qtest_get_irq(qts, i));
+    }
+
+    for (size_t output = 0;
+         output < ARRAY_SIZE(th1520_miscsys_clock_test_outputs); output++) {
+        const TH1520ClockGateTestOutput *info =
+            &th1520_miscsys_clock_test_outputs[output];
+        uint64_t address = TH1520_MISCSYS_BASE + info->offset;
+        uint32_t original = qtest_readl(qts, address);
+
+        qtest_writel(qts, address, original & ~info->mask);
+        for (size_t line = 0;
+             line < ARRAY_SIZE(th1520_miscsys_clock_test_outputs); line++) {
+            g_assert_cmpint(qtest_get_irq(qts, line), ==, line != output);
+        }
+        qtest_writel(qts, address, original);
+        g_assert_true(qtest_get_irq(qts, output));
+    }
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_BUS_CLK, 0);
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_CLK, 0);
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_EMMC_CLK, 0);
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_SDIO0_CLK, 0);
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_SDIO1_CLK, 0);
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_miscsys_clock_test_outputs); i++) {
+        g_assert_false(qtest_get_irq(qts, i));
+    }
+    qtest_system_reset(qts);
+    for (size_t i = 0;
+         i < ARRAY_SIZE(th1520_miscsys_clock_test_outputs); i++) {
+        g_assert_true(qtest_get_irq(qts, i));
     }
     qtest_quit(qts);
 }
@@ -6253,6 +6535,65 @@ static void test_th1520_pwm_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_th1520_pwm_gated_migration(void)
+{
+    const TH1520ClockGateTestOutput *pwm_gate =
+        &th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_PWM];
+    const uint32_t ctrl = TH1520_PWM_CONTINUOUS | TH1520_PWM_FPOUT;
+    const uint64_t enabled_period = CLOCK_PERIOD_FROM_HZ(125000000);
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-pwm-gated-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(dst, TH1520_PWM_QOM_PATH, "pwm");
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    th1520_pwm_stage(src, 0, ctrl, 10, 3);
+    th1520_pwm_start(src, 0, ctrl);
+    qtest_clock_step(src, TH1520_PWM_TICK_NS);
+    th1520_set_ap_clock_gate(src, pwm_gate->offset, pwm_gate->mask, false);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmpuint(qtest_qom_clock_period(
+                         dst, TH1520_AP_CLOCK_QOM_PATH "/"
+                              TH1520_AP_CLOCK_PWM_OUTPUT), ==, 0);
+    g_assert_true(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 100 * TH1520_PWM_TICK_NS);
+    g_assert_true(qtest_get_irq(dst, 0));
+
+    th1520_set_ap_clock_gate(dst, pwm_gate->offset, pwm_gate->mask, true);
+    g_assert_cmpuint(qtest_qom_clock_period(
+                         dst, TH1520_AP_CLOCK_QOM_PATH "/"
+                              TH1520_AP_CLOCK_PWM_OUTPUT), ==,
+                     enabled_period);
+    qtest_clock_step(dst, 2 * TH1520_PWM_TICK_NS - 1);
+    g_assert_true(qtest_get_irq(dst, 0));
+    qtest_clock_step(dst, 1);
+    g_assert_false(qtest_get_irq(dst, 0));
+
+    qtest_system_reset(dst);
+    assert_th1520_pwm_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_ap_reset_peripherals(void)
 {
     static const struct {
@@ -6889,6 +7230,171 @@ static void test_ap_cpr_migration(void)
     g_assert_cmphex(qtest_readl(dst,
                                 TH1520_AP_CLOCK_BASE + TH1520_PLL_STS), ==,
                     TH1520_PLL_RESET_LOCKS);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_ap_clock_gate_migration(void)
+{
+    const TH1520ClockGateTestOutput *timer_gate =
+        &th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_TIMER0];
+    const TH1520ClockGateTestOutput *wdt_gate =
+        &th1520_ap_clock_gate_test_outputs[TH1520_AP_CLOCK_GATE_WDT0];
+    const uint64_t enabled_period = CLOCK_PERIOD_FROM_HZ(125000000);
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    uint32_t timer_frozen;
+    uint32_t wdt_frozen;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-clock-gate-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none");
+    dst = qtest_init(
+        "-machine beaglev-ahead -bios none -watchdog-action none "
+        "-incoming defer");
+    qtest_irq_intercept_out_named(dst, TH1520_AP_CLOCK_QOM_PATH,
+                                  "peripheral-clock-enable");
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    qtest_writel(src, TH1520_TIMER0_3_BASE + DW_TIMER_LOAD_COUNT, 10);
+    qtest_writel(src, TH1520_TIMER0_3_BASE + DW_TIMER_CONTROL,
+                  DW_TIMER_ENABLE | DW_TIMER_PERIODIC);
+    qtest_writel(src, TH1520_WDT0_BASE + DW_WDT_TORR, 0);
+    qtest_writel(src, TH1520_WDT0_BASE + DW_WDT_CR,
+                  DW_WDT_RMOD | DW_WDT_ENABLE);
+    qtest_clock_step(src, 2 * TH1520_TIMER_TICK_NS + 1);
+    th1520_set_ap_clock_gate(src, timer_gate->offset, timer_gate->mask,
+                             false);
+    th1520_set_ap_clock_gate(src, wdt_gate->offset, wdt_gate->mask, false);
+    timer_frozen = qtest_readl(
+        src, TH1520_TIMER0_3_BASE + DW_TIMER_CURRENT_VALUE);
+    wdt_frozen = qtest_readl(src, TH1520_WDT0_BASE + DW_WDT_CCVR);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    for (size_t line = 0;
+         line < ARRAY_SIZE(th1520_ap_clock_gate_test_outputs); line++) {
+        bool expected = line != TH1520_AP_CLOCK_GATE_TIMER0 &&
+                        line != TH1520_AP_CLOCK_GATE_WDT0;
+
+        g_assert_cmpint(qtest_get_irq(dst, line), ==, expected);
+    }
+    g_assert_cmpuint(qtest_qom_clock_period(
+                         dst, TH1520_AP_CLOCK_QOM_PATH "/"
+                              TH1520_AP_CLOCK_TIMER0_OUTPUT), ==, 0);
+    g_assert_cmpuint(qtest_qom_clock_period(
+                         dst, TH1520_AP_CLOCK_QOM_PATH "/"
+                              TH1520_AP_CLOCK_WDT0_OUTPUT), ==, 0);
+    g_assert_cmphex(qtest_readl(
+                        dst, TH1520_TIMER0_3_BASE + DW_TIMER_CURRENT_VALUE),
+                    ==, timer_frozen);
+    g_assert_cmphex(qtest_readl(dst, TH1520_WDT0_BASE + DW_WDT_CCVR), ==,
+                    wdt_frozen);
+    qtest_clock_step(dst, 100 * TH1520_TIMER_TICK_NS);
+    g_assert_cmphex(qtest_readl(
+                        dst, TH1520_TIMER0_3_BASE + DW_TIMER_CURRENT_VALUE),
+                    ==, timer_frozen);
+    g_assert_cmphex(qtest_readl(dst, TH1520_WDT0_BASE + DW_WDT_CCVR), ==,
+                    wdt_frozen);
+
+    th1520_set_ap_clock_gate(dst, timer_gate->offset, timer_gate->mask, true);
+    th1520_set_ap_clock_gate(dst, wdt_gate->offset, wdt_gate->mask, true);
+    g_assert_cmpuint(qtest_qom_clock_period(
+                         dst, TH1520_AP_CLOCK_QOM_PATH "/"
+                              TH1520_AP_CLOCK_TIMER0_OUTPUT), ==,
+                     enabled_period);
+    g_assert_cmpuint(qtest_qom_clock_period(
+                         dst, TH1520_AP_CLOCK_QOM_PATH "/"
+                              TH1520_AP_CLOCK_WDT0_OUTPUT), ==,
+                     enabled_period);
+    qtest_clock_step(dst, TH1520_TIMER_TICK_NS + 1);
+    g_assert_cmphex(qtest_readl(
+                        dst, TH1520_TIMER0_3_BASE + DW_TIMER_CURRENT_VALUE),
+                    <, timer_frozen);
+    g_assert_cmphex(qtest_readl(dst, TH1520_WDT0_BASE + DW_WDT_CCVR), <,
+                    wdt_frozen);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_miscsys_clock_migration(void)
+{
+    static const bool expected[TH1520_MISCSYS_CLOCK_COUNT] = {
+        [TH1520_MISCSYS_CLOCK_BUS] = false,
+        [TH1520_MISCSYS_CLOCK_USB0] = true,
+        [TH1520_MISCSYS_CLOCK_USB1] = false,
+        [TH1520_MISCSYS_CLOCK_USB2] = true,
+        [TH1520_MISCSYS_CLOCK_USB3] = false,
+        [TH1520_MISCSYS_CLOCK_EMMC] = false,
+        [TH1520_MISCSYS_CLOCK_SDIO0] = true,
+        [TH1520_MISCSYS_CLOCK_SDIO1] = false,
+    };
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-miscsys-clock-XXXXXX", &path,
+                         NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(dst, TH1520_MISCSYS_QOM_PATH,
+                                  "clock-enable");
+
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_BUS_CLK, 0);
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_CLK, 5);
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_EMMC_CLK, 0);
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_SDIO0_CLK, 1);
+    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_SDIO1_CLK, 0);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_BUS_CLK), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 5);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_EMMC_CLK), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_SDIO0_CLK), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_SDIO1_CLK), ==, 0);
+    for (size_t line = 0; line < ARRAY_SIZE(expected); line++) {
+        g_assert_cmpint(qtest_get_irq(dst, line), ==, expected[line]);
+    }
+
+    qtest_system_reset(dst);
+    for (size_t line = 0; line < ARRAY_SIZE(expected); line++) {
+        g_assert_true(qtest_get_irq(dst, line));
+    }
 
     qtest_quit(dst);
     qtest_quit(src);
@@ -7617,6 +8123,16 @@ int main(int argc, char **argv)
                        test_ap_reset_outputs);
         qtest_add_func("/beaglev-ahead/cpr/migration",
                        test_ap_cpr_migration);
+        qtest_add_func("/beaglev-ahead/cpr/clock-gate-outputs",
+                       test_ap_clock_gate_outputs);
+        qtest_add_func("/beaglev-ahead/cpr/timed-clock-gates",
+                       test_ap_clock_timed_gates);
+        qtest_add_func("/beaglev-ahead/cpr/clock-gate-migration",
+                       test_ap_clock_gate_migration);
+        qtest_add_func("/beaglev-ahead/miscsys/clock-outputs",
+                       test_miscsys_clock_outputs);
+        qtest_add_func("/beaglev-ahead/miscsys/clock-migration",
+                       test_miscsys_clock_migration);
         qtest_add_func("/beaglev-ahead/padctrl/registers",
                        test_padctrl_registers);
         qtest_add_func("/beaglev-ahead/padctrl/migration",
@@ -7652,6 +8168,8 @@ int main(int argc, char **argv)
                        test_th1520_pwm_waveform);
         qtest_add_func("/beaglev-ahead/th1520-pwm/migration",
                        test_th1520_pwm_migration);
+        qtest_add_func("/beaglev-ahead/th1520-pwm/gated-migration",
+                       test_th1520_pwm_gated_migration);
         qtest_add_func("/beaglev-ahead/cpr/peripheral-resets",
                        test_ap_reset_peripherals);
         qtest_add_func("/beaglev-ahead/th1520-mbox/registers",
