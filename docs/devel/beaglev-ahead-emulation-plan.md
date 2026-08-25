@@ -231,7 +231,7 @@ validation.
 | C910 identity | Missing | New thead-c910 CPU model and exact reset/ID configuration |
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
-| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
+| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction and mask-overlap boundaries | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
@@ -611,6 +611,22 @@ matching standard-RVV fix is tracked separately as upstream candidate
 as do all 26 normal RISC-V softmmu TCG guests and all 17 runnable RISC-V
 qtest suites.  This confirms the frozen specification contract, not C910
 silicon behavior; physical results remain required under ``CPU-006``.
+
+The XTheadVector overlap milestone adds a fifth architectural payload.  The
+frozen extension explicitly forbids an LMUL-greater-than-one comparison
+destination from overlapping any source group, including the implicit mask
+source ``v0``; the inherited v0.7.1 rule applies the same LMUL boundary to
+masked mask-prefix destinations.  The fail-before guest exited at its first
+stage because masked LMUL=2 ``th.vmseq.vv`` executed.  Four shared comparison
+checkers and the mask-prefix translator macro now apply the existing
+``th_check_overlap_mask`` rule.  The guest requires exact illegal-instruction
+traps for integer VV/VX/VI and floating-point VV/VF comparisons plus
+``th.vmsbf.m``, ``th.vmsif.m`` and ``th.vmsof.m``.  It proves that a nonzero
+``vstart`` and all 16 bytes of ``v0`` survive the first trap, while LMUL=1,
+unmasked LMUL=2 and masked non-``v0`` controls remain legal.  Normal,
+dependency-minimal and ASan/UBSan runs pass, as do all 27 normal RISC-V
+softmmu TCG guests, 103 normal board qtests, and 102 board qtests in both the
+dependency-minimal and sanitizer builds.
 
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
@@ -1017,7 +1033,10 @@ payload covers integer/FP reduction ``vl=0`` whole-register preservation,
 nonzero-``vstart`` traps, all e64 widening source-shape traps, LMUL=8 scalar
 reduction operands, source/mask overlap and inactive-mask/tail results; a
 separate generic RVV guest covers the same e64 widening decode boundary on
-``rv64,v=true``.  Vector
+``rv64,v=true``.  A fifth payload checks the implicit ``v0`` overlap boundary
+at LMUL=2 across integer and floating-point comparison forms and all three
+mask-prefix instructions, including destination/``vstart`` preservation after
+the first trap and legal LMUL=1, unmasked and non-``v0`` controls.  Vector
 loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
