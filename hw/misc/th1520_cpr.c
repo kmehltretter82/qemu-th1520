@@ -292,6 +292,18 @@ static uint64_t th1520_ap_clock_read(void *opaque, hwaddr offset,
         return 0;
     }
 
+    /*
+     * A polling guest can advance QEMU_CLOCK_VIRTUAL past the lock deadline
+     * before the I/O thread dispatches the timer callback.  Materialize every
+     * expired deadline here as well, or a due lock can remain invisible until
+     * after the guest's polling timeout.
+     */
+    if (offset == TH1520_PLL_STS && timer_pending(&s->pll_lock_timer) &&
+        timer_expired(&s->pll_lock_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL))) {
+        th1520_ap_clock_lock(s);
+    }
+
     return s->regs[offset / 4];
 }
 

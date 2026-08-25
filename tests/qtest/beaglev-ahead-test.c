@@ -684,6 +684,46 @@ static const uint8_t mask_rom_uart_guest[] = {
     0x6f, 0xf0, 0xdf, 0xff, /* j park */
 };
 
+/*
+ * Raw RV64 mask-ROM payload for the Linux PLL timing contract.  Hart 0
+ * releases the TEE PLL, then samples on the first 3 MHz timer tick after the
+ * modeled 21.25 us lock deadline (64 ticks, or about 21.333 us).  It reports
+ * 'P' when PLL_STS[10] is visible or 'F' otherwise.  The public manual quotes
+ * about 21.25 us for the default PLL configurations and Linux allows 44 us.
+ * The narrow post-deadline window exercises status-read observability before
+ * the I/O thread is likely to dispatch the timer callback.  Keeping this
+ * prebuilt makes the regression available in dependency-minimal builds
+ * without a guest compiler.
+ */
+static const uint8_t pll_poll_mask_rom_guest[] = {
+    0x73, 0x25, 0x40, 0xf1, /* csrr a0, mhartid */
+    0x63, 0x1e, 0x05, 0x04, /* bnez a0, park */
+    0xb7, 0xf2, 0xff, 0x00, /* li t0, 0xffef010000 (part 1) */
+    0x9b, 0x82, 0x12, 0xf0, /* li t0, 0xffef010000 (part 2) */
+    0x93, 0x92, 0x02, 0x01, /* li t0, 0xffef010000 (part 3) */
+    0x37, 0x03, 0x00, 0x43, /* li t1, 0x43000000 */
+    0x23, 0xa2, 0x62, 0x06, /* sw t1, 0x64(t0) */
+    0x73, 0x23, 0x10, 0xc0, /* rdtime t1 */
+    0x13, 0x03, 0x03, 0x04, /* addi t1, t1, 64 */
+    0xf3, 0x23, 0x10, 0xc0, /* wait: rdtime t2 */
+    0xe3, 0xee, 0x63, 0xfe, /* bltu t2, t1, wait */
+    0x03, 0xae, 0x02, 0x08, /* lw t3, 0x80(t0) */
+    0x13, 0x7e, 0x0e, 0x40, /* andi t3, t3, BIT(10) */
+    0x93, 0x0e, 0x60, 0x04, /* li t4, 'F' */
+    0x63, 0x04, 0x0e, 0x00, /* beqz t3, report */
+    0x93, 0x0e, 0x00, 0x05, /* li t4, 'P' */
+    0xb7, 0xa2, 0xff, 0x03, /* li t0, 0xffe7014000 (part 1) */
+    0x9b, 0x82, 0x52, 0xc0, /* li t0, 0xffe7014000 (part 2) */
+    0x93, 0x92, 0xe2, 0x00, /* li t0, 0xffe7014000 (part 3) */
+    0x13, 0x03, 0x10, 0x00, /* li t1, 1 */
+    0x23, 0xa4, 0x62, 0x08, /* sw t1, 0x88(t0) */
+    0x13, 0x03, 0x30, 0x00, /* li t1, 3 */
+    0x23, 0xa6, 0x62, 0x00, /* sw t1, 0x0c(t0) */
+    0x23, 0xa0, 0xd2, 0x01, /* report: sw t4, 0(t0) */
+    0x73, 0x00, 0x50, 0x10, /* park: wfi */
+    0x6f, 0xf0, 0xdf, 0xff, /* j park */
+};
+
 static uint8_t read_serial_byte(int fd);
 static void wait_for_migration_complete(QTestState *qts);
 
@@ -2495,6 +2535,36 @@ static void test_mask_rom_execution_reset(void)
     g_assert_cmphex(read_serial_byte(serial_fd), ==, 'R');
     qtest_system_reset(qts);
     g_assert_cmphex(read_serial_byte(serial_fd), ==, 'R');
+
+    close(serial_fd);
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_ap_clock_poll_execution(void)
+{
+    g_autofree char *path = create_mask_rom(pll_poll_mask_rom_guest,
+                                             sizeof(pll_poll_mask_rom_guest));
+    g_autofree char *args = NULL;
+    QTestState *qts;
+    int serial_fd;
+
+    if (!qtest_has_accel("tcg")) {
+        g_test_skip("TCG is required to execute the PLL polling payload");
+        g_assert_cmpint(g_unlink(path), ==, 0);
+        return;
+    }
+
+    /* RR TCG gives the payload a narrow post-deadline observation window. */
+    args = g_strdup_printf(
+        "-machine beaglev-ahead,boot-mode=mask-rom -bios %s "
+        "-accel tcg,thread=single",
+        path);
+    qts = qtest_init_with_serial(args, &serial_fd);
+
+    g_assert_cmphex(read_serial_byte(serial_fd), ==, 'P');
+    qtest_system_reset(qts);
+    g_assert_cmphex(read_serial_byte(serial_fd), ==, 'P');
 
     close(serial_fd);
     qtest_quit(qts);
@@ -10787,6 +10857,8 @@ int main(int argc, char **argv)
                        test_external_dtb);
         qtest_add_func("/beaglev-ahead/cpr/clock-registers",
                        test_ap_clock_registers);
+        qtest_add_func("/beaglev-ahead/cpr/pll-poll-execution",
+                       test_ap_clock_poll_execution);
         qtest_add_func("/beaglev-ahead/cpr/reset-registers",
                        test_ap_reset_registers);
         qtest_add_func("/beaglev-ahead/cpr/reset-outputs",
