@@ -1,6 +1,6 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: reviewed user mask-ROM execution milestone, 2026-08-25
+Status: reviewed C910 scalar-legality milestone, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -45,13 +45,22 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The latest bounded milestone adds an opt-in raw
-user mask-ROM execution path while preserving direct boot as the default.  It
-pins image bounds and loader conflicts, BIOS search paths, ROM immutability,
-reset, migration and real C910/UART execution.  The earlier GMAC receive,
-Type-2 status and transmit-checksum milestones remain green.  This is an
-execution bridge for private-ROM experiments, not a claim that the physical
-boot process or the board is complete.
+than upstream bug reporting.  The latest bounded milestone closes a C910
+scalar-legality slice: shift-zero ``th.addsl`` now obeys both XTheadBa and
+``MXSTATUS.THEADISAEE`` availability, the documented XTheadCmo privilege
+matrix is enforced, and the three U-capable cache operations obey the dynamic
+``MXSTATUS.UCME`` bit.  A freestanding payload covers all four addsl immediate
+values and all 21 CMO encodings across M/S/U and both status-bit transitions;
+a second build proves that shift zero traps when XTheadBa is disabled while a
+sibling XThead decoder remains installed.  The earlier user mask-ROM and GMAC
+milestones remain green.
+
+One deliberate hardware question remains: the frozen XTheadCmo specification
+and published C910 manual make ``th.dcache.cva`` M/S-only, while the pinned
+openC910 RTL appears to admit it in U mode when UCME is set.  The shared
+translator follows the two architectural documents.  Ledger item ``CPU-015``
+records the exact owner-board probe needed before any C910-specific silicon
+quirk is considered.
 
 Upstream triage remains deferred.  The two companion bug documents continue
 to separate pre-existing QEMU issues from branch-only implementation gaps, and
@@ -1038,6 +1047,11 @@ new eight-region integration path supplies physical attributes for direct,
 Bare and Sv39 accesses.  A 38-trap synthetic M/S/U test covers every boundary,
 the default and PTE-versus-physical precedence; the real TH1520 boundaries and
 attributes remain open.
+The scalar-legality payload additionally executes every ``th.addsl`` immediate
+and every XTheadCmo encoding in M/S/U, checks exact illegal-instruction PCs,
+values and destination preservation, exercises THEADISAEE and UCME in both
+directions, and observes 64 expected traps.  Its XTheadBa-disabled companion
+checks four further traps while XTheadCmo keeps the shared decoder active.
 P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
 privilege combinations, B/SH/SEC effects, remaining scalar/FP/masked/vector
 forms and boundary combinations, cache/CMO and actual ordering effects,

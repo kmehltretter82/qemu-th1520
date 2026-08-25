@@ -32,6 +32,15 @@ The 18-case matrix is clean in normal, dependency-minimal and sanitizer builds.
 Uncertain silicon behavior remains under ``GMAC-001`` rather than being
 labeled a bug.
 
+The current local-QEMU checkpoint also repairs inherited scalar legality
+behavior without opening or updating an upstream report: shift-zero
+``th.addsl`` no longer bypasses extension/THEADISAEE checks, two XTheadCmo
+privilege entries now follow the frozen specification and C910 manual, and
+C910 U-mode CMO translation follows the writable UCME bit.  These are not
+assigned new ``UQ-L`` identifiers because the affected translator predates the
+branch-only board implementation.  Hardware conflict and comparison work is
+kept under ``CPU-015`` in the validation ledger.
+
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
 establishes the expected behavior.
@@ -73,16 +82,17 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
   case is a bounded shared-model compatibility check, not a claim of complete
   NPCM TX-offload coverage.
 * `build-beaglev-ahead/tests/qtest/riscv-csr-test -q`: **11/11**.
-* Local TCG payloads: **15/15** — XTheadVector smoke/state/overlap/FP/
+* Local TCG payloads: **17/17** — XTheadVector smoke/state/overlap/FP/
   reduction, standard RVV widening legality, C910 MM/priority/MAEE/
-  physical-PMA/PMU, Zicclsm on/off, and C900 CLINT/PLIC.  The complete normal
-  RISC-V softmmu TCG suite passes **27/27**.
+  physical-PMA/PMU/scalar legality/XTheadBa-off, Zicclsm on/off, and C900
+  CLINT/PLIC.  The complete normal RISC-V softmmu TCG suite passes **29/29**.
 * `git diff --check`: clean.
 
 ### Dependency-minimal build
 
 * `build-minimal/tests/qtest/beaglev-ahead-test -q`: **108/108**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
+* C910 scalar-legality and XTheadBa-off payloads: **2/2**.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **5/5**.
 
@@ -91,6 +101,8 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 * `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **108/108**.
 * `build-sanitize/tests/qtest/riscv-csr-test -q`: **4/4** (C910 CSR and the
   active/inhibited/pending PMU migration cases present in this build).
+* C910 scalar-legality and XTheadBa-off payloads: **2/2**, with no ASan/UBSan
+  finding.
 * Machine-specific semihosted payloads: **9/9** — C910 MM/priority/MAEE/
   physical-PMA, C900 CLINT/PLIC, four-hart SMP, DW UART, and DW timer.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
@@ -110,10 +122,11 @@ TH1520; the open ledger remains authoritative for that distinction.
 The following are deliberately retained as open work.  A future implementation
 change must add a reproducer and a regression before changing any of them.
 
-* `CPU-004`, `CPU-005`, `CPU-006`, `CPU-008`, and `CPU-010` in the
+* `CPU-004`, `CPU-005`, `CPU-006`, `CPU-008`, `CPU-010`, and `CPU-015` in the
   [hardware ledger](beaglev-ahead-hardware-validation.md): exact physical PMA
-  ranges, C910/XTheadVector stepping behavior, PMU event semantics, and
-  alignment/vector exception behavior still need silicon comparison.
+  ranges, C910 scalar/XTheadVector stepping behavior, PMU event semantics,
+  CMO privilege, and alignment/vector exception behavior still need silicon
+  comparison.
 * `MIG-001`: storage, GMAC, and USB migration during in-flight DMA or an
   attached transfer still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
