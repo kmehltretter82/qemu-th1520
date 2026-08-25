@@ -16,6 +16,7 @@
 
 #include "qemu/osdep.h"
 #include "libqtest.h"
+#include "migration/riscv64/c910-fxcr-migration-guest.h"
 #include "migration/riscv64/c910-inhibited-pmu-guest.h"
 #include "migration/riscv64/c910-pending-pmu-guest.h"
 #include "migration/riscv64/c910-pmu-guest.h"
@@ -73,6 +74,16 @@
 #define PMU_TEST_ARMED       2
 #define PMU_TEST_PASS        3
 #define LCOFI_BIT             (1ULL << 13)
+
+#define FXCR_TEST_GO_OFFSET      8
+#define FXCR_TEST_RESET_OFFSET  16
+#define FXCR_TEST_READY          1
+#define FXCR_TEST_MIGRATION_PASS 2
+#define FXCR_TEST_RESET_PASS     3
+#define FXCR_DQNAN               (UINT64_C(1) << 23)
+#define FXCR_FE                  (UINT64_C(1) << 5)
+#define FFLAGS_NV                (UINT64_C(1) << 4)
+#define FFLAGS_NX                (UINT64_C(1) << 0)
 
 typedef struct PMUMigrationTest {
     const char *machine_args;
@@ -452,6 +463,82 @@ static void run_test_pmu_migration(const void *opaque)
     unlink(path);
 }
 
+static void run_test_thead_c910_fxcr_migration_reset(void)
+{
+    const uint64_t status_addr = 0x200000;
+    const uint64_t source_fxcr = FXCR_DQNAN | FFLAGS_NX;
+    const uint64_t migrated_fxcr = source_fxcr | FXCR_FE;
+    const uint64_t reset_fxcr = FXCR_FE | FFLAGS_NV;
+    const char *args = "-machine beaglev-ahead -bios none "
+                       "-accel tcg,thread=single -icount shift=0 -S";
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *dst_args = NULL;
+    QTestState *src;
+    QTestState *dst;
+    uint64_t status;
+    int fd;
+
+    fd = g_file_open_tmp("riscv-c910-fxcr-migration-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    uri = g_strdup_printf("file:%s", path);
+    dst_args = g_strdup_printf("%s -incoming defer", args);
+
+    src = qtest_init(args);
+    dst = qtest_init(dst_args);
+
+    /* Make a missing post-load reconstruction fail instead of by chance. */
+    set_csr(dst, CSR_MSTATUS,
+            get_csr(dst, CSR_MSTATUS) | MSTATUS_FS_INITIAL);
+    set_csr(dst, CSR_TH_FXCR, reset_fxcr);
+    g_assert_cmphex(get_csr(dst, CSR_TH_FXCR), ==, reset_fxcr);
+
+    qtest_memwrite(src, 0, c910_fxcr_migration_guest_bin,
+                   sizeof(c910_fxcr_migration_guest_bin));
+    qtest_qmp_assert_success(src, "{ 'execute': 'cont' }");
+    status = wait_for_guest_status_change(src, status_addr, 0);
+    g_assert_cmphex(status, ==, FXCR_TEST_READY);
+    qtest_qmp_assert_success(src, "{ 'execute': 'stop' }");
+    g_assert_cmphex(get_csr(src, CSR_TH_FXCR), ==, source_fxcr);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readq(dst, status_addr), ==, FXCR_TEST_READY);
+    /* Do not read FXCR here: that would re-arm exception event tracking. */
+    qtest_writeq(dst, status_addr + FXCR_TEST_GO_OFFSET, 1);
+    qtest_qmp_assert_success(dst, "{ 'execute': 'cont' }");
+    status = wait_for_guest_status_change(dst, status_addr, FXCR_TEST_READY);
+    g_assert_cmphex(status, ==, FXCR_TEST_MIGRATION_PASS);
+
+    qtest_qmp_assert_success(dst, "{ 'execute': 'stop' }");
+    g_assert_cmphex(get_csr(dst, CSR_TH_FXCR), ==, migrated_fxcr);
+
+    /*
+     * QEMU system reset preserves RAM, so a cookie selects the reset phase.
+     * Keep the CPU stopped until after reset to make the transition exact.
+     */
+    qtest_writeq(dst, status_addr + FXCR_TEST_RESET_OFFSET, 1);
+    qtest_system_reset(dst);
+    qtest_qmp_assert_success(dst, "{ 'execute': 'cont' }");
+    status = wait_for_guest_status_change(dst, status_addr,
+                                          FXCR_TEST_MIGRATION_PASS);
+    g_assert_cmphex(status, ==, FXCR_TEST_RESET_PASS);
+
+    qtest_qmp_assert_success(dst, "{ 'execute': 'stop' }");
+    g_assert_cmphex(get_csr(dst, CSR_TH_FXCR), ==, reset_fxcr);
+
+    qtest_quit(src);
+    qtest_quit(dst);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void run_test_seed_csr(void)
 {
     uint64_t val = 0;
@@ -494,6 +581,8 @@ int main(int argc, char **argv)
     }
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/cpu/thead-c910-csr", run_test_thead_c910_csrs);
+        qtest_add_func("/cpu/thead-c910-fxcr-migration-reset",
+                       run_test_thead_c910_fxcr_migration_reset);
         qtest_add_data_func("/cpu/thead-c910-pmu-migration",
                             &c910_pmu_migration, run_test_pmu_migration);
         qtest_add_data_func("/cpu/thead-c910-inhibited-pmu-migration",

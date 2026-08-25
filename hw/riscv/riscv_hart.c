@@ -23,6 +23,7 @@
 #include "qemu/module.h"
 #include "system/reset.h"
 #include "system/qtest.h"
+#include "system/tcg.h"
 #include "qemu/cutils.h"
 #include "hw/core/sysbus.h"
 #include "target/riscv/cpu.h"
@@ -161,7 +162,8 @@ static void riscv_harts_realize(DeviceState *dev, Error **errp)
     s->harts = g_new0(RISCVCPU, s->num_harts);
 
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
-    if (qtest_enabled()) {
+    /* Executing TCG guests can still be controlled by a qtest driver. */
+    if (qtest_enabled() || (tcg_enabled() && qtest_driver())) {
         riscv_cpu_register_csr_qtest_callback();
     }
 #endif

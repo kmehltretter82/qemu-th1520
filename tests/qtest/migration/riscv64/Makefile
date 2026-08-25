@@ -2,19 +2,19 @@
 #   make CROSS_PREFIX=riscv64-linux-gnu-
 
 .PHONY: all clean
-all: c910-inhibited-pmu-guest.h c910-pending-pmu-guest.h \
-	c910-pmu-guest.h riscv-fixed-pmu-guest.h \
+all: c910-fxcr-migration-guest.h c910-inhibited-pmu-guest.h \
+	c910-pending-pmu-guest.h c910-pmu-guest.h riscv-fixed-pmu-guest.h \
 	riscv-inhibited-pmu-guest.h riscv-pending-pmu-guest.h \
 	riscv-pmu-guest.h
 
-%-pmu-guest.h: %-pmu-guest.bin
+%-guest.h: %-guest.bin
 	echo "$$__note" > $@
 	xxd -i $< | sed -e '/.*int.*/d' >> $@
 
-%-pmu-guest.bin: %-pmu-guest.elf
+%-guest.bin: %-guest.elf
 	$(CROSS_PREFIX)objcopy -O binary $< $@
 
-%-pmu-guest.elf: %-pmu-guest.S
+%-guest.elf: %-guest.S
 	$(CROSS_PREFIX)gcc -o $@ -nostdlib -static -Wl,--build-id=none \
 		-Wl,-Ttext=0x100000 $<
 
@@ -25,4 +25,4 @@ c910-pending-pmu-guest.h riscv-pending-pmu-guest.h: \
 	pmu-pending-migration-guest.S
 
 clean:
-	$(RM) *-pmu-guest.bin *-pmu-guest.elf *-pmu-guest.h
+	$(RM) *-guest.bin *-guest.elf *-guest.h
