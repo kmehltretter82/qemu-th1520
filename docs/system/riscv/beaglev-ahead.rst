@@ -6,6 +6,10 @@ which is built around the T-Head TH1520 SoC.  The initial implementation is a
 boot-critical subset intended for direct firmware and kernel development.  It
 does not yet run an unmodified production board image.
 
+The machine is TCG-only.  QEMU rejects a non-TCG machine accelerator, and KVM
+CPU realization rejects ``thead-c910`` because its custom state has no RISC-V
+KVM synchronization contract.
+
 Supported hardware
 ------------------
 
@@ -295,6 +299,16 @@ TH1520 integration exposes no writable PMP entries,
 matching public physical-board boot captures, although generic C910
 documentation describes optional PMP configurations.  These uncertainties
 are itemized in the hardware validation ledger.
+
+The C910 ``FXCR`` user CSR at 0x800 aliases ``frm`` and ``fflags`` and adds
+the DQNaN propagation control plus sticky exception-event flag FE.  QEMU
+models the pinned openC910 mask, FS access rules, NaN/event behavior, zero
+state after QEMU system reset, same-version migration, and exposes it as
+``th.c910.fxcr`` in ``info registers -a``.  Migration tests currently prove
+the stored fields; guest FP execution after load and genuine older-version
+streams remain open.  The physical TH1520 reset value and exact CPU stepping
+are also unmeasured, so this is a QEMU/openC910 contract rather than silicon
+evidence.
 
 Peripheral limitations
 ----------------------
@@ -689,7 +703,8 @@ to this board, so the generic QEMU eMMC defaults are unchanged.
 This profile is a guest-software contract, not identification of the physical
 16 GiB device.  Three focused SD/eMMC profile, tuning, reset and migration
 qtests pass, including an old-binary fail-before comparison; the complete
-normal/minimal board gates are 112/111 and the 13-test storage group passes
+normal, dependency-minimal and ASan/UBSan board gates are respectively
+113/113, 112/112 and 112/112.  The earlier 13-test storage subset also passes
 under ASan/UBSan.  A QEMU trace of the pinned Linux run records the CMD6
 HS200-to-HS-to-DDR8-to-HS400 transitions but no CMD21.  This is expected from
 that kernel: the TH1520 platform callback returns success without issuing
@@ -747,7 +762,8 @@ emulator's deterministic direct-boot convention only; it does not establish
 the silicon reset sequence.
 
 A whole-machine migration regression moves DRAM, SRAM, per-hart architectural
-and C910-specific CSR state, the rotating CPUID cursor, architectural time,
+and C910-specific CSR state including FXCR/FRM/FFLAGS, the rotating CPUID
+cursor, architectural time,
 CLINT, PLIC, all six UARTs, all six I2C controllers, board EEPROM, SPI0, both
 APB timer components, both AP watchdogs, the RTC, TH1520 mailbox, MR75203 PVT,
 all six GPIO controllers, five user-LED intensities, all three pad controllers,
@@ -764,19 +780,23 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 112 tests in the normal build and
-111 in the dependency-minimal build.  The only conditional omission is the
-keyboard-hotplug test because the deliberately minimal configuration excludes
-``usb-kbd``; its
+device tests, the complete board gate passes 113/113 tests in the normal build
+and 112/112 in both dependency-minimal and ASan/UBSan builds.  The associated
+CSR gates pass 11/11, 4/4 and 4/4 respectively, and the 48-stage C910 FXCR
+guest passes in all three.  Generic SoftFloat passes its 17/17 quick suite and
+the slow ``fp-test-mulAdd`` FMA test.  The only conditional omission is the
+keyboard-hotplug test because the deliberately minimal configurations exclude
+``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
 vector/PMU/MAEE, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
 cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
-coroutines is expected and is not counted as a clean sanitizer finding.  The
-last complete sanitizer-board run passed 108 tests before the three tuning
-tests were added; the current 13-test storage subset passes under ASan/UBSan.
+coroutines is expected and was not accompanied by an ASan/UBSan finding.
+FXCR guest execution after migration load and a genuine pre-version-3 stream
+remain open.  External backends and peers do not migrate; in-flight storage
+and GMAC DMA plus active or attached USB migration also remain open.
 
 QSPI/XIP, board SPI peripherals, timer cascade and physical toggle routing,
 PVT alarm/timer/IRQ and analog timing fidelity, non-application watchdogs,
@@ -799,8 +819,8 @@ source files:
 
 .. code-block:: bash
 
-   mkdir build-beaglev-ahead
-   cd build-beaglev-ahead
+   mkdir build-beaglev-ahead-minimal
+   cd build-beaglev-ahead-minimal
    ../configure --target-list=riscv64-softmmu \
        --without-default-devices \
        --with-devices-riscv64=beaglev-ahead \

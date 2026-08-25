@@ -86,7 +86,39 @@ use the locally built QEMU through `QTEST_QEMU_BINARY`; sanitizer runs set
 under the qtest parent/ptrace setup.  The ASan `makecontext` warning is emitted
 by the runtime and was not accompanied by an ASan or UBSan finding.
 
-### Normal build
+### Current focused FXCR/MMC-alias checkpoint
+
+Normal and dependency-minimal builds both pass the C910 FXCR execution guest,
+the C910 CSR/system-reset qtest, the generated-DT direct-boot contract, the
+whole-machine migration qtest, and the portable Linux single- and four-hart
+eMMC functional tests.  The ASan/UBSan build passes the FXCR guest and its
+complete available board/CSR gates.  The Linux tests use
+``root=PARTUUID=1520a110-01``; both writer and fresh verifier reproduce
+``fb5ac1fab9c5b0e2b328bbe2149dee4664cf064618884f78c10e5c3bf6a05cda``
+and remount root read-only.  The four-hart test additionally requires CPUs 0-3
+online in both QEMU processes.
+
+The workspace-local functional transcripts are
+``build-beaglev-ahead/tests/functional/riscv64/test_beaglev_ahead.BeagleVAhead.test_emmc_root/console.log``,
+``build-beaglev-ahead/tests/functional/riscv64/test_beaglev_ahead.BeagleVAhead.test_emmc_root_smp/console.log``
+and the corresponding two paths under ``build-minimal``.  They are build
+artifacts, not committed evidence.
+
+The preserved
+``../validation-artifacts/fxcr-mutation-20260825/qemu-system-riscv64-no-event-guard``
+binary (SHA-256
+``8d88b261ae8b944ee231a906d40f6ebff3185fe301806f72a0988955f9cec923``)
+removes the event-tracking guard from ``can_use_fpu()``.  It fails the expanded
+FXCR firmware at stage 45, the repeated already-sticky NX case, while the
+correct binary passes.  Independently removing the raised-event arm from
+``riscv_cpu_check_fflags()`` fails at stage 46: quiet-NaN ``flt.s`` raises an
+already-sticky invalid event and must dirty FS.  The correct build passes all
+48 stages in normal, dependency-minimal and ASan/UBSan configurations.  The
+second mutant was restored immediately; no preserved binary or immutable log
+is claimed for it.  The generic SoftFloat quick suite passes 17/17, and the
+slow ``fp-test-mulAdd`` FMA test passes for f16, f32, f64 and f128.
+
+### Current complete normal build
 
 * `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **113/113**.
 * `build-npcm/tests/qtest/npcm_gmac-test`: **7/7**; its added normal-descriptor
@@ -99,7 +131,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
   CLINT/PLIC.  The complete normal RISC-V softmmu TCG suite passes **29/29**.
 * `git diff --check`: clean.
 
-### Dependency-minimal build
+### Current complete dependency-minimal build
 
 * `build-minimal/tests/qtest/beaglev-ahead-test -q`: **112/112**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
@@ -107,10 +139,20 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **5/5**.
 
-### ASan/UBSan builds
+### Current and historical ASan/UBSan checkpoints
 
-The current rebuilt sanitizer binary passes the complete AP-clock/CPR group
-**9/9** and the DWC MSHC/storage group **13/13**, including the PLL poll and
+The current dependency-minimal sanitizer build passes:
+
+* `build-beaglev-ahead-sanitize/tests/qtest/beaglev-ahead-test -q`:
+  **112/112**.
+* `build-beaglev-ahead-sanitize/tests/qtest/riscv-csr-test -q`: **4/4**.
+* The 48-stage C910 FXCR execution guest, with no ASan/UBSan finding.  ASan
+  emits its expected warning about incomplete ``makecontext``/``swapcontext``
+  support.
+
+At the preceding storage/PLL checkpoint, the rebuilt sanitizer binary passed
+the complete AP-clock/CPR group **9/9** and the DWC MSHC/storage group
+**13/13**, including the PLL poll and
 eMMC HS400 tests, with no ASan/UBSan finding.  Under instrumentation the Linux
 functional run had not completed after 180 seconds and emitted guest
 soft-lockup warnings.  No ASan/UBSan diagnostic appeared; the run is
@@ -136,10 +178,10 @@ as historical evidence rather than relabeled as current:
   dependency-minimal sanitizer binary does not build.  The normal suite and
   the sanitizer CSR/board tests cover their branch-relevant paths.
 
-The current focused groups and retained historical evidence show no sanitizer
-finding in the covered paths; there is no current complete sanitizer-board
-pass.  These results do not establish conformance to the physical TH1520; the
-open ledger remains authoritative for that distinction.
+The current complete sanitizer gate and retained historical evidence show no
+sanitizer finding in the covered paths.  These results do not establish
+conformance to the physical TH1520; the open ledger remains authoritative for
+that distinction.
 
 ### Portable Linux eMMC-root gate
 
@@ -148,18 +190,106 @@ The functional test pins Linux 6.11.9
 and groeck's RISC-V ext2 rootfs at commit
 ``9819da19e6eef291686fdd7b029ea00e764dc62f``
 (``b6ed95610310b7956f9bf20c4c9c0c05fea647900df441da9dfe767d24e8b28b``).
-With ``maxcpus=1`` and probe-order-dependent ``root=/dev/mmcblk1``, Linux
-enumerates HS400, mounts the eMMC-backed ext2 root, enters a controlled root
-shell, writes and syncs a deterministic 1 MiB payload, verifies its SHA-256,
-and remounts read-only.  After QMP closes that QEMU process, a new process
-reopens the same scratch image and verifies the hash again.  The deterministic
+The functional test embeds the raw ext2 filesystem at sector 2048 in a
+deterministic MBR wrapper with disk signature ``0x1520a110`` and boots
+partition 1 as ``root=PARTUUID=1520a110-01``.  This makes root discovery
+independent of asynchronous Linux MMC probe order.  The generated DT adopts
+the RevyOS/vendor-kernel mapping from commit
+``a092d55649279e1c9bcda2769b8f6b4370fa2c94``:
+``mmc0=&emmc``, ``mmc1=&sdio0`` and ``mmc2=&sdio1``.  The direct-boot FDT qtest
+checks all three aliases.  Pinned upstream commit
+``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` omits MMC aliases, so the QEMU
+mapping remains a vendor-compatibility choice pending official-stock-DTB and
+hardware evidence.
+
+With ``maxcpus=1``, Linux enumerates HS400 as ``mmc0``, mounts the eMMC-backed
+``mmcblk0p1`` ext2 root, enters a controlled root shell, writes and syncs a
+deterministic 1 MiB payload, verifies its SHA-256, and remounts read-only.
+After QMP closes that QEMU process, a new process reopens the same scratch
+image, verifies the hash again and remounts read-only.  The deterministic
 payload SHA-256 is
 ``fb5ac1fab9c5b0e2b328bbe2149dee4664cf064618884f78c10e5c3bf6a05cda``.
 Normal and dependency-minimal builds pass.
 
 This proves a single-hart root mount plus one clean sync/remount/process-reopen
-path.  It is not an official-image, normal-distro-init, SMP, host-cache
-eviction, power-loss durability, ``e2fsck`` or storage-stress result.
+path.  It is not an official-image, normal-distro-init, host-cache eviction,
+power-loss durability, ``e2fsck`` or storage-stress result.
+
+### Portable Linux four-hart audit
+
+One exploratory Linux 6.11.9 run brought up only three CPUs and then reported
+a CPU0 soft lockup in ``smp_call_function_many_cond`` during the unaligned-
+access check.  Its raw log remains workspace-local as
+``../validation-artifacts/beaglev-ahead-linux611-smp-failure-20260825.log``.
+Eight later completed four-hart runs in
+``../validation-artifacts/smp-diagnostics/`` all reported
+``smp: Brought up 1 node, 4 CPUs`` without that offline/lockup sequence.  A
+partial run labeled ``tcg-single1`` also reached four CPUs but ended before the
+MMC probe, so it is not a single-threaded-TCG storage result.  No QEMU argv
+manifest was preserved for these exploratory runs; acceleration and affinity
+settings inferred from filenames are not treated as proved configuration.
+
+Seven completed four-hart runs used ``root=179:0 rootwait``.  One mounted the
+root; one enumerated HS400 and ``mmcblk1`` before root open failed; four
+reported ``Failed to initialize a non-removable card``; and one reached root
+open without a final card result.  A three-hart numeric-root control also
+failed.  This exploratory matrix does not isolate a four-hart SDHCI defect.
+Linux can parse a numeric major/minor into a nonzero root device before the
+block device exists, at which point its root-wait path can return while
+asynchronous MMC discovery
+is still in flight.  That explains the early root open/panic race, but does not
+by itself explain the card-initialization failures; intermittent storage-model
+behavior was therefore still possible at that audit point.
+
+A fresh qcow2 overlay backed by the pinned ext2 image was then booted, before
+the alias/PARTUUID change, with ``root=/dev/mmcblk1 rootwait``.  It brought up
+all four CPUs, enumerated HS400, mounted ext2 and emitted
+``FOUR_HART_EMMC_PASS``; the raw evidence is
+``../validation-artifacts/smp-diagnostics/path-root-fourhart.log``.  This one
+path-based pass was a successful control, not by itself a repeated SMP gate.
+
+The later formal four-hart test uses a fresh qcow2 overlay backed by the
+deterministic MBR image and ``PARTUUID=1520a110-01``.  It rejects CPU-offline,
+soft-lockup, card-initialization, I/O, root-open and panic patterns.  Both its
+writer and a fresh QEMU verifier require CPUs 0-3 online, enumerate HS400,
+mount ext2, reproduce the stable payload hash and remount root read-only.
+Normal and dependency-minimal builds pass.  This supersedes the path-only
+control, but it is still bounded evidence rather than indefinite stress or a
+statement about the owner's hardware.
+
+### C910 FXCR implementation checkpoint
+
+Pinned openC910 RTL commit
+``b91c90914c19f114d35c8f6b73408eb241ed847c`` defines user read/write CSR
+``FXCR`` at 0x800.  Access is illegal with FS Off and a legal write makes FS
+Dirty.  Reset is zero and the visible mask is ``0x0780003f``: bits 26:24 alias
+``frm``; bit 23 is DQNaN, where zero selects the default/canonical NaN and one
+propagates a source NaN; bit 5 is writable and otherwise sticky-sets on an FP
+exception event; and bits 4:0 alias ``fflags``.  Direct software writes to
+``fflags`` do not by themselves prove that an exception event occurred.
+
+The current local checkpoint replaces the former zero-valued FXCR placeholder
+with those fields and aliases, drives SoftFloat NaN selection, tracks exception
+events separately from architectural ``fflags``, marks FS Dirty on writes and
+adds reset handling plus version-3 migration fields and old-stream defaults.
+Normal, dependency-minimal and ASan/UBSan gates pass.  The execution firmware
+checks M/S/U FS-Off traps and enabled access, read-versus-write FS transitions,
+the exact mask/aliases, scalar H/S/D and XTheadVector canonical-versus-source
+NaNs, every IEEE exception class, and direct architectural-flag writes.  It
+also checks a new occurrence of already-sticky NX and an integer-result,
+quiet-NaN ``flt.s`` whose already-sticky invalid event changes only FE but must
+change FS from Clean to Dirty.  The CSR qtest verifies aliases and that
+emulated warm/system reset clears FXCR and FS.  Whole-machine migration reads
+back the exact stored FXCR/FRM/FFLAGS fields, but does not yet execute an FP
+operation after load.
+
+The stage-45 fast-path mutant and independent stage-46 raised-event mutation
+are recorded in the focused audit evidence above.  The SoftFloat quick suite
+passes 17/17 and the slow mulAdd/FMA test passes.  Post-load FP execution, an
+actual pre-version-3 migration stream, first exception-producing execution
+after emulated reset and physical capture remain open.  ``CPU-016`` keeps the
+owner's unidentified TH1520 stepping separate from this pinned-RTL QEMU
+contract.
 
 ## Open local fidelity gaps (not confirmed bugs)
 
@@ -171,13 +301,17 @@ change must add a reproducer and a regression before changing any of them.
   ranges, C910 scalar/XTheadVector stepping behavior, PMU event semantics,
   CMO privilege, and alignment/vector exception behavior still need silicon
   comparison.
-* One exploratory Linux 6.11.9 four-hart boot brought up only three CPUs and
-  then reported a CPU0 soft lockup in ``smp_call_function_many_cond`` while
-  checking unaligned access.  It has not been reproduced or isolated from the
-  portable kernel/configuration, so it is not a confirmed ``UQ-L`` defect.
-  The raw log is preserved in the workspace, but not committed, as
-  ``../validation-artifacts/beaglev-ahead-linux611-smp-failure-20260825.log``;
-  add a separate SMP gate before making a full-board Linux claim.
+* The four-hart event detailed above is not reproduced in eight later complete
+  exploratory boots or the formal PARTUUID-based normal/minimal integrity and
+  process-reopen gates.  Keep it as a local historical observation until
+  longer stress and a sufficiently long single-threaded-TCG control increase
+  confidence; do not reuse the numeric-root harness failures as a QEMU
+  reproducer or hardware fact.
+* `CPU-016`: the focused FXCR gate is complete in normal, dependency-minimal
+  and ASan/UBSan builds, but is grounded in pinned openC910 RTL, not the
+  owner's unidentified TH1520 stepping.  Preserve that distinction until
+  post-load execution, an old-version migration stream and the physical-hart
+  matrix are complete.
 * Runtime UART0 remains deferred for an unresolved reason in the portable
   Linux 6.11.9/generated-DT combination; pinctrl/fw-devlink involvement is
   suspected but not established.  Earlycon works, and other pinned-kernel and

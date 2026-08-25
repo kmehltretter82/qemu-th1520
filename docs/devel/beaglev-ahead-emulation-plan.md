@@ -1,8 +1,10 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: portable Linux eMMC-root/process-reopen and PLL-polling checkpoints
-validated; official-image, portable-Linux-6.11.9 SMP reproduction and
-physical-card validation remain open, 2026-08-25
+Status: portable Linux single- and four-hart eMMC root/integrity/process-reopen,
+PLL-polling, C910 FXCR and complete board/CSR checkpoints validated in normal,
+dependency-minimal and ASan/UBSan builds; the official image, explicit
+post-load/reset execution, old migration streams and physical-card/CPU
+validation remain open, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -65,13 +67,23 @@ Three focused qtests cover this change:
 ``/beaglev-ahead/dwcmshc/emmc-hs400-profile`` and
 ``/beaglev-ahead/dwcmshc/emmc-tuning-migration``.  The preserved pre-change
 binary fails deterministically at ``EXT_CSD_REV`` 5 rather than 8.  The full
-board suite passes 113/113 in the normal build and 112/112 in the
-dependency-minimal build; the complete 13-test storage group passes under
-ASan/UBSan.  Generic ARM ``xlnx-zcu102`` and PCI SDHCI libqos register paths
-also pass.  The standalone NPCM SDHCI suite has not been rerun.
+board suite passed 113/113 in the normal build and 112/112 in the
+dependency-minimal build at that preceding storage checkpoint; the complete
+13-test storage group also passed under ASan/UBSan.  The current FXCR/MMC-alias
+checkpoint has since repeated the complete board and CSR gates in all three
+build configurations, as recorded below.  Generic ARM
+``xlnx-zcu102`` and PCI SDHCI libqos register paths also passed.  The standalone
+NPCM SDHCI suite has not been rerun.
 
-Unchanged pinned Linux boots in both normal and dependency-minimal QEMU and
-reports ``mmc1: new HS400 MMC card``.  A QEMU command trace proves its CMD6
+The generated DT now follows the pinned RevyOS/vendor-kernel aliases from
+commit ``a092d55649279e1c9bcda2769b8f6b4370fa2c94``:
+``mmc0 = &emmc``, ``mmc1 = &sdio0`` and ``mmc2 = &sdio1``.  A direct-DT qtest
+checks all three paths.  The pinned upstream Ahead DTS at
+``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` omits MMC aliases, so this is a
+vendor software-numbering compatibility choice, not a claim that mainline or
+the owner's board has independently established the aliases.  Unchanged
+pinned Linux boots in both normal and dependency-minimal QEMU and consequently
+reports ``mmc0: new HS400 MMC card``.  A QEMU command trace proves its CMD6
 HS200-to-HS-to-DDR8-to-HS400 transitions but no CMD21.  This is intentional in
 the pinned TH1520 Linux driver: its platform tuning callback returns success
 without sending CMD21 while ``SDHCI_HS400_TUNING`` is set.  Linux therefore
@@ -79,16 +91,49 @@ validates EXT_CSD negotiation, CMD6 and HS400 enumeration, while the focused
 qtests remain the CMD21 data/IRQ gate.  A complementary vendor-U-Boot run and
 an end-to-end guest that actually issues CMD21 remain pending.
 
-A new portable functional gate pins Linux 6.11.9 and a small RISC-V ext2
-rootfs by SHA-256.  With one hart, Linux enumerates HS400, mounts the eMMC
-image as root, enters a controlled root shell, writes/syncs and hashes a
-deterministic 1 MiB file, remounts read-only, then closes QEMU.  A fresh QEMU
-process reopens the same scratch image and verifies the hash.  Normal and
-dependency-minimal builds pass.  This is deliberately a storage-specific
-root-shell gate: it does not prove normal distro init, SMP, host-cache
-eviction, power-loss durability, ``e2fsck``, stress, or an official board
-image.  ``/dev/mmcblk1`` is stable for this pinned setup but remains dependent
-on Linux probe order.
+A portable functional gate pins Linux 6.11.9 and a small RISC-V ext2 rootfs by
+SHA-256.  It wraps the raw filesystem at sector 2048 in a deterministic MBR
+whose disk signature is ``0x1520a110`` and boots partition 1 as
+``root=PARTUUID=1520a110-01``.  The identifier is independent of asynchronous
+MMC host probe order; the aliases above currently make the eMMC ``mmc0`` and
+the partition ``mmcblk0p1``, but the gate does not rely on that device name.
+
+With one hart, Linux enumerates HS400, mounts the eMMC image as root, enters a
+controlled root shell, writes/syncs and hashes a deterministic 1 MiB file,
+remounts read-only, then closes QEMU.  A fresh QEMU process reopens the same
+scratch image and verifies the hash.  Normal and dependency-minimal builds
+pass.  The corresponding four-hart qcow2-overlay gate also passes in both
+builds: both its writer and fresh verifier observe CPUs 0-3 online, HS400 and
+the ext2 root; the writer syncs the same payload and remounts read-only, and
+the verifier reproduces SHA-256
+``fb5ac1fab9c5b0e2b328bbe2149dee4664cf064618884f78c10e5c3bf6a05cda``
+before another read-only remount.
+
+These are deliberately storage-specific controlled-root-shell gates.  They do
+not prove normal distro init, host-cache eviction, power-loss durability,
+``e2fsck``, stress, an official board image or long-run freedom from an
+intermittent scheduler/storage defect.
+
+A separate four-hart audit retained the original one-off run in which CPU2
+failed to come online and CPU0 later soft-locked during the kernel's unaligned-
+access check.  Eight subsequent completed four-hart runs all brought up four
+CPUs; a partial run labeled for single-threaded TCG also reached four CPUs
+before ending prior to the MMC probe.  Most exploratory runs used
+``root=179:0 rootwait``.  That is not a valid asynchronous-root gate: Linux
+can resolve the numeric device number before the block device exists, causing
+``rootwait`` to return while MMC discovery is still in flight.  The resulting
+early root-open failures are a harness race.  That race does not itself explain
+the mixed card-initialization results, so those runs neither isolate nor rule
+out an intermittent QEMU storage defect.
+
+Before the formal gate existed, one fresh qcow2-overlay control used the then
+probe-order-dependent ``root=/dev/mmcblk1`` path.  It brought up all four CPUs,
+enumerated the HS400 card, mounted ext2 and emitted
+``FOUR_HART_EMMC_PASS``.  The later PARTUUID-based normal/minimal gates above
+supersede that one path-only control and include the complete integrity and
+fresh-process sequence.  The earlier CPU2-offline/CPU0-soft-lockup event was
+not reproduced, but remains a local historical observation rather than a
+physical-hardware fact or proof that indefinite stress cannot reproduce it.
 
 The same checkpoint fixes a TH1520 AP-clock scheduling defect found by Linux's
 PLL poll.  A guest could advance virtual time beyond the modeled lock deadline
@@ -316,14 +361,14 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction and mask-overlap boundaries | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the complete board/CSR gates pass 113/113 and 11/11 in normal and 112/112 and 4/4 in both minimal and sanitizer builds.  Qtest directly verifies reset values and stored-field migration, while stage-45 fast-path and stage-46 raised-event mutations fail at their intended same-sticky event cases.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; add guest execution after migration load, genuine version-1/version-2 FXCR streams and an explicit first exception-producing operation after reset, then compare every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs, AP reset pairs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior, clock-gate coupling and physical reset-scope validation |
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM with 32-byte page-write wrapping, and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, EEPROM busy/write-protect behavior, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
-| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA.  Unit 0 opts into the synthetic eMMC 5.1/1.8 V HS200/HS400 speed profile and CMD21 contract; generic eMMC remains unchanged.  A pinned portable Linux gate mounts the modeled eMMC as root, writes/syncs/hashes 1 MiB, remounts read-only and verifies the data from a fresh QEMU process | Pin and boot an official image and vendor U-Boot; add filesystem/block stress, `e2fsck`, cache-eviction/power-loss boundaries and a stable partition identifier; validate physical CID/CSD/EXT_CSD, voltage and electrical tuning/timing; add CQE/ADMA3, boot partitions/RPMB, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
+| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA.  Unit 0 opts into the synthetic eMMC 5.1/1.8 V HS200/HS400 speed profile and CMD21 contract; generic eMMC remains unchanged.  The generated DT adopts the vendor `mmc0=eMMC`, `mmc1=sdio0`, `mmc2=sdio1` aliases and tests all three, while the pinned upstream DTS omission remains an explicit provenance uncertainty.  Portable Linux wraps the pinned ext2 root in an MBR with `PARTUUID=1520a110-01`; normal/minimal one- and four-hart gates mount HS400, write/sync/hash 1 MiB, remount read-only and verify the stable hash from a fresh QEMU process | Pin and boot an official image and vendor U-Boot; reconcile the vendor aliases with stock-image DT and hardware evidence; add filesystem/block stress, `e2fsck`, cache-eviction/power-loss boundaries and longer SMP repetition; validate physical CID/CSD/EXT_CSD, voltage and electrical tuning/timing; add CQE/ADMA3, boot partitions/RPMB, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000. Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status. TH1520 additionally enables Type-2 RX status for a bounded IPv4/IPv6 TCP/UDP/ICMP subset. The shared transmit COE now honors TXCOESEL, TSF and first-descriptor CIC0-3, inserts IPv4 header and IPv4/IPv6 TCP/UDP/ICMP checksums through one C-VLAN or ESVL-enabled S-VLAN, preserves guest source buffers, and writes terminal enhanced IHE/IPE/ES status | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete RX drop/forward threshold policy and malformed/zero-checksum corners; compare TX CIC2, CIC1-on-IPv6, malformed-length/status, trailing/padding, FIFO/PBL recovery, threshold, fragment/extension and stacked-VLAN behavior; add PTP/MMC/WOL/EEE, flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node with its AP reset pair. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis, reset split and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  Its AP gate drives a provisional 125 MHz/zero QEMU clock; gating freezes the pending phase and output, including across migration, and re-enabling resumes it.  It exposes test-only QOM outputs and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, physical clock rate and gate phase/output behavior, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
@@ -659,8 +704,10 @@ the migration channel.  It still starts all four C910 harts at the same
 address and supplies no strap, media, security or release-controller behavior,
 so it is only the first bounded Phase-4 checkpoint.
 
-The focused gate currently passes 113 board qtests in the normal build and 112
-in the dependency-minimal build.  The sole conditional difference is the HID
+At the current checkpoint the complete gate passes 113/113 board qtests and
+11/11 CSR qtests in the normal build, 112/112 and 4/4 respectively in the
+dependency-minimal build, and 112/112 and 4/4 in the ASan/UBSan build.  The
+sole conditional difference in the board totals is the HID
 hotplug test because ``usb-kbd`` is intentionally absent from the minimal
 configuration.  The four remaining USB tests cover exact
 misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
@@ -680,23 +727,23 @@ lifetime, both standard CMD21 patterns, Execute Tuning IRQ/FIFO state, the
 reference HS200/CMD21/HS/DDR8/HS400 workflow, enhanced-strobe rejection and
 reset.  ``emmc-tuning-migration`` checks a partially consumed 128-byte tuning
 FIFO, an armed Execute Tuning request and migrated HS200/HS400 card/controller
-mode.  The old binary fails before the change, the normal and minimal suites
-pass, and the complete 13-test storage group passes under ASan/UBSan.  The
-previous complete sanitizer-board run predates these three tests and remains
-recorded at 108; it also predates the later PLL-poll test and is not relabeled
-as a current full sanitizer run.
+mode.  The old binary failed before the change, the normal and minimal suites
+passed, and the complete 13-test storage group passed under ASan/UBSan.  The
+historical 108-test sanitizer-board run predates these tests and remains useful
+milestone evidence; the current ASan/UBSan board gate supersedes it at 112/112.
 
-The generic RISC-V CSR/migration binary now passes eleven subtests, including
+At that checkpoint the generic RISC-V CSR/migration binary passed eleven
+subtests, including
 fixed-only, active, inhibited and pending PMU migration plus Sscofpmf
 extension-on/off WARL and alias coverage.  Six freestanding Sscofpmf variants
-cover M/S interrupt delivery and AIA virtual aliases with complete, disabled
+covered M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
-passes 17 suites with one expected skip, and the complete RISC-V TCG guest
-suite passes.  Dependency-minimal and ASan/UBSan configurations each pass
-their four available C910 CSR/migration subtests.  The current
-dependency-minimal board gate is 112/112; the last complete sanitizer-board
-run remains the explicitly historical 108/108 result above, while current
-focused sanitizer CPR and storage groups pass 9/9 and 13/13.
+passed 17 suites with one expected skip, and the complete RISC-V TCG guest
+suite passed.  Dependency-minimal and ASan/UBSan configurations each pass
+their four available C910 CSR/migration subtests.  Their current board gates
+both pass 112/112; the explicitly historical 108/108 sanitizer result and the
+earlier focused 9/9 CPR plus 13/13 storage results remain milestone evidence
+only.
 
 The XTheadVector state milestone adds a second architectural payload.  A
 reserved-EDIV ``th.vsetvl`` regression first failed because the translator
@@ -923,21 +970,42 @@ uncertainty.
 
 With a blank 64 MiB image attached as storage unit 0, the same pinned Linux
 kernel binds all three ``thead,th1520-dwcmshc`` nodes, reports 64-bit ADMA, and
-enumerates the image as ``mmc1: new HS400 MMC card`` in both the normal and
-dependency-minimal QEMU builds.  The Linux host number is probe-order
-dependent and is not the QEMU drive unit.  A command trace records HS200, HS,
-DDR8 and HS400 CMD6 updates but no CMD21.  The pinned TH1520 callback explicitly
-skips CMD21 during HS400 preparation, so this gate proves EXT_CSD negotiation,
-CMD6 transitions and HS400 block discovery, not QEMU's tuning data or IRQ path.
+enumerates the image as ``mmc0: new HS400 MMC card`` in both the normal and
+dependency-minimal QEMU builds.  The generated DT explicitly follows vendor
+commit ``a092d55649279e1c9bcda2769b8f6b4370fa2c94`` with
+``mmc0=&emmc``, ``mmc1=&sdio0`` and ``mmc2=&sdio1``; the direct-boot DT qtest
+checks every alias.  The pinned upstream DTS omits those aliases, so stock-DT
+and hardware comparison remain open instead of treating the vendor convention
+as an independently proved mainline contract.  A command trace records HS200,
+HS, DDR8 and HS400 CMD6 updates but no CMD21.  The pinned TH1520 callback
+explicitly skips CMD21 during HS400 preparation, so this gate proves EXT_CSD
+negotiation, CMD6 transitions and HS400 block discovery, not QEMU's tuning
+data or IRQ path.
 
-A separate portable Linux 6.11.9 functional test uses a pinned ext2 rootfs and
-``maxcpus=1``.  It mounts the eMMC-backed root, reaches a controlled root
-shell, writes and syncs a deterministic 1 MiB payload, checks its SHA-256,
-remounts read-only, closes QEMU, then verifies the hash from a new QEMU
-process.  Both normal and dependency-minimal builds pass.  This is one bounded
-filesystem path, not ``e2fsck``, block stress, cache eviction, power-loss
-durability, SMP, normal distro init or official-image coverage.  CQE, SDIO
-Wi-Fi, physical-card GPIOs and mask-ROM boot behavior remain unproved.
+A separate portable Linux 6.11.9 functional test wraps the pinned ext2 rootfs
+at MBR partition sector 2048 with disk signature ``0x1520a110`` and uses
+``root=PARTUUID=1520a110-01``.  Both the ``maxcpus=1`` test and a four-hart
+qcow2-overlay test pass in normal and dependency-minimal builds.  Each writer
+mounts eMMC root, writes and syncs a deterministic 1 MiB payload, verifies
+SHA-256, remounts read-only and closes QEMU; a fresh QEMU process mounts the
+same disk, reproduces the hash and remounts read-only.  The SMP writer and
+verifier additionally require CPUs 0-3 online.  This is bounded functional
+coverage, not ``e2fsck``, block stress, cache eviction, power-loss durability,
+normal distro init or official-image coverage.  CQE, SDIO Wi-Fi, physical-card
+GPIOs and mask-ROM boot behavior remain unproved.
+
+An exploratory SMP audit subsequently brought all four CPUs online in eight
+completed four-hart reruns, without reproducing the earlier CPU2-offline/CPU0-
+soft-lockup event.  Seven of those runs used ``root=179:0``; that numeric
+device number is resolved before the block device necessarily exists and does
+not make ``rootwait`` wait for MMC discovery.  It explains the early root-open
+race but not necessarily the mixed card-initialization results, so the matrix
+is not a valid storage regression result.  A pre-alias fresh-overlay control
+using ``root=/dev/mmcblk1`` brought up four CPUs, enumerated HS400, mounted ext2
+and reached its controlled marker.  The later PARTUUID-based normal/minimal
+four-hart gates supersede that control and complete the integrity/reopen
+sequence.  A sufficiently long single-threaded-TCG control and broader stress
+still remain open.
 
 The same pinned Linux source was also rebuilt in a separate output directory
 with ``CONFIG_STMMAC_ETH``, ``CONFIG_STMMAC_PLATFORM`` and
@@ -1163,6 +1231,54 @@ fails against the preserved pre-fix binary.  This establishes QEMU's
 architectural inter-vCPU ordering contract; physical ordering strength,
 latency, cache-operation completion and the ``.i`` pipeline/refetch behavior
 remain silicon-comparison items.
+
+Pinned openC910 RTL also defines user CSR ``FXCR`` at 0x800 as a 64-bit
+floating-point control/status alias.  It resets to zero, is illegal while FS
+is Off, and an otherwise legal write marks FS Dirty.  Its software-visible
+mask is ``0x0780003f``: bits 26:24 alias ``frm``; bit 23 is DQNaN, where zero
+selects the default/canonical NaN and one propagates a source NaN; bit 5 is a
+writable flag that otherwise sticky-sets on a floating-point exception event;
+and bits 4:0 alias ``fflags``.  All other bits read zero and ignore writes.  The
+current implementation checkpoint replaces the former zero-valued placeholder
+with that field/alias contract, updates SoftFloat NaN selection, tracks
+exception events independently of direct ``fflags`` writes, and adds reset
+handling plus version-3 migration fields and old-stream defaults.
+
+The FXCR execution guest passes in the normal, dependency-minimal and
+ASan/UBSan builds.  The execution payload
+checks M/S/U access with FS Off and enabled, read-versus-write FS transitions,
+the exact mask/aliases, scalar H/S/D and XTheadVector canonical-versus-source
+NaNs, all five IEEE exception classes, direct flag writes, and a new occurrence
+of an already-sticky exception.  It also proves that an integer-result
+quiet-NaN ``flt.s`` which raises an already-sticky invalid exception sets FE
+and changes FS from Clean to Dirty.  The C910 CSR qtest checks aliases and
+that emulated warm/system reset clears both FXCR and FS.  Its whole-machine
+migration case directly sets and reads back the stored FXCR/FRM/FFLAGS fields;
+it does not yet execute a guest FP operation after load.  The complete current
+board/CSR gates pass 113/113 and 11/11 in the normal build, and 112/112 and 4/4
+in each dependency-minimal and ASan/UBSan build.  The generic SoftFloat quick
+suite passes 17/17, and its slow ``fp-test-mulAdd`` FMA test also passes for
+f16, f32, f64 and f128.
+
+A targeted mutant which removes the event-tracking guard from
+``can_use_fpu()`` allows the host floating-point fast path while FE detection
+is armed and fails the expanded payload at stage 45, the repeated already-
+sticky NX case; the correct binary passes.  The preserved mutant is
+``../validation-artifacts/fxcr-mutation-20260825/qemu-system-riscv64-no-event-guard``
+(SHA-256
+``8d88b261ae8b944ee231a906d40f6ebff3185fe301806f72a0988955f9cec923``).
+A separate targeted mutation which removes the raised-event arm from
+``riscv_cpu_check_fflags()`` fails at stage 46, where quiet-NaN ``flt.s``
+raises an already-sticky invalid event and must dirty FS.  That second mutant
+was restored immediately after the observed exit-at-stage-46 result; no mutant
+binary or immutable transcript is claimed.  Thus both event paths have
+mutation evidence.  Guest execution after migration load, genuine
+version-1/version-2 migration streams, an explicit
+first exception-producing operation after emulated reset, and physical
+comparison remain open.  The C910 model is TCG-only and is rejected with KVM
+until its custom state can be synchronized; CPU-016 retains the unidentified
+TH1520 stepping rather than treating the pinned RTL as a silicon measurement.
+
 P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
 privilege combinations, B/SH/SEC effects, remaining scalar/FP/masked/vector
 forms and boundary combinations, cache/CMO and remaining ordering effects,
@@ -1280,14 +1396,20 @@ profile is also implemented with ``EXT_CSD_REV = 8``, ``CARD_TYPE = 0x57``,
 four-/eight-bit CMD21 data.  CMD21 is part of the tested reference workflow,
 while the card enforces HS plus DDR8 as the immediate HS400 predecessor;
 generic eMMC defaults are unchanged.  Three new focused qtests and the
-fail-before comparison pass; the complete normal/minimal board gates are
-113/112 and the ASan/UBSan storage gate is 13/13.  Pinned Linux reaches HS400
+fail-before comparison pass; the current complete board gates are 113/113 in
+the normal build and 112/112 in both dependency-minimal and ASan/UBSan builds.
+The earlier ASan/UBSan storage-only gate passed 13/13.  Pinned Linux reaches HS400
 in both builds, but its TH1520 callback intentionally skips CMD21, leaving an
 end-to-end CMD21 guest and physical validation open.  A portable single-hart
-Linux gate also mounts eMMC as root and preserves one synced 1 MiB payload
-across a clean read-only remount and fresh-QEMU-process reopen.  Official
-image/U-Boot, SMP, filesystem/block stress and power-loss behavior remain
-open.  The initial Ethernet
+Linux gate and its four-hart counterpart wrap the pinned filesystem in the
+deterministic ``PARTUUID=1520a110-01`` MBR, mount the aliased ``mmc0`` eMMC as
+root and preserve the stable 1 MiB payload hash across sync, read-only remount
+and fresh-QEMU-process reopen.  Both gates pass in normal and minimal builds.
+The generated DT checks vendor ``mmc0``/``mmc1``/``mmc2`` aliases, while the
+pinned upstream DTS omission remains an explicit compatibility uncertainty.
+Official image/U-Boot, longer SMP repetition, filesystem/block stress and
+power-loss behavior remain open.  The initial
+Ethernet
 submilestone integrates both GMAC cores, their APB glue, IRQs, generated DT,
 GMAC0's backend and generic Clause 22 PHY;
 it now filters rejected frames before touching RX DMA state and covers MAC0
