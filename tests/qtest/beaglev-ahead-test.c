@@ -640,6 +640,30 @@
 #define FW_DYNAMIC_MAGIC           0x4942534f
 #define FW_DYNAMIC_VERSION         2
 
+/*
+ * Raw RV64 mask-ROM payload.  Hart 0 resets UART0, writes 'R', and parks;
+ * the other harts park without touching the UART.  Keep this independent of
+ * a guest toolchain so the qtest can run in dependency-minimal builds.
+ */
+static const uint8_t mask_rom_uart_guest[] = {
+    0x73, 0x25, 0x40, 0xf1, /* csrr a0, mhartid */
+    0x63, 0x14, 0x05, 0x02, /* bnez a0, park */
+    0xb7, 0xa2, 0xff, 0x03, /* li t0, 0xffe7014000 (part 1) */
+    0x9b, 0x82, 0x52, 0xc0, /* li t0, 0xffe7014000 (part 2) */
+    0x93, 0x92, 0xe2, 0x00, /* li t0, 0xffe7014000 (part 3) */
+    0x13, 0x03, 0x10, 0x00, /* li t1, 1 */
+    0x23, 0xa4, 0x62, 0x08, /* sw t1, 0x88(t0) */
+    0x13, 0x03, 0x30, 0x00, /* li t1, 3 */
+    0x23, 0xa6, 0x62, 0x00, /* sw t1, 0x0c(t0) */
+    0x13, 0x03, 0x20, 0x05, /* li t1, 'R' */
+    0x23, 0xa0, 0x62, 0x00, /* sw t1, 0(t0) */
+    0x73, 0x00, 0x50, 0x10, /* park: wfi */
+    0x6f, 0xf0, 0xdf, 0xff, /* j park */
+};
+
+static uint8_t read_serial_byte(int fd);
+static void wait_for_migration_complete(QTestState *qts);
+
 #define UART_IER_RDI               BIT(0)
 #define UART_IER_THRI              BIT(1)
 #define UART_IIR_NO_INT            BIT(0)
@@ -2330,6 +2354,255 @@ static void test_direct_boot_contract(void)
     qtest_quit(qts);
 }
 
+static char *create_mask_rom(const uint8_t *contents, size_t size)
+{
+    g_autoptr(GError) error = NULL;
+    char *path = NULL;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-mask-rom-XXXXXX", &path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(write(fd, contents, size), ==, size);
+    g_assert_cmpint(close(fd), ==, 0);
+    return path;
+}
+
+static char *create_mask_rom_guest(void)
+{
+    return create_mask_rom(mask_rom_uart_guest, sizeof(mask_rom_uart_guest));
+}
+
+static void test_mask_rom_contract(void)
+{
+    g_autofree char *path = create_mask_rom_guest();
+    g_autofree char *rom_dir = g_path_get_dirname(path);
+    g_autofree char *rom_basename = g_path_get_basename(path);
+    g_autofree char *destination_path = NULL;
+    g_autofree char *migration_path = NULL;
+    g_autofree char *uri = NULL;
+    uint8_t alternate[sizeof(mask_rom_uart_guest)];
+    uint8_t contents[sizeof(mask_rom_uart_guest)];
+    QTestState *src;
+    QTestState *dst;
+    QTestState *search_path;
+    uint32_t word;
+    int fd;
+
+    for (size_t i = 0; i < sizeof(alternate); i++) {
+        alternate[i] = ~mask_rom_uart_guest[i];
+    }
+    destination_path = create_mask_rom(alternate, sizeof(alternate));
+
+    search_path = qtest_initf(
+        "-machine beaglev-ahead,boot-mode=mask-rom -L %s -bios %s",
+        rom_dir, rom_basename);
+    qtest_memread(search_path, TH1520_BROM_BASE, contents, sizeof(contents));
+    g_assert_cmpmem(contents, sizeof(contents), mask_rom_uart_guest,
+                    sizeof(mask_rom_uart_guest));
+    qtest_quit(search_path);
+
+    src = qtest_initf(
+        "-machine beaglev-ahead,boot-mode=mask-rom -bios %s", path);
+    fd = g_file_open_tmp("beaglev-ahead-mask-rom-migration-XXXXXX",
+                         &migration_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    uri = g_strdup_printf("file:%s", migration_path);
+    dst = qtest_initf(
+        "-machine beaglev-ahead,boot-mode=mask-rom -bios %s "
+        "-incoming defer", destination_path);
+
+    qtest_memread(src, TH1520_BROM_BASE, contents, sizeof(contents));
+    g_assert_cmpmem(contents, sizeof(contents), mask_rom_uart_guest,
+                    sizeof(mask_rom_uart_guest));
+
+    /* The image occupies the SoC's ROM aperture, not writable guest RAM. */
+    word = qtest_readl(src, TH1520_BROM_BASE + 8);
+    qtest_writel(src, TH1520_BROM_BASE + 8, ~word);
+    g_assert_cmphex(qtest_readl(src, TH1520_BROM_BASE + 8), ==, word);
+
+    qtest_system_reset(src);
+    qtest_memread(src, TH1520_BROM_BASE, contents, sizeof(contents));
+    g_assert_cmpmem(contents, sizeof(contents), mask_rom_uart_guest,
+                    sizeof(mask_rom_uart_guest));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    /* Migration must replace the deliberately different destination ROM. */
+    qtest_memread(dst, TH1520_BROM_BASE, contents, sizeof(contents));
+    g_assert_cmpmem(contents, sizeof(contents), mask_rom_uart_guest,
+                    sizeof(mask_rom_uart_guest));
+    qtest_system_reset(dst);
+    qtest_memread(dst, TH1520_BROM_BASE, contents, sizeof(contents));
+    g_assert_cmpmem(contents, sizeof(contents), mask_rom_uart_guest,
+                    sizeof(mask_rom_uart_guest));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(migration_path), ==, 0);
+    g_assert_cmpint(g_unlink(destination_path), ==, 0);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_mask_rom_execution_reset(void)
+{
+    g_autofree char *path = create_mask_rom_guest();
+    g_autofree char *args = NULL;
+    QTestState *qts;
+    int serial_fd;
+
+    if (!qtest_has_accel("tcg")) {
+        g_test_skip("TCG is required to execute the mask-ROM payload");
+        g_assert_cmpint(g_unlink(path), ==, 0);
+        return;
+    }
+
+    args = g_strdup_printf(
+        "-machine beaglev-ahead,boot-mode=mask-rom -bios %s -accel tcg",
+        path);
+    qts = qtest_init_with_serial(args, &serial_fd);
+
+    g_assert_cmphex(read_serial_byte(serial_fd), ==, 'R');
+    qtest_system_reset(qts);
+    g_assert_cmphex(read_serial_byte(serial_fd), ==, 'R');
+
+    close(serial_fd);
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void assert_qemu_start_fails(const char *const arguments[],
+                                    const char *message)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *dumpdtb_path = NULL;
+    g_autofree char *stderr_text = NULL;
+    g_autoptr(GPtrArray) argv = g_ptr_array_new_with_free_func(g_free);
+    int status = 0;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-invalid-XXXXXX.dtb",
+                         &dumpdtb_path, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    g_assert_cmpint(g_unlink(dumpdtb_path), ==, 0);
+
+    g_ptr_array_add(argv, g_strdup(qtest_qemu_binary(NULL)));
+    for (size_t i = 0; arguments[i]; i++) {
+        g_ptr_array_add(argv, g_strdup(arguments[i]));
+        if (!strcmp(arguments[i], "-machine")) {
+            g_assert_nonnull(arguments[++i]);
+            g_ptr_array_add(argv,
+                g_strdup_printf("%s,dumpdtb=%s", arguments[i],
+                                dumpdtb_path));
+        }
+    }
+    g_ptr_array_add(argv, NULL);
+
+    g_assert_true(g_spawn_sync(NULL, (char **)argv->pdata, NULL,
+                              G_SPAWN_SEARCH_PATH |
+                              G_SPAWN_STDOUT_TO_DEV_NULL, NULL, NULL,
+                              NULL, &stderr_text, &status, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(status, !=, 0);
+    g_assert_nonnull(strstr(stderr_text, message));
+}
+
+static void test_mask_rom_errors(void)
+{
+    g_autofree char *path = create_mask_rom_guest();
+    g_autofree char *empty_path = NULL;
+    g_autofree char *oversized_path = NULL;
+    int fd;
+    const char *const implicit[] = {
+        "-machine", "beaglev-ahead,boot-mode=mask-rom",
+        "-display", "none", NULL,
+    };
+    const char *const missing[] = {
+        "-machine", "beaglev-ahead,boot-mode=mask-rom",
+        "-bios", "none", "-display", "none", NULL,
+    };
+    const char *const default_image[] = {
+        "-machine", "beaglev-ahead,boot-mode=mask-rom",
+        "-bios", "default", "-display", "none", NULL,
+    };
+    const char *const invalid[] = {
+        "-machine", "beaglev-ahead,boot-mode=invalid",
+        "-bios", "none", "-display", "none", NULL,
+    };
+
+    fd = g_file_open_tmp("beaglev-ahead-empty-mask-rom-XXXXXX",
+                         &empty_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    fd = g_file_open_tmp("beaglev-ahead-oversized-mask-rom-XXXXXX",
+                         &oversized_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(ftruncate(fd, MiB + 1), ==, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+
+    {
+        const char *const empty[] = {
+            "-machine", "beaglev-ahead,boot-mode=mask-rom",
+            "-bios", empty_path, "-display", "none", NULL,
+        };
+        const char *const oversized[] = {
+            "-machine", "beaglev-ahead,boot-mode=mask-rom",
+            "-bios", oversized_path, "-display", "none", NULL,
+        };
+        const char *const conflicting_kernel[] = {
+            "-machine", "beaglev-ahead,boot-mode=mask-rom",
+            "-bios", path, "-kernel", path, "-display", "none", NULL,
+        };
+        const char *const conflicting_initrd[] = {
+            "-machine", "beaglev-ahead,boot-mode=mask-rom",
+            "-bios", path, "-initrd", path, "-display", "none", NULL,
+        };
+        const char *const conflicting_append[] = {
+            "-machine", "beaglev-ahead,boot-mode=mask-rom",
+            "-bios", path, "-append", "console=ttyS0",
+            "-display", "none", NULL,
+        };
+        const char *const conflicting_dtb[] = {
+            "-machine", "beaglev-ahead,boot-mode=mask-rom",
+            "-bios", path, "-dtb", "/does/not/exist",
+            "-display", "none", NULL,
+        };
+        const char *const conflict_message =
+            "mask-rom boot does not accept -kernel, -initrd, -append, or -dtb";
+
+        assert_qemu_start_fails(implicit,
+            "mask-rom boot requires -bios <raw-image>");
+        assert_qemu_start_fails(missing,
+            "mask-rom boot requires -bios <raw-image>");
+        assert_qemu_start_fails(default_image,
+            "mask-rom boot requires -bios <raw-image>");
+        assert_qemu_start_fails(empty, "empty file:");
+        assert_qemu_start_fails(oversized,
+                                "exceeds maximum image size (1 MiB)");
+        assert_qemu_start_fails(conflicting_kernel, conflict_message);
+        assert_qemu_start_fails(conflicting_initrd,
+                                "-initrd only allowed with -kernel option");
+        assert_qemu_start_fails(conflicting_append,
+                                "-append only allowed with -kernel option");
+        assert_qemu_start_fails(conflicting_dtb, conflict_message);
+        assert_qemu_start_fails(invalid,
+            "unsupported BeagleV Ahead boot mode 'invalid'");
+    }
+
+    g_assert_cmpint(g_unlink(oversized_path), ==, 0);
+    g_assert_cmpint(g_unlink(empty_path), ==, 0);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_external_dtb(void)
 {
     enum { FDT_BUFFER_SIZE = 4096 };
@@ -3493,8 +3766,6 @@ static void test_gmac_interrupt(gconstpointer test_data)
 
     qtest_quit(qts);
 }
-
-static void wait_for_migration_complete(QTestState *qts);
 
 #ifndef _WIN32
 
@@ -9913,6 +10184,12 @@ int main(int argc, char **argv)
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/beaglev-ahead/boot/direct-contract",
                        test_direct_boot_contract);
+        qtest_add_func("/beaglev-ahead/boot/mask-rom-contract",
+                       test_mask_rom_contract);
+        qtest_add_func("/beaglev-ahead/boot/mask-rom-execution-reset",
+                       test_mask_rom_execution_reset);
+        qtest_add_func("/beaglev-ahead/boot/mask-rom-errors",
+                       test_mask_rom_errors);
         qtest_add_func("/beaglev-ahead/boot/external-dtb",
                        test_external_dtb);
         qtest_add_func("/beaglev-ahead/cpr/clock-registers",

@@ -77,11 +77,17 @@ struct TH1520SoCState {
 #define TYPE_BEAGLEV_AHEAD_MACHINE MACHINE_TYPE_NAME("beaglev-ahead")
 OBJECT_DECLARE_SIMPLE_TYPE(BeagleVAheadState, BEAGLEV_AHEAD_MACHINE)
 
+typedef enum BeagleVAheadBootMode {
+    BEAGLEV_AHEAD_BOOT_DIRECT,
+    BEAGLEV_AHEAD_BOOT_MASK_ROM,
+} BeagleVAheadBootMode;
+
 struct BeagleVAheadState {
     MachineState parent_obj;
 
     TH1520SoCState soc;
     Notifier machine_done;
+    BeagleVAheadBootMode boot_mode;
 };
 
 enum {

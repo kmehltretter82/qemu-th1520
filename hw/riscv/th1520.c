@@ -12,6 +12,7 @@
 #include "qemu/osdep.h"
 #include "cpu-qom.h"
 #include "qemu/cutils.h"
+#include "qemu/datadir.h"
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -1955,6 +1956,63 @@ static void beaglev_ahead_attach_leds(BeagleVAheadState *s)
                                     LED_COLOR_GREEN, "POWER"), true);
 }
 
+static void beaglev_ahead_validate_boot_options(BeagleVAheadState *s)
+{
+    MachineState *ms = MACHINE(s);
+    g_autofree char *filename = NULL;
+    int64_t image_size;
+
+    if (s->boot_mode != BEAGLEV_AHEAD_BOOT_MASK_ROM) {
+        return;
+    }
+
+    if (!ms->firmware || !strcmp(ms->firmware, "none") ||
+        !strcmp(ms->firmware, "default")) {
+        error_report("BeagleV Ahead mask-rom boot requires -bios <raw-image>");
+        exit(EXIT_FAILURE);
+    }
+
+    if (ms->kernel_filename || ms->initrd_filename ||
+        ms->kernel_cmdline[0] || ms->dtb) {
+        error_report("BeagleV Ahead mask-rom boot does not accept "
+                     "-kernel, -initrd, -append, or -dtb");
+        exit(EXIT_FAILURE);
+    }
+
+    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, ms->firmware);
+    if (!filename) {
+        error_report("Unable to find BeagleV Ahead mask-ROM image '%s'",
+                     ms->firmware);
+        exit(EXIT_FAILURE);
+    }
+
+    image_size = get_image_size(filename, &error_fatal);
+    if (image_size == 0) {
+        error_report("empty file: %s", filename);
+        exit(EXIT_FAILURE);
+    }
+    if (image_size > th1520_memmap[TH1520_DEV_BROM].size) {
+        error_report("%s exceeds maximum image size (1 MiB)", filename);
+        exit(EXIT_FAILURE);
+    }
+}
+
+static void beaglev_ahead_load_mask_rom(BeagleVAheadState *s)
+{
+    MachineState *ms = MACHINE(s);
+    const MemMapEntry *brom = &th1520_memmap[TH1520_DEV_BROM];
+    g_autofree char *filename =
+        qemu_find_file(QEMU_FILE_TYPE_BIOS, ms->firmware);
+
+    /* The early validation found this exact image through the BIOS path. */
+    g_assert(filename);
+
+    if (load_image_targphys(filename, brom->base, brom->size,
+                            &error_fatal) < 0) {
+        g_assert_not_reached();
+    }
+}
+
 static void beaglev_ahead_machine_done(Notifier *notifier, void *data)
 {
     BeagleVAheadState *s = container_of(notifier, BeagleVAheadState,
@@ -1968,6 +2026,11 @@ static void beaglev_ahead_machine_done(Notifier *notifier, void *data)
     vaddr kernel_start;
     uint64_t kernel_entry;
     uint64_t fdt_addr;
+
+    if (s->boot_mode == BEAGLEV_AHEAD_BOOT_MASK_ROM) {
+        beaglev_ahead_load_mask_rom(s);
+        return;
+    }
 
     riscv_boot_info_init(&boot_info, &s->soc.c910_cpus);
     firmware_end = riscv_find_and_load_firmware(ms, &boot_info,
@@ -2002,6 +2065,8 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(ms);
     int fdt_size;
+
+    beaglev_ahead_validate_boot_options(s);
 
     if (ms->ram_size != mc->default_ram_size) {
         g_autofree char *size = size_to_str(mc->default_ram_size);
@@ -2042,6 +2107,29 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     qemu_add_machine_init_done_notifier(&s->machine_done);
 }
 
+static char *beaglev_ahead_get_boot_mode(Object *obj, Error **errp)
+{
+    BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(obj);
+
+    return g_strdup(s->boot_mode == BEAGLEV_AHEAD_BOOT_MASK_ROM ?
+                    "mask-rom" : "direct");
+}
+
+static void beaglev_ahead_set_boot_mode(Object *obj, const char *value,
+                                        Error **errp)
+{
+    BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(obj);
+
+    if (!strcmp(value, "direct")) {
+        s->boot_mode = BEAGLEV_AHEAD_BOOT_DIRECT;
+    } else if (!strcmp(value, "mask-rom")) {
+        s->boot_mode = BEAGLEV_AHEAD_BOOT_MASK_ROM;
+    } else {
+        error_setg(errp, "unsupported BeagleV Ahead boot mode '%s' "
+                   "(expected 'direct' or 'mask-rom')", value);
+    }
+}
+
 static void beaglev_ahead_machine_class_init(ObjectClass *oc,
                                               const void *data)
 {
@@ -2050,6 +2138,7 @@ static void beaglev_ahead_machine_class_init(ObjectClass *oc,
         NULL,
     };
     MachineClass *mc = MACHINE_CLASS(oc);
+    ObjectProperty *prop;
 
     mc->desc = "BeagleV Ahead (T-Head TH1520)";
     mc->init = beaglev_ahead_machine_init;
@@ -2064,6 +2153,14 @@ static void beaglev_ahead_machine_class_init(ObjectClass *oc,
     mc->no_cdrom = true;
     compat_props_add(mc->compat_props, beaglev_ahead_cpu_defaults,
                      G_N_ELEMENTS(beaglev_ahead_cpu_defaults));
+
+    prop = object_class_property_add_str(oc, "boot-mode",
+                                         beaglev_ahead_get_boot_mode,
+                                         beaglev_ahead_set_boot_mode);
+    object_class_property_set_description(oc, "boot-mode",
+        "Boot path: direct (QEMU firmware/FDT trampoline) or mask-rom "
+        "(execute a user-supplied raw -bios image from the ROM aperture)");
+    object_property_set_default_str(prop, "direct");
 }
 
 static const TypeInfo beaglev_ahead_types[] = {
