@@ -603,16 +603,28 @@ static const VMStateDescription vmstate_mseccfg = {
     }
 };
 
+static bool riscv_cpu_version_compatible(void *opaque, int version_id)
+{
+    /*
+     * Version 12 added only KVM MP-state handling; the parent payload did
+     * not change.  TCG can therefore load version 11, while KVM must retain
+     * the version-12 floor so that secondary-vCPU MP state is not lost.
+     */
+    return version_id >= 12 || tcg_enabled();
+}
+
 const VMStateDescription vmstate_riscv_cpu = {
     .name = "cpu",
     .version_id = 12,
-    .minimum_version_id = 12,
+    .minimum_version_id = 11,
 #ifdef CONFIG_KVM
     .pre_load = riscv_cpu_kvm_pre_load,
 #endif
     .pre_save = riscv_cpu_pre_save,
     .post_load = riscv_cpu_post_load,
     .fields = (const VMStateField[]) {
+        VMSTATE_VALIDATE("version 11 requires TCG",
+                         riscv_cpu_version_compatible),
         VMSTATE_UINT64_ARRAY(env.gpr, RISCVCPU, 32),
         VMSTATE_UINT64_ARRAY(env.fpr, RISCVCPU, 32),
         VMSTATE_UINT8_ARRAY(env.miprio, RISCVCPU, 64),

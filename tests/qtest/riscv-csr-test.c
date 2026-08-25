@@ -93,7 +93,11 @@
 #define C910_CSR_VMSTATE_V3_PAYLOAD_SIZE 64
 #define C910_CSR_VMSTATE_V2_PAYLOAD_SIZE 61
 #define C910_CSR_VMSTATE_V1_PAYLOAD_SIZE 53
+#define C910_VM_SECTION_FULL_MARKER       0x04
 #define C910_VM_SUBSECTION_MARKER        0x05
+#define RISCV_CPU_VMSTATE_NAME            "cpu"
+#define RISCV_CPU_VMSTATE_V12             12
+#define RISCV_CPU_VMSTATE_V11             11
 #define C910_PMU_OVF_BIT                 (UINT64_C(1) << 17)
 
 typedef struct PMUMigrationTest {
@@ -256,12 +260,38 @@ static bool vmstate_subsection_header_at(const uint8_t *data, gsize size,
            ldl_be_p(data + offset + 2 + name_len) == version;
 }
 
+static bool vmstate_full_header_at(const uint8_t *data, gsize size,
+                                   gsize offset, const char *name,
+                                   uint32_t instance_id, uint32_t version)
+{
+    gsize name_len = strlen(name);
+    gsize instance_offset = offset + 1 + sizeof(uint32_t) + 1 + name_len;
+    gsize version_offset = instance_offset + sizeof(uint32_t);
+    gsize header_size = 1 + sizeof(uint32_t) + 1 + name_len +
+                        2 * sizeof(uint32_t);
+
+    if (name_len > UINT8_MAX || offset > size ||
+        header_size > size - offset) {
+        return false;
+    }
+
+    return data[offset] == C910_VM_SECTION_FULL_MARKER &&
+           data[offset + 1 + sizeof(uint32_t)] == name_len &&
+           !memcmp(data + offset + 1 + sizeof(uint32_t) + 1,
+                   name, name_len) &&
+           ldl_be_p(data + instance_offset) == instance_id &&
+           ldl_be_p(data + version_offset) == version;
+}
+
 /*
  * Turn the current C910 CSR subsection into the exact historical wire shape.
  * The fixed layouts come from the historical v1/v2 descriptors and the
- * current v3 descriptor.  This is valid only for the ordinary sequential
- * file stream used here: VMState subsections have no payload length or
- * checksum.  VMDESC is suppressed so the file contains no stale v3 JSON.
+ * current v3 descriptor.  C910 CSR version 1 predates the parent RISC-V CPU
+ * VMState version 12, whose payload is unchanged from version 11, so lower
+ * those four parent section headers as well.  This is valid only for the
+ * ordinary sequential file stream used here: VMState subsections have no
+ * payload length or checksum.  VMDESC is suppressed so the file contains no
+ * stale current-version JSON.
  */
 static void downgrade_c910_csr_subsections(const char *path,
                                            uint32_t target_version)
@@ -288,6 +318,28 @@ static void downgrade_c910_csr_subsections(const char *path,
     stream = g_byte_array_new_take(
         (guint8 *)g_steal_pointer(&contents), size);
     original_size = stream->len;
+
+    for (uint32_t hart = 0; hart < C910_TEST_HARTS; hart++) {
+        guint header_count = 0;
+
+        for (gsize offset = 0; offset < stream->len; offset++) {
+            gsize version_offset = offset + 1 + sizeof(uint32_t) + 1 +
+                                   strlen(RISCV_CPU_VMSTATE_NAME) +
+                                   sizeof(uint32_t);
+
+            if (!vmstate_full_header_at(stream->data, stream->len, offset,
+                                        RISCV_CPU_VMSTATE_NAME, hart,
+                                        RISCV_CPU_VMSTATE_V12)) {
+                continue;
+            }
+            header_count++;
+            if (target_version == 1) {
+                stl_be_p(stream->data + version_offset,
+                         RISCV_CPU_VMSTATE_V11);
+            }
+        }
+        g_assert_cmpuint(header_count, ==, 1);
+    }
 
     for (gsize offset = 0; offset + header_size <= stream->len; offset++) {
         if (!vmstate_subsection_header_at(stream->data, stream->len, offset,
@@ -330,6 +382,28 @@ static void downgrade_c910_csr_subsections(const char *path,
     }
     g_assert_cmpuint(target_count, ==, C910_TEST_HARTS);
     g_assert_cmpuint(current_count, ==, 0);
+
+    for (uint32_t hart = 0; hart < C910_TEST_HARTS; hart++) {
+        guint expected_count = 0;
+        guint unexpected_count = 0;
+        uint32_t expected_version = target_version == 1 ?
+                                    RISCV_CPU_VMSTATE_V11 :
+                                    RISCV_CPU_VMSTATE_V12;
+        uint32_t unexpected_version = target_version == 1 ?
+                                      RISCV_CPU_VMSTATE_V12 :
+                                      RISCV_CPU_VMSTATE_V11;
+
+        for (gsize offset = 0; offset < stream->len; offset++) {
+            expected_count += vmstate_full_header_at(
+                stream->data, stream->len, offset,
+                RISCV_CPU_VMSTATE_NAME, hart, expected_version);
+            unexpected_count += vmstate_full_header_at(
+                stream->data, stream->len, offset,
+                RISCV_CPU_VMSTATE_NAME, hart, unexpected_version);
+        }
+        g_assert_cmpuint(expected_count, ==, 1);
+        g_assert_cmpuint(unexpected_count, ==, 0);
+    }
     g_assert_cmpuint(ldl_be_p(stream->data + 4), ==, 3);
 
     g_assert_true(g_file_set_contents(path, (const char *)stream->data,
