@@ -334,6 +334,7 @@
 #define DW_UART_QOM_PATH           "/machine/soc/uart0"
 #define TH1520_AP_CLOCK_QOM_PATH   "/machine/soc/ap-clock"
 #define TH1520_AP_RESET_QOM_PATH   "/machine/soc/ap-reset"
+#define TH1520_EMMC_QOM_PATH       "/machine/soc/emmc"
 #define TH1520_MISCSYS_QOM_PATH    "/machine/soc/miscsys"
 #define TH1520_MBOX_QOM_PATH       "/machine/soc/mbox"
 #define TH1520_PVT_QOM_PATH        "/machine/soc/pvt"
@@ -10661,19 +10662,30 @@ static void test_ahead_legacy_device_vmstate(void)
 static void test_dwcmshc_emmc_tuning_migration(void)
 {
     const uint64_t base = TH1520_EMMC_BASE;
+    const uint32_t transfer_state = SDHC_CMD_INHIBIT |
+                                    SDHC_DATA_INHIBIT |
+                                    SDHC_DAT_LINE_ACTIVE |
+                                    SDHC_DOING_READ |
+                                    SDHC_DOING_WRITE |
+                                    SDHC_SPACE_AVAILABLE |
+                                    SDHC_DATA_AVAILABLE;
     g_autofree char *src_image = dwcmshc_create_image(NULL, 0);
     g_autofree char *mid_image = dwcmshc_create_image(NULL, 0);
     g_autofree char *dst_image = dwcmshc_create_image(NULL, 0);
+    g_autofree char *pending_image = dwcmshc_create_image(NULL, 0);
     g_autofree char *final_image = dwcmshc_create_image(NULL, 0);
     g_autofree char *first_path = NULL;
     g_autofree char *second_path = NULL;
     g_autofree char *third_path = NULL;
+    g_autofree char *fourth_path = NULL;
     g_autofree char *first_uri = NULL;
     g_autofree char *second_uri = NULL;
     g_autofree char *third_uri = NULL;
+    g_autofree char *fourth_uri = NULL;
     QTestState *src;
     QTestState *mid;
     QTestState *dst;
+    QTestState *pending;
     QTestState *final;
     uint8_t ext_csd[DWCMSHC_BLOCK_SIZE];
     int fd;
@@ -10690,9 +10702,14 @@ static void test_dwcmshc_emmc_tuning_migration(void)
                          &third_path, NULL);
     g_assert_cmpint(fd, >=, 0);
     close(fd);
+    fd = g_file_open_tmp("beaglev-ahead-emmc-tuning-4-XXXXXX",
+                         &fourth_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
     first_uri = g_strdup_printf("file:%s", first_path);
     second_uri = g_strdup_printf("file:%s", second_path);
     third_uri = g_strdup_printf("file:%s", third_path);
+    fourth_uri = g_strdup_printf("file:%s", fourth_path);
 
     src = qtest_initf(
         "-machine beaglev-ahead -bios none "
@@ -10767,6 +10784,8 @@ static void test_dwcmshc_emmc_tuning_migration(void)
                     (R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
                      R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK), ==,
                     R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    qtest_irq_intercept_out_named(dst, TH1520_EMMC_QOM_PATH,
+                                  "sysbus-irq");
     dwcmshc_issue_emmc_tuning(dst, base, DWCMSHC_EMMC_TUNING_SIZE);
     g_assert_cmphex(qtest_readw(dst, base + SDHC_NORINTSTS) &
                     (SDHC_NIS_CMDCMP | SDHC_NIS_TRSCMP |
@@ -10775,35 +10794,76 @@ static void test_dwcmshc_emmc_tuning_migration(void)
                     (R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
                      R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK), ==,
                     R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
-    qtest_writeb(dst, base + SDHC_SWRST, SDHC_RESET_DATA);
-    g_assert_cmphex(qtest_readw(dst, base + SDHC_NORINTSTS) &
+    assert_only_irq(dst, 0);
+
+    /* Preserve the completed tuning interrupt and reconstruct its IRQ. */
+    qtest_quit(mid);
+    pending = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off "
+        "-incoming defer",
+        pending_image);
+    qtest_irq_intercept_out_named(pending, TH1520_EMMC_QOM_PATH,
+                                  "sysbus-irq");
+    assert_no_irq(pending);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", third_uri);
+    wait_for_migration_complete(dst);
+    qtest_qmp_assert_success(pending,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        third_uri);
+    wait_for_migration_complete(pending);
+
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_NORINTSTS) &
+                    (SDHC_NIS_CMDCMP | SDHC_NIS_TRSCMP |
+                     SDHC_NIS_RBUFRDY), ==, SDHC_NIS_RBUFRDY);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_NORINTSTSEN) &
+                    SDHC_NISEN_RBUFRDY, ==, SDHC_NISEN_RBUFRDY);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_NORINTSIGEN) &
+                    SDHC_NIS_RBUFRDY, ==, SDHC_NIS_RBUFRDY);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_HOSTCTL2) &
+                    (R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
+                     R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK), ==,
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_HOSTCTL2) &
+                    R_SDHC_HOSTCTL2_UHS_MODE_SEL_MASK, ==,
+                    DWCMSHC_UHS_MODE_HS200);
+    g_assert_cmphex(qtest_readl(pending, base + SDHC_PRNSTS) &
+                    transfer_state, ==, 0);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_BLKCNT), ==, 0);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_ERRINTSTS), ==, 0);
+    assert_only_irq(pending, 0);
+
+    qtest_writeb(pending, base + SDHC_SWRST, SDHC_RESET_DATA);
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_NORINTSTS) &
                     SDHC_NIS_RBUFRDY, ==, 0);
-    g_assert_cmphex(qtest_readw(dst, base + SDHC_HOSTCTL2) &
+    g_assert_cmphex(qtest_readw(pending, base + SDHC_HOSTCTL2) &
                     R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK, ==,
                     R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+    assert_no_irq(pending);
 
-    dwcmshc_emmc_switch_ok(dst, base, EMMC_EXT_CSD_HS_TIMING,
+    dwcmshc_emmc_switch_ok(pending, base, EMMC_EXT_CSD_HS_TIMING,
                            EMMC_HS_TIMING_HS);
-    dwcmshc_emmc_switch_ok(dst, base, EMMC_EXT_CSD_BUS_WIDTH,
+    dwcmshc_emmc_switch_ok(pending, base, EMMC_EXT_CSD_BUS_WIDTH,
                            EMMC_BUS_WIDTH_DDR_8);
-    dwcmshc_emmc_switch_ok(dst, base, EMMC_EXT_CSD_HS_TIMING,
+    dwcmshc_emmc_switch_ok(pending, base, EMMC_EXT_CSD_HS_TIMING,
                            EMMC_HS_TIMING_HS400);
-    qtest_writew(dst, base + SDHC_HOSTCTL2, DWCMSHC_UHS_MODE_HS400);
-    dwcmshc_assert_emmc_mode(dst, base, EMMC_BUS_WIDTH_DDR_8,
+    qtest_writew(pending, base + SDHC_HOSTCTL2, DWCMSHC_UHS_MODE_HS400);
+    dwcmshc_assert_emmc_mode(pending, base, EMMC_BUS_WIDTH_DDR_8,
                              EMMC_HS_TIMING_HS400);
 
-    qtest_quit(mid);
+    qtest_quit(dst);
     final = qtest_initf(
         "-machine beaglev-ahead -bios none "
         "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off "
         "-incoming defer",
         final_image);
-    qtest_qmp_assert_success(dst,
-        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", third_uri);
-    wait_for_migration_complete(dst);
+    qtest_qmp_assert_success(pending,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", fourth_uri);
+    wait_for_migration_complete(pending);
     qtest_qmp_assert_success(final,
         "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
-        third_uri);
+        fourth_uri);
     wait_for_migration_complete(final);
 
     g_assert_cmphex(qtest_readb(final, base + SDHC_HOSTCTL) &
@@ -10820,13 +10880,15 @@ static void test_dwcmshc_emmc_tuning_migration(void)
     g_assert_cmphex(ext_csd[EMMC_EXT_CSD_CARD_TYPE], ==, 0x57);
 
     qtest_quit(final);
-    qtest_quit(dst);
+    qtest_quit(pending);
     g_assert_cmpint(g_unlink(first_path), ==, 0);
     g_assert_cmpint(g_unlink(second_path), ==, 0);
     g_assert_cmpint(g_unlink(third_path), ==, 0);
+    g_assert_cmpint(g_unlink(fourth_path), ==, 0);
     g_assert_cmpint(g_unlink(src_image), ==, 0);
     g_assert_cmpint(g_unlink(mid_image), ==, 0);
     g_assert_cmpint(g_unlink(dst_image), ==, 0);
+    g_assert_cmpint(g_unlink(pending_image), ==, 0);
     g_assert_cmpint(g_unlink(final_image), ==, 0);
 }
 
