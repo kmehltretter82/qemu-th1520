@@ -341,8 +341,9 @@ I2C0 contains a 4 KiB ``atmel,24c32``-compatible device at address ``0x50``
 with a 32-byte page size in the generated device tree.  EEPROM data and its
 current-address pointer migrate, and an optional raw backing image persists
 writes.  The pinned Linux DesignWare and AT24 drivers bind and read the entire
-4096-byte erased image.  The EEPROM model does not yet reproduce page-wrap,
-write-cycle busy time, endurance, power-loss or write-protect behavior.
+4096-byte erased image.  Multi-byte writes wrap within the selected 32-byte
+page.  The EEPROM model does not yet reproduce write-cycle busy time,
+endurance, power-loss or write-protect behavior.
 Factory contents and layout, the fitted board revision and the schematic's
 GPIO2_22-related write-protect network must be checked on the owner's board
 before those behaviors are modeled.

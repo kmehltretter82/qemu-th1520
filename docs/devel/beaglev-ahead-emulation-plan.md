@@ -237,7 +237,7 @@ validation.
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs, AP reset pairs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior, clock-gate coupling and physical reset-scope validation |
-| I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
+| I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM with 32-byte page-write wrapping, and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, EEPROM busy/write-protect behavior, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, checksum status, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000.  Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete checksum modes, PTP/MMC/WOL/EEE and flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
@@ -335,10 +335,12 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   schematic/BOM-established FT24C32A-compatible 4 KiB EEPROM at ``0x50``;
   the other five remain board-disabled.  Synthetic contents default to erased
   ``0xff``, while an exact-size raw image can provide private factory data and
-  persistent writes.  EEPROM memory and its current-address state migrate;
-  five focused tests cover DT/reset/identity, all PLIC routes, repeated-start
-  data access, backing persistence and in-flight migration.  A pinned Linux
-  build with AT24 enabled binds both drivers and reads all 4096 bytes; and
+  persistent writes.  Multi-byte writes wrap inside the selected 32-byte page.
+  EEPROM memory and its current-address state migrate; five focused tests cover
+  DT/reset/identity, all PLIC routes, repeated-start data access including a
+  nonzero page boundary, backing persistence and in-flight migration.  A
+  pinned Linux build with AT24 enabled binds both drivers and reads all 4096
+  bytes; and
 * a reusable DesignWare APB SSI master at SPI0, ``0xffe700c000``, on PLIC
   source 54 and AP clock ID 54.  Its generated ``spi0`` node has the exact
   upstream-Linux compatible strings and remains disabled, with no invented
@@ -1136,8 +1138,9 @@ binding; pinned Linux binds all three padctrl devices.  The I2C submilestone
 maps all six controllers with their exact addresses, PLIC sources, AP clock
 IDs and synthesis-visible reset identity.  It enables board I2C0 for the
 schematic-established 4 KiB EEPROM at address 0x50, supports private raw-image
-backing, and migrates controller/FIFO/EEPROM state.  Five focused tests and a
-full 4096-byte Linux AT24 read pass.  The timer submilestone maps both
+backing, wraps page writes within the fitted 32-byte page, and migrates
+controller/FIFO/EEPROM state.  Five focused tests and a full 4096-byte Linux
+AT24 read pass.  The timer submilestone maps both
 four-counter blocks and all eight PLIC routes, implements the documented
 countdown/status/EOI/reset/migration contract with AP-gated 125 MHz inputs,
 and emits eight disabled upstream-compatible DT nodes.  Four named toggle
@@ -1222,8 +1225,8 @@ KiB DT apertures but only the documented first 256-byte DW register block is
 mapped; I2C0-5 likewise describe 16 KiB apertures while only the first 4 KiB
 is modeled.  Reserved-aperture behavior remains a hardware question.  I2C
 slave mode, arbitration/multi-master behavior, timed TX FIFO and bus clock,
-clock stretching/stuck recovery, DMA, SMBus, EEPROM page-wrap/write-cycle/
-write-protect behavior and factory contents remain open.  GPIO
+clock stretching/stuck recovery, DMA, SMBus, EEPROM write-cycle/write-protect
+behavior and factory contents remain open.  GPIO
 debounce timing and synthesis probes remain open.  Pad mux changes do not yet
 route signals, and physical pulls, voltage domains, drive/slew/Schmitt effects,
 tri-state/contention behavior, header conflicts and active-low board-consumer
