@@ -273,7 +273,16 @@ reductions to leave their complete destination register unchanged at ``vl=0``
 and to trap at nonzero ``vstart``.  It covers e64 widening rejection before
 helper dispatch, valid LMUL=8 scalar reduction operands, permitted
 source/mask overlap and inactive-mask/tail behavior.  Those are frozen-spec
-rules; physical C910 confirmation remains outstanding.  MAEE
+rules; physical C910 confirmation remains outstanding.  A fifth guest covers
+the implicit ``v0`` overlap boundary for masked LMUL=2 integer and
+floating-point comparisons and all three mask-prefix forms, while retaining
+legal LMUL=1, unmasked and non-``v0`` controls.  A sixth guest uses independent
+scalar RV64 oracles for ``th.vslidedown.vx`` and ``th.vrgather.vx``.  It checks
+valid, VLMAX, ``UINT64_MAX`` and ``1ULL << 32`` scalar indices, a slide that
+partly crosses VLMAX, in-place slide, helper and optimized gather paths, and
+mask/prestart/tail/``vstart`` state.  This permutation gate dynamically covers
+RV64 e8,m1 only; other SEW/LMUL and XLEN combinations plus physical C910
+results remain outstanding.  MAEE
 PTE bits 63:59 are carried
 through translation while MAEE is enabled.  When MAEE is clear, C910 ignores
 those PTE bits and obtains attributes from its physical system map; QEMU
@@ -702,9 +711,10 @@ to this board, so the generic QEMU eMMC defaults are unchanged.
 
 This profile is a guest-software contract, not identification of the physical
 16 GiB device.  Three focused SD/eMMC profile, tuning, reset and migration
-qtests pass, including an old-binary fail-before comparison; the complete
-normal, dependency-minimal and ASan/UBSan board gates are respectively
-113/113, 112/112 and 112/112.  The earlier 13-test storage subset also passes
+qtests pass, including an old-binary fail-before comparison.  At that profile
+checkpoint, the complete normal, dependency-minimal and ASan/UBSan board gates
+were respectively 113/113, 112/112 and 112/112.  The earlier 13-test storage
+subset also passed
 under ASan/UBSan.  A QEMU trace of the pinned Linux run records the CMD6
 HS200-to-HS-to-DDR8-to-HS400 transitions but no CMD21.  This is expected from
 that kernel: the TH1520 platform callback returns success without issuing
@@ -780,13 +790,15 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 113/113 tests in the normal build
-and 112/112 in both dependency-minimal and ASan/UBSan builds.  The associated
-CSR gates pass 11/11, 4/4 and 4/4 respectively, and the 48-stage C910 FXCR
-guest passes in all three.  Generic SoftFloat passes its 17/17 quick suite and
-the slow ``fp-test-mulAdd`` FMA test.  The only conditional omission is the
-keyboard-hotplug test because the deliberately minimal configurations exclude
-``usb-kbd``; their
+device tests, the current complete normal gate passes 114/114 board and 14/14
+CSR tests; the dependency-minimal gate passes 113/113 and 7/7 respectively.
+ASan/UBSan passes all 7 CSR tests plus the current focused whole-machine,
+legacy-device and eMMC tuning-migration cases; its preceding complete board
+gate passed 112/112.  The 48-stage C910 FXCR guest and all six XTheadVector
+firmware guests pass in all three configurations.  Generic SoftFloat passes
+its 17/17 quick suite and the slow ``fp-test-mulAdd`` FMA test.  The only
+conditional omission is the keyboard-hotplug test because the deliberately
+minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
 vector/PMU/MAEE, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
@@ -794,9 +806,11 @@ C900 PLIC probe after bringing up all four CPUs; the normal builds separately
 cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
 coroutines is expected and was not accompanied by an ASan/UBSan finding.
-FXCR guest execution after migration load and a genuine pre-version-3 stream
-remain open.  External backends and peers do not migrate; in-flight storage
-and GMAC DMA plus active or attached USB migration also remain open.
+Dedicated current, synthetic pre-version-3 and genuine historical C910 CSR
+migration gates pass.  Their documented old-wire ambiguities, physical reset
+behavior and silicon state remain open.  External backends and peers do not
+migrate; in-flight storage and GMAC DMA plus active or attached USB migration
+also remain open.
 
 QSPI/XIP, board SPI peripherals, timer cascade and physical toggle routing,
 PVT alarm/timer/IRQ and analog timing fidelity, non-application watchdogs,

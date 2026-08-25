@@ -32,8 +32,8 @@ The current conservative tally is:
   not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **9 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L009`), which must not be reported as existing
+* **13 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L013`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -169,6 +169,26 @@ The code exists only in the public unmerged XTheadVector series and this
 branch, so it is a patch-series review finding rather than a bug in current
 upstream QEMU.  A fail-before regression and translator fix now cover the
 exception and the legal hit/no-hit boundaries.
+
+The subsequent XTheadVector overlap audit likewise leaves the upstream tally
+at 12.  It found `UQ-L010`: masked comparison and mask-prefix destinations
+could overlap implicit mask source `v0` at LMUL greater than one.  The affected
+translation checks are confined to the public unmerged XTheadVector work and
+this branch.  The overlap payload now covers eight illegal forms, preservation
+after the first trap, and legal LMUL=1, unmasked and non-`v0` controls.
+
+The scalar-permutation audit at checkpoint `9eef55f462` adds `UQ-L013` but no
+current-upstream report unit.  The vendor-derived `th.vslidedown.vx` helper
+could wrap an XLEN-wide offset into a valid source lane, while the
+`th.vrgather.vx` helper truncated its scalar index to 32 bits.  An independent
+RV64 oracle and targeted mutations distinguish the slide wrap, gather
+truncation and slide-boundary off-by-one at exits 3, 9 and 13.  All six
+XTheadVector payloads pass **6/6** in normal, dependency-minimal and ASan/UBSan
+focused runs.  Audited upstream QEMU has no XTheadVector implementation, so
+these vendor-series defects belong in a revived-series review or vendor-fork
+report, not a report against current upstream.  `UQ-L011` and `UQ-L012` are
+separate branch-local GMAC and PLL findings indexed in the local handoff; none
+of `UQ-L010` through `UQ-L013` changes the proposed-upstream tally of 12.
 
 The 2026-08-24 C910 MXSTATUS.MM milestone did not add a report unit.  It found
 two real implementation defects: the branch's new C910 definition exposed
@@ -1312,6 +1332,64 @@ The affected source came from the public unmerged XTheadVector work; current
 upstream QEMU has no XTheadVector translator.  Keep this as a required review
 item for any revived submission or vendor fork, not as a current upstream
 GitLab report.
+
+### UQ-L010: XTheadVector destinations overlapped implicit mask source v0
+
+Status: **FIXED PUBLIC PATCH-SERIES DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+The frozen XTheadVector extension and inherited Vector 0.7.1 overlap rules
+forbid a masked destination group from overlapping implicit mask source `v0`
+when LMUL is greater than one.  The imported integer and floating-point
+comparison checks enforced explicit operand constraints but omitted that
+implicit source.  The mask-prefix translator macro inherited the same gap.
+Masked LMUL=2 comparison or prefix instructions targeting `v0` therefore
+executed instead of raising an illegal-instruction exception.
+
+The four shared comparison checkers and mask-prefix macro now apply
+`th_check_overlap_mask`.  The regression requires exact traps for integer
+VV/VX/VI and floating-point VV/VF comparisons plus `th.vmsbf.m`,
+`th.vmsif.m` and `th.vmsof.m`.  It preserves nonzero `vstart` and all 16 bytes
+of `v0` after the first trap, then proves that LMUL=1, unmasked LMUL=2 and
+masked non-`v0` controls remain legal.
+
+This translation code came from the public unmerged XTheadVector work and is
+absent from current upstream QEMU.  Keep `UQ-L010` as a required review item
+for a revived series or vendor fork; do not file it as an existing-upstream
+QEMU bug.
+
+### UQ-L013: XTheadVector scalar permutation lost full-XLEN indices
+
+Status: **FIXED PUBLIC PATCH-SERIES DEFECT; NOT AN EXISTING UPSTREAM BUG**
+
+XTheadVector scalar-index slide and gather use an unsigned XLEN-wide general
+register operand.  The imported `th.vslidedown.vx` helper formed `i + offset`
+before checking it against VLMAX.  On RV64, an offset of `UINT64_MAX` could
+therefore wrap to a small source index.  The imported `th.vrgather.vx` helper
+instead assigned the scalar operand to `uint32_t`, so an index such as
+`1ULL << 32` became zero and selected a valid source element.
+
+Checkpoint `9eef55f462` first rejects slide offsets outside VLMAX and then
+uses subtraction to prove `i + offset` is in range before forming it.  Gather
+retains the index as `target_ulong`.  A freestanding RV64 guest computes all
+expected bytes with independent overflow-safe scalar loops.  It covers valid,
+VLMAX, `UINT64_MAX` and `1ULL << 32` indices; a partial source-boundary
+crossing; in-place slide; masked and short-`vl` helper gathers; full-`vl`
+optimized gathers; mask/prestart preservation; legacy tail zeroing; and
+`vstart` clearing.  The original helper fails with exit 3, an isolated gather
+truncation fails with exit 9, and a slide-boundary off-by-one fails with exit 13.
+The fixed guest and the other five XTheadVector payloads pass **6/6** in
+normal, dependency-minimal and ASan/UBSan focused runs without a sanitizer
+finding.
+
+The affected helpers exist in Alibaba/XuanTie QEMU commit
+`3287d345c7f5d60d5c8774d90752f5f710744f85` and the public unmerged
+XTheadVector series.  Current upstream QEMU has no XTheadVector decoder or
+execution helpers, so there is no released-upstream reproducer.  Preserve
+`UQ-L013` as a vendor-fork or revived-series review finding; it does not change
+the conservative tally of 12 proposed new upstream report units.  Dynamic
+coverage remains limited to RV64 e8,m1; other SEW/LMUL combinations, RV32,
+big-endian execution and physical C910 behavior remain separate validation
+work.
 
 The following are also not counted as upstream QEMU bugs at present:
 

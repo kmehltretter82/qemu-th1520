@@ -9,13 +9,13 @@ baseline reproducer.
 
 * Audit checkpoint: 2026-08-25
 * Branch: `beaglev-ahead`
-* Latest-finding pre-fix workspace HEAD: `b56201ad61`
+* Latest-finding pre-fix workspace HEAD: `e734a5c4c8`
 * Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
 
 ## Current disposition
 
-The twelve local findings recorded during implementation (`UQ-L001` through
-`UQ-L012`) are fixed and have focused regressions.  The GMAC audit found that
+The thirteen local findings recorded during implementation (`UQ-L001` through
+`UQ-L013`) are fixed and have focused regressions.  The GMAC audit found that
 the reusable DWC GMAC transmit path advertised checksum offload while its
 inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
 did not model the feature/TSF gates or descriptor-format error status.  At the
@@ -41,7 +41,7 @@ assigned new ``UQ-L`` identifiers because the affected translator predates the
 branch-only board implementation.  Hardware conflict and comparison work is
 kept under ``CPU-015`` in the validation ledger.
 
-The latest board-local finding was a scheduler-observability bug in the
+The preceding board-local finding was a scheduler-observability bug in the
 TH1520 AP clock controller.  A tight Linux-style PLL poll could advance
 virtual time beyond the modeled lock deadline before the I/O thread dispatched
 the timer callback, leaving ``PLL_STS`` stale until after Linux's timeout.
@@ -51,6 +51,18 @@ delay, reset behavior and migration state are retained.  A raw RV64 qtest
 reproduces the old failure under single-threaded TCG and passes before and
 after system reset with the fix.
 
+The latest local checkpoint fixes two RV64 scalar-index wrong-result defects
+in the vendor-derived XTheadVector helpers.  ``th.vslidedown.vx`` could wrap an
+XLEN-wide offset back into the source group before checking VLMAX, while
+``th.vrgather.vx`` truncated its helper-path scalar index to 32 bits.  Checkpoint
+``9eef55f462`` uses overflow-safe slide bounds and retains a ``target_ulong``
+gather index.  An independent scalar-RV64 oracle covers the affected helpers and
+the existing optimized gather path; restoring the wrap, truncation and a
+slide-boundary off-by-one makes it fail at exits 3, 9 and 13 respectively.
+Current upstream QEMU has no
+XTheadVector implementation, so this remains a public-series/vendor-fork review
+finding rather than a report against released upstream QEMU.
+
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
 establishes the expected behavior.
@@ -58,8 +70,8 @@ establishes the expected behavior.
 Detailed historical reproducer and fix records for the earlier findings remain
 in the `UQ-L*` sections of
 [the upstream handoff](beaglev-ahead-upstream-bugs.md).  Per owner direction,
-the current GMAC finding is recorded only here.  This file is the short review
-index and current test checkpoint.
+the branch-local GMAC and PLL findings are recorded only here.  This file is
+the short review index and current test checkpoint.
 
 ## Fixed local findings
 
@@ -77,6 +89,7 @@ index and current test checkpoint.
 | UQ-L010 | XTheadVector overlap | Masked comparison and mask-prefix destinations could overlap implicit source `v0` at LMUL greater than one. | Fixed in the four comparison checkers and mask-prefix macro; the overlap payload proves eight illegal forms, preservation of `v0`/`vstart` after the first trap, and legal LMUL=1, unmasked and non-`v0` controls. |
 | UQ-L011 | DWC GMAC TX checksum | The local reusable/TH1520 integration collapsed CIC2 and CIC3 into the same IPv4 TCP/UDP recalculation and did not enforce the advertised TXCOESEL/store-and-forward contract, leaving IPv6 offload and descriptor error status incomplete. | Fixed with bounded CIC0-3 IPv4/IPv6 TCP/UDP/ICMP insertion, first/terminal split-frame handling and format-aware IHE/IPE/ES writeback; an 18-case BeagleV matrix and one NPCM normal-descriptor CIC3 compatibility case cover the correction. |
 | UQ-L012 | TH1520 PLL polling | A guest could observe virtual time beyond a due PLL-lock deadline while ``PLL_STS`` remained stale until the I/O thread dispatched its timer callback. | Fixed by materializing an expired deadline on ``PLL_STS`` reads through the existing lock helper; the raw RV64 single-threaded-TCG qtest fails with the preserved pre-fix binary and passes twice, across reset, with the fix. |
+| UQ-L013 | XTheadVector scalar permutation | `th.vslidedown.vx` could wrap a full-XLEN offset into a valid source lane, and the `th.vrgather.vx` helper truncated its scalar index to 32 bits. | Fixed with overflow-safe slide bounds and a `target_ulong` gather index; an independent scalar oracle covers helper/optimized, mask/prestart/tail, in-place and boundary paths, and mutations fail at exits 3, 9 and 13. |
 
 ## Audit evidence
 
@@ -118,7 +131,22 @@ second mutant was restored immediately; no preserved binary or immutable log
 is claimed for it.  The generic SoftFloat quick suite passes 17/17, and the
 slow ``fp-test-mulAdd`` FMA test passes for f16, f32, f64 and f128.
 
-### Current complete normal build
+### Current focused XTheadVector scalar-permutation checkpoint
+
+All six XTheadVector firmware payloads run directly on the Ahead machine and
+pass **6/6** in each of the normal, dependency-minimal and ASan/UBSan builds.
+The instrumented run reports only the established incomplete
+``makecontext``/``swapcontext`` support warning, with no ASan/UBSan diagnostic.
+The pre-fix helper fails with exit 3; isolated gather-truncation and slide
+boundary mutations fail with exits 9 and 13.  The fixed source was restored
+before the passing runs.
+
+The complete aggregate checkpoints below predate the scalar-permutation
+payload and are retained as historical evidence rather than silently
+incremented.  No post-``9eef55f462`` **30/30** complete normal TCG-suite result
+is claimed here.
+
+### Pre-scalar-permutation complete normal build
 
 * `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **113/113**.
 * `build-npcm/tests/qtest/npcm_gmac-test`: **7/7**; its added normal-descriptor
@@ -131,24 +159,28 @@ slow ``fp-test-mulAdd`` FMA test passes for f16, f32, f64 and f128.
   CLINT/PLIC.  The complete normal RISC-V softmmu TCG suite passes **29/29**.
 * `git diff --check`: clean.
 
-### Current complete dependency-minimal build
+### Pre-scalar-permutation complete dependency-minimal build
 
 * `build-minimal/tests/qtest/beaglev-ahead-test -q`: **112/112**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
 * C910 scalar-legality and XTheadBa-off payloads: **2/2**.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
-  `-M beaglev-ahead -bios`: **5/5**.
+  `-M beaglev-ahead -bios`: **5/5**.  This is the preceding complete
+  checkpoint; the current focused six-payload result is recorded above.
 
 ### Current and historical ASan/UBSan checkpoints
 
-The current dependency-minimal sanitizer build passes:
+The preceding complete dependency-minimal sanitizer checkpoint passed:
 
 * `build-beaglev-ahead-sanitize/tests/qtest/beaglev-ahead-test -q`:
   **112/112**.
 * `build-beaglev-ahead-sanitize/tests/qtest/riscv-csr-test -q`: **4/4**.
-* The 48-stage C910 FXCR execution guest, with no ASan/UBSan finding.  ASan
-  emits its expected warning about incomplete ``makecontext``/``swapcontext``
-  support.
+
+The current focused sanitizer checkpoint passes the 48-stage C910 FXCR
+execution guest and the XTheadVector
+smoke/state/overlap/FP/reduction/scalar-permutation payloads **6/6**.  ASan
+emits its expected warning about incomplete ``makecontext``/``swapcontext``
+support, with no ASan/UBSan finding.
 
 At the preceding storage/PLL checkpoint, the rebuilt sanitizer binary passed
 the complete AP-clock/CPR group **9/9** and the DWC MSHC/storage group
@@ -171,7 +203,9 @@ as historical evidence rather than relabeled as current:
 * Machine-specific semihosted payloads: **9/9** — C910 MM/priority/MAEE/
   physical-PMA, C900 CLINT/PLIC, four-hart SMP, DW UART, and DW timer.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
-  `-M beaglev-ahead -bios`: **5/5**.
+  `-M beaglev-ahead -bios`: **5/5**.  This retained historical result predates
+  the scalar-permutation payload; the current focused sanitizer result is
+  **6/6** above.
 * The generic `test-thead-c910-pmu` and `test-rvv-widen-illegal` invocations
   are not counted in this sanitizer result: their normal harness requires the
   `virt` machine and a generic `rv64` CPU, which this intentionally
