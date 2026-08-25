@@ -111,7 +111,10 @@ The machine currently provides:
   (on-board Wi-Fi/SDIO1), connected to PLIC sources 62, 64, and 71.  The
   SDHCI v4.20 register interface, TH1520 vendor/PHY registers, programmed I/O,
   SDMA, ADMA2 including v4 64-bit descriptors, Auto CMD23, reset, interrupts,
-  and migration are modeled;
+  and migration are modeled.  Unit 0 opts its card into an Ahead-specific,
+  synthetic eMMC 5.1 speed profile with HS200 and HS400 at 1.8 V, eMMC CMD21
+  tuning blocks and validated CMD6 timing/bus-width transitions.  Other QEMU
+  eMMC users retain the generic card profile;
 * two DesignWare GMAC 3.x cores at ``0xffe7070000`` and ``0xffe7060000``
   with TH1520 APB glue, descriptor DMA, normal/enhanced descriptors, FCS,
   checksum status, Clause 22 MDIO/PHY state, PLIC sources 66/67 and migration.
@@ -664,16 +667,42 @@ area pointers, host-version and capability registers, software-visible PHY
 configuration, deterministic PHY power-good/DLL-lock behavior, tuning control,
 and per-instance interrupt routing.  Linux commit
 ``2709dd5ae32f0828f386327c76bba9f39f63a1c6`` probes all three instances and
-uses 64-bit ADMA; with a 64 MiB image on unit 0 it enumerates a high-speed eMMC
-block device and reaches the requested root-device wait.
+uses 64-bit ADMA; with a 64 MiB image on unit 0 it reports
+``mmc1: new HS400 MMC card`` and reaches the requested root-device wait in
+both the normal and dependency-minimal QEMU builds.  The Linux host number is
+probe-order dependent and is not the QEMU drive unit.
 
-This is not yet complete storage fidelity.  QEMU's eMMC card currently models
-an eMMC 4.3-era command set rather than the board's 5.1-class, HS400-capable
-part.  Command Queue Engine and ADMA3 execution, the mask-ROM boot datapath,
-analog tuning failures, card-detect/write-protect GPIO wiring, eMMC boot/RPMB
-details, and the CYW43012 SDIO function are not implemented.  Synthesis version
-IDs default to zero and can be overridden for testing; capability voltage bits
-and several reset values remain hardware-validation items.
+The Ahead eMMC attachment selects a synthetic eMMC 5.1 speed profile.  Its
+``EXT_CSD_REV`` is 8 and ``CARD_TYPE`` is ``0x57``, advertising HS26/HS52,
+DDR52, HS200 and HS400 only at 1.8 V.  ``GENERIC_CMD6_TIME`` is 50, a
+conservative 500 ms fallback rather than a measured property of the fitted
+card.  ``STROBE_SUPPORT`` and ``DRIVER_STRENGTH`` remain zero, and only the
+default Type 0 driver strength is accepted.  CMD21 returns the standard
+64-byte four-bit or 128-byte eight-bit HS200 tuning block; SDHCI Execute
+Tuning consumes the block internally and selects the tuned sampling clock.
+The reference qtest workflow exercises HS200 and CMD21 before moving through
+HS and DDR8 to HS400.  The card has no synthetic tuning-history latch and
+requires only the immediate HS-plus-DDR8 predecessor state for HS400.  Invalid
+direct transitions are rejected with ``SWITCH_ERROR``.  The opt-in is local
+to this board, so the generic QEMU eMMC defaults are unchanged.
+
+This profile is a guest-software contract, not identification of the physical
+16 GiB device.  Three focused SD/eMMC profile, tuning, reset and migration
+qtests pass, including an old-binary fail-before comparison; the complete
+normal/minimal board gates are 112/111 and the 13-test storage group passes
+under ASan/UBSan.  A QEMU trace of the pinned Linux run records the CMD6
+HS200-to-HS-to-DDR8-to-HS400 transitions but no CMD21.  This is expected from
+that kernel: the TH1520 platform callback returns success without issuing
+CMD21 while preparing HS400.  Linux therefore validates EXT_CSD negotiation,
+CMD6 and HS400 enumeration, while the qtests validate CMD21 data and tuning
+interrupt semantics.  The fitted part, CID, CSD, complete EXT_CSD contents,
+voltage behavior and electrical/analog HS200/HS400 timing still require
+owner-board validation.  Command Queue Engine
+and ADMA3 execution, the mask-ROM boot datapath, analog tuning failures,
+card-detect/write-protect GPIO wiring, eMMC boot/RPMB details, and the CYW43012
+SDIO function are not implemented.  Synthesis version IDs default to zero and
+can be overridden for testing; capability voltage bits and several reset
+values remain hardware-validation items.
 
 Both GMAC cores use a reusable DWMAC 3.x functional model.  GMAC0 has the
 board's RGMII/RTL8211F-facing DT connection and accepts a normal QEMU network
@@ -735,17 +764,19 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 109 tests in the normal build and
-108 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
-omission is the keyboard-hotplug test
-because the deliberately minimal configurations exclude ``usb-kbd``; their
+device tests, the complete board gate passes 112 tests in the normal build and
+111 in the dependency-minimal build.  The only conditional omission is the
+keyboard-hotplug test because the deliberately minimal configuration excludes
+``usb-kbd``; its
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
 vector/PMU/MAEE, CLINT, PLIC, UART and four-hart payloads pass
 without sanitizer findings.  A bounded instrumented Linux run reaches the
 C900 PLIC probe after bringing up all four CPUs; the normal builds separately
 cover the later native UART handoff and expected missing-root panic.  ASan's
 warning that it does not fully support QEMU's ``makecontext``/``swapcontext``
-coroutines is expected and is not counted as a clean sanitizer finding.
+coroutines is expected and is not counted as a clean sanitizer finding.  The
+last complete sanitizer-board run passed 108 tests before the three tuning
+tests were added; the current 13-test storage subset passes under ASan/UBSan.
 
 QSPI/XIP, board SPI peripherals, timer cascade and physical toggle routing,
 PVT alarm/timer/IRQ and analog timing fidelity, non-application watchdogs,

@@ -1,6 +1,7 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: reviewed C910 scalar-legality milestone, 2026-08-25
+Status: Ahead eMMC 5.1/HS400 software checkpoint validated; Linux CMD21 and
+physical-card validation remain open, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -45,22 +46,49 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The latest bounded milestone closes a C910
-scalar-legality slice: shift-zero ``th.addsl`` now obeys both XTheadBa and
-``MXSTATUS.THEADISAEE`` availability, the documented XTheadCmo privilege
-matrix is enforced, and the three U-capable cache operations obey the dynamic
-``MXSTATUS.UCME`` bit.  A freestanding payload covers all four addsl immediate
-values and all 21 CMO encodings across M/S/U and both status-bit transitions;
-a second build proves that shift zero traps when XTheadBa is disabled while a
-sibling XThead decoder remains installed.  The earlier user mask-ROM and GMAC
-milestones remain green.
+than upstream bug reporting.  The current bounded milestone adds an opt-in
+eMMC 5.1 speed profile only to the BeagleV Ahead eMMC attachment; generic QEMU
+eMMC users retain their existing defaults.  The synthetic profile reports
+``EXT_CSD_REV = 8``, ``CARD_TYPE = 0x57`` and
+``GENERIC_CMD6_TIME = 50`` (a conservative 500 ms fallback), with zero
+``STROBE_SUPPORT`` and zero/default ``DRIVER_STRENGTH`` (Type 0).  It validates
+CMD6 bus-width and timing changes, emits the standard 64-byte four-bit and
+128-byte eight-bit CMD21 tuning blocks, and makes SDHCI Execute Tuning consume
+the card data internally.  The reference qtest workflow exercises HS200 and
+CMD21 before moving through HS and DDR8 to HS400.  The card does not retain a
+"tuned" history bit: it requires the immediate HS-plus-DDR8 predecessor state
+for HS400, while unsupported direct transitions report ``SWITCH_ERROR``.
 
-One deliberate hardware question remains: the frozen XTheadCmo specification
-and published C910 manual make ``th.dcache.cva`` M/S-only, while the pinned
-openC910 RTL appears to admit it in U mode when UCME is set.  The shared
-translator follows the two architectural documents.  Ledger item ``CPU-015``
-records the exact owner-board probe needed before any C910-specific silicon
-quirk is considered.
+Three focused qtests cover this change:
+``/beaglev-ahead/dwcmshc/sd-cmd19-tuning``,
+``/beaglev-ahead/dwcmshc/emmc-hs400-profile`` and
+``/beaglev-ahead/dwcmshc/emmc-tuning-migration``.  The preserved pre-change
+binary fails deterministically at ``EXT_CSD_REV`` 5 rather than 8.  The full
+board suite passes 112/112 in the normal build and 111/111 in the
+dependency-minimal build; the complete 13-test storage group passes under
+ASan/UBSan.  Generic ARM ``xlnx-zcu102`` and PCI SDHCI libqos register paths
+also pass.  The standalone NPCM SDHCI suite has not been rerun.
+
+Unchanged pinned Linux boots in both normal and dependency-minimal QEMU and
+reports ``mmc1: new HS400 MMC card``.  A QEMU command trace proves its CMD6
+HS200-to-HS-to-DDR8-to-HS400 transitions but no CMD21.  This is intentional in
+the pinned TH1520 Linux driver: its platform tuning callback returns success
+without sending CMD21 while ``SDHCI_HS400_TUNING`` is set.  Linux therefore
+validates EXT_CSD negotiation, CMD6 and HS400 enumeration, while the focused
+qtests remain the CMD21 data/IRQ gate.  A complementary vendor-U-Boot run and
+an end-to-end guest that actually issues CMD21 remain pending.
+
+One non-blocking migration coverage gap is explicit: the current test migrates
+an armed Execute Tuning request and then observes ``RBUFRDY`` on the
+destination, but it clears that interrupt before the next migration.  SDHCI
+VMState already carries the interrupt status/enable/signal words and post-load
+recomputes the IRQ; a later test should nevertheless migrate an already-pending
+``RBUFRDY`` directly.
+
+This is deliberately a software compatibility profile, not a claim about the
+device fitted to the owner's board.  Its identity, CID, CSD, complete EXT_CSD,
+voltage behavior and electrical/analog HS200/HS400 timing remain open under
+``SD-001`` and ``SD-002``.
 
 Upstream triage remains deferred.  The two companion bug documents continue
 to separate pre-existing QEMU issues from branch-only implementation gaps, and
@@ -256,7 +284,7 @@ validation.
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs, AP reset pairs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior, clock-gate coupling and physical reset-scope validation |
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM with 32-byte page-write wrapping, and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, EEPROM busy/write-protect behavior, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
-| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances now provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA | Add CQE/ADMA3, eMMC 5.1/HS400/boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
+| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA.  Unit 0 now opts into the synthetic eMMC 5.1/1.8 V HS200/HS400 speed profile and CMD21 contract; generic eMMC remains unchanged | Complete and record the new profile/migration qtest and pinned-Linux HS400 gates; validate physical CID/CSD/EXT_CSD, voltage and electrical tuning/timing; add CQE/ADMA3, boot/RPMB fidelity, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000. Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status. TH1520 additionally enables Type-2 RX status for a bounded IPv4/IPv6 TCP/UDP/ICMP subset. The shared transmit COE now honors TXCOESEL, TSF and first-descriptor CIC0-3, inserts IPv4 header and IPv4/IPv6 TCP/UDP/ICMP checksums through one C-VLAN or ESVL-enabled S-VLAN, preserves guest source buffers, and writes terminal enhanced IHE/IPE/ES status | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete RX drop/forward threshold policy and malformed/zero-checksum corners; compare TX CIC2, CIC1-on-IPv6, malformed-length/status, trailing/padding, FIFO/PBL recovery, threshold, fragment/extension and stacked-VLAN behavior; add PTP/MMC/WOL/EEE, flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node with its AP reset pair. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis, reset split and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  Its AP gate drives a provisional 125 MHz/zero QEMU clock; gating freezes the pending phase and output, including across migration, and re-enabling resumes it.  It exposes test-only QOM outputs and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, physical clock rate and gate phase/output behavior, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
@@ -445,8 +473,11 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   and all three eMMC/SDIO instances at their physical addresses and PLIC
   sources.  Generic SDHCI now accepts v4 controllers, preserves Host Control 2,
   implements Auto CMD23 and 128-bit 64-address ADMA2 descriptors, and restores
-  its interrupt output after migration.  The three active-low misc-system
-  reset groups independently reset eMMC, SDIO0 and SDIO1; and
+  its interrupt output after migration.  The Ahead eMMC alone enables a
+  synthetic eMMC 5.1 profile with 1.8 V HS200/HS400, legal CMD6 transitions,
+  standard four-bit/eight-bit CMD21 data and SDHCI Execute Tuning consumption;
+  generic eMMC behavior is unchanged.  The three active-low misc-system reset
+  groups independently reset eMMC, SDIO0 and SDIO1; and
 * a reusable DesignWare GMAC 3.x model, factored from the NPCM implementation,
   with normal and enhanced descriptors, 16/32-byte descriptor stride, TX/RX
   DMA, FCS handling, bus errors, interrupt recomputation, configurable version/
@@ -587,10 +618,10 @@ the migration channel.  It still starts all four C910 harts at the same
 address and supplies no strap, media, security or release-controller behavior,
 so it is only the first bounded Phase-4 checkpoint.
 
-The focused gate currently passes 109 board qtests in the normal build and 108
-in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
-difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
-from the minimal configurations.  The four remaining USB tests cover exact
+The focused gate currently passes 112 board qtests in the normal build and 111
+in the dependency-minimal build.  The sole conditional difference is the HID
+hotplug test because ``usb-kbd`` is intentionally absent from the minimal
+configuration.  The four remaining USB tests cover exact
 misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
 three reset outputs, Linux's high-half-first and the conventional
 low-half-first ERSTBA sequences, guest-memory DMA, PLIC source 68, system reset
@@ -599,6 +630,19 @@ for the generated DT, exact controller/PHY reset and masks, all three PLIC
 routes, all three misc-system reset outputs and isolated reset effects,
 configurable unknown synthesis IDs, eMMC PIO read/write, SD Auto CMD23 with a
 64-bit ADMA descriptor and buffer above 4 GiB, and device migration.
+
+Three additional storage qtests account for the new totals.
+``sd-cmd19-tuning`` protects the generic SD tuning pattern and rejects
+wrong-size and wrong-opcode false successes.  ``emmc-hs400-profile`` checks the
+synthetic EXT_CSD fields, rejected CMD6 transitions and ``SWITCH_ERROR``
+lifetime, both standard CMD21 patterns, Execute Tuning IRQ/FIFO state, the
+reference HS200/CMD21/HS/DDR8/HS400 workflow, enhanced-strobe rejection and
+reset.  ``emmc-tuning-migration`` checks a partially consumed 128-byte tuning
+FIFO, an armed Execute Tuning request and migrated HS200/HS400 card/controller
+mode.  The old binary fails before the change, the normal and minimal suites
+pass, and the complete 13-test storage group passes under ASan/UBSan.  The
+previous complete sanitizer-board run predates these three tests and remains
+recorded at 108; it is not relabeled as a current full sanitizer run.
 
 The generic RISC-V CSR/migration binary now passes eleven subtests, including
 fixed-only, active, inhibited and pending PMU migration plus Sscofpmf
@@ -832,10 +876,14 @@ uncertainty.
 
 With a blank 64 MiB image attached as storage unit 0, the same pinned Linux
 kernel binds all three ``thead,th1520-dwcmshc`` nodes, reports 64-bit ADMA, and
-enumerates the image as a high-speed ``QEMU!!`` eMMC block device.  This proves
-the mainline driver/controller contract through block discovery, not eMMC 5.1,
-HS400, filesystem integrity, CQE, SDIO Wi-Fi, physical-card GPIOs, or mask-ROM
-boot behavior.
+enumerates the image as ``mmc1: new HS400 MMC card`` in both the normal and
+dependency-minimal QEMU builds.  The Linux host number is probe-order
+dependent and is not the QEMU drive unit.  A command trace records HS200, HS,
+DDR8 and HS400 CMD6 updates but no CMD21.  The pinned TH1520 callback explicitly
+skips CMD21 during HS400 preparation, so this gate proves EXT_CSD negotiation,
+CMD6 transitions and HS400 block discovery, not QEMU's tuning data or IRQ path.
+Filesystem integrity, CQE, SDIO Wi-Fi, physical-card GPIOs and mask-ROM boot
+behavior remain unproved.
 
 The same pinned Linux source was also rebuilt in a separate output directory
 with ``CONFIG_STMMAC_ETH``, ``CONFIG_STMMAC_PLATFORM`` and
@@ -1169,10 +1217,21 @@ Gate P5:
   pass while stressing noncoherent DMA;
 * an official board root filesystem boots unmodified to multi-user.
 
-Status: in progress.  The legacy storage submilestone is implemented and has
-register, IRQ, PIO, v4 64-bit ADMA2, reset, DT, migration, and mainline-Linux
-probe coverage.  The initial Ethernet submilestone integrates both GMAC cores,
-their APB glue, IRQs, generated DT, GMAC0's backend and generic Clause 22 PHY;
+Status: in progress.  The controller/legacy-card storage submilestone is
+implemented and has register, IRQ, PIO, v4 64-bit ADMA2, reset, DT, migration,
+and mainline-Linux probe coverage.  An Ahead-only synthetic eMMC 5.1 speed
+profile is also implemented with ``EXT_CSD_REV = 8``, ``CARD_TYPE = 0x57``,
+``GENERIC_CMD6_TIME = 50`` (500 ms), ``STROBE_SUPPORT = 0`` and
+``DRIVER_STRENGTH = 0``/Type 0, validated CMD6 mode changes and standard
+four-/eight-bit CMD21 data.  CMD21 is part of the tested reference workflow,
+while the card enforces HS plus DDR8 as the immediate HS400 predecessor;
+generic eMMC defaults are unchanged.  Three new focused qtests and the
+fail-before comparison pass; the complete normal/minimal board gates are
+112/111 and the ASan/UBSan storage gate is 13/13.  Pinned Linux reaches HS400
+in both builds, but its TH1520 callback intentionally skips CMD21, leaving an
+end-to-end CMD21 guest and physical validation open.  The initial Ethernet
+submilestone integrates both GMAC cores, their APB glue, IRQs, generated DT,
+GMAC0's backend and generic Clause 22 PHY;
 it now filters rejected frames before touching RX DMA state and covers MAC0
 plus 31 additional perfect addresses, address-byte masks and source selection,
 promiscuous/receive-all, broadcast/multicast, destination/source inverse,
@@ -1187,12 +1246,14 @@ buffers.  Ten focused GMAC qtests include a deterministic rejection barrier,
 a 34-case filter matrix, a Type-2 matrix, an 18-case TX checksum matrix,
 split-descriptor boundaries and same-version filter/IPC-state migration with
 a separately created destination socket.  The seven-case NPCM suite and the
-successful mainline ``dwmac-thead`` probe remain green.  CQE/ADMA3, eMMC
-5.1/HS400 and boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring
-and error injection remain open.  The initial general-DMAC submilestone
-implements the four-channel controller's direct/linked memory-copy, descriptor
-writeback,
-IRQ/reset/migration and exact DT contracts; its qtests and all-channel Linux
+successful mainline ``dwmac-thead`` probe remain green.  CQE/ADMA3 and
+boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring and error
+injection remain open.  The physical eMMC part, CID/CSD/complete EXT_CSD,
+voltage support and electrical/analog HS200/HS400 timing also remain open; the
+synthetic speed profile does not resolve them.  The initial general-DMAC
+submilestone implements the four-channel controller's direct/linked
+memory-copy, descriptor writeback, IRQ/reset/migration and exact DT contracts;
+its qtests and all-channel Linux
 ``dmatest`` pass.  Peripheral handshakes/request routing, dynamic and other
 multi-block modes, detailed errors/timing, the secure/TEE DMAC, complete
 pause/flow-control behavior, receive checksum drop/threshold, exact transmit
