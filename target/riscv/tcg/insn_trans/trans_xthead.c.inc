@@ -1018,9 +1018,11 @@ static bool trans_th_sfence_vmas(DisasContext *ctx, arg_th_sfence_vmas *a)
 static void gen_th_sync_local(DisasContext *ctx)
 {
     /*
-     * Emulate out-of-order barriers with pipeline flush
-     * by exiting the translation block.
+     * XTheadSync orders every explicit memory access.  The TB exit models
+     * the instruction-retirement/pipeline boundary, but is not a memory
+     * barrier between MTTCG vCPUs.
      */
+    tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
     gen_update_pc(ctx, ctx->cur_insn_len);
     tcg_gen_exit_tb(NULL, 0);
     ctx->base.is_jmp = DISAS_NORETURN;
