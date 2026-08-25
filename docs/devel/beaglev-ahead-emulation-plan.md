@@ -1,10 +1,11 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
 Status: portable Linux single- and four-hart eMMC root/integrity/process-reopen,
-PLL-polling, C910 FXCR and complete board/CSR checkpoints validated in normal,
-dependency-minimal and ASan/UBSan builds; the official image, explicit
-post-load/reset execution, old migration streams and physical-card/CPU
-validation remain open, 2026-08-25
+PLL-polling, C910 FXCR, synthetic descriptor-exact C910 CSR VMState v1/v2
+compatibility and complete normal/dependency-minimal board/CSR checkpoints
+validated; ASan/UBSan covers every current CSR case and focused migration with
+a preceding complete board pass.  The official image, historical-producer
+migration captures and physical-card/CPU validation remain open, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -19,6 +20,8 @@ GMAC Type-2 receive-status checkpoint: 46df230d5d
 GMAC transmit-checksum checkpoint: f441cf709f
 
 User mask-ROM checkpoint: 0d45dbf7b6
+
+C910 legacy-VMState checkpoint: ca34c481bb
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -49,9 +52,18 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The current bounded milestone adds an opt-in
-eMMC 5.1 speed profile only to the BeagleV Ahead eMMC attachment; generic QEMU
-eMMC users retain their existing defaults.  The synthetic profile reports
+than upstream bug reporting.  The current bounded milestone validates backward
+loading of the C910 CSR VMState v1 and v2 subsection layouts on all four harts.
+It also fixes v1 loading so the absent PMU interrupt-enable and overflow fields
+default to zero before the derived pending interrupt is rebuilt.  The qtests
+rewrite only the four named C910 CSR subsections in a current sequential savevm
+stream to their descriptor-exact v1/v2 layouts; they are not captures
+emitted by preserved old QEMU binaries.  Historical-producer and cross-binary
+comparison therefore remain open.
+
+The preceding bounded storage milestone adds an opt-in eMMC 5.1 speed profile
+only to the BeagleV Ahead eMMC attachment; generic QEMU eMMC users retain their
+existing defaults.  The synthetic profile reports
 ``EXT_CSD_REV = 8``, ``CARD_TYPE = 0x57`` and
 ``GENERIC_CMD6_TIME = 50`` (a conservative 500 ms fallback), with zero
 ``STROBE_SUPPORT`` and zero/default ``DRIVER_STRENGTH`` (Type 0).  It validates
@@ -361,7 +373,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction and mask-overlap boundaries | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the complete board/CSR gates pass 113/113 and 12/12 in normal and 112/112 and 5/5 in both minimal and sanitizer builds.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while stage-45 fast-path and stage-46 raised-event mutations fail at their intended same-sticky event cases.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; add genuine version-1/version-2 FXCR streams, then compare every physical hart/stepping under CPU-016 |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests additionally downgrade current savevm subsections to synthetic, descriptor-exact C910 CSR VMState v1/v2 layouts, then validate the legacy defaults and carried state in poisoned destinations.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the complete normal and dependency-minimal board/CSR gates pass 113/113 plus 14/14 and 112/112 plus 7/7.  ASan/UBSan passes all 7 CSR tests and the current whole-machine migration case; its preceding complete board gate passed 112/112.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; use preserved historical v1/v2 producer binaries to emit streams, or obtain immutable producer-generated streams, then compare those subsections with the synthetic layouts and exercise cross-binary migration before comparing every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -382,7 +394,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  A focused GMAC test preserves MAC0/MAC31, frame-filter, address-hash and VLAN state and proves post-load old-address rejection/new-address acceptance using a separately created destination socket | Extend the same state inventory and boundary testing to every new controller and backend; add in-flight state if synchronous devices later gain timing, queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  The C910 CSR subsection accepts synthetic, descriptor-exact v1/v2 layouts across four harts, including version-specific PMU defaults and derived FP state.  A focused GMAC test preserves MAC0/MAC31, frame-filter, address-hash and VLAN state and proves post-load old-address rejection/new-address acceptance using a separately created destination socket | Extend the same state inventory and boundary testing to every new controller and backend; use preserved historical C910 producers to emit streams, or obtain immutable producer-generated streams, and exercise cross-binary migration; add in-flight state if synchronous devices later gain timing, queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -430,7 +442,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   aliases with present and missing prerequisites; and preserves the enable,
   delegation and pending aliases across migration.  This fixes the defect
   already tracked by upstream issue #3969 and is distinct from the C910's
-  vendor cause-17 overflow interface.
+  vendor cause-17 overflow interface.  A four-hart legacy compatibility test
+  now loads synthetic, descriptor-exact C910 CSR VMState v1 and v2
+  subsections into poisoned destinations.  Version 1 correctly defaults its
+  absent vendor counter interrupt-enable/overflow state to zero before
+  recomputing the vendor cause-17 pending bit; version 2 retains those fields
+  and their derived pending state.  The transformed streams are not
+  historical-producer captures.
   Microarchitectural event values remain an explicit hardware-differential
   task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
@@ -705,11 +723,12 @@ address and supplies no strap, media, security or release-controller behavior,
 so it is only the first bounded Phase-4 checkpoint.
 
 At the current checkpoint the complete gate passes 113/113 board qtests and
-12/12 CSR qtests in the normal build, 112/112 and 5/5 respectively in the
-dependency-minimal build, and 112/112 and 5/5 in the ASan/UBSan build.  The
-sole conditional difference in the board totals is the HID
-hotplug test because ``usb-kbd`` is intentionally absent from the minimal
-configuration.  The four remaining USB tests cover exact
+14/14 CSR qtests in the normal build, and 112/112 plus 7/7 in the
+dependency-minimal build.  The ASan/UBSan build passes all 7 CSR tests and the
+current focused whole-machine migration test; its preceding complete board
+gate passed 112/112.  The sole conditional difference in the board totals is
+the HID hotplug test because ``usb-kbd`` is intentionally absent from the
+minimal configuration.  The four remaining USB tests cover exact
 misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
 three reset outputs, Linux's high-half-first and the conventional
 low-half-first ERSTBA sequences, guest-memory DMA, PLIC source 68, system reset
@@ -730,9 +749,10 @@ FIFO, an armed Execute Tuning request and migrated HS200/HS400 card/controller
 mode.  The old binary failed before the change, the normal and minimal suites
 passed, and the complete 13-test storage group passed under ASan/UBSan.  The
 historical 108-test sanitizer-board run predates these tests and remains useful
-milestone evidence; the current ASan/UBSan board gate supersedes it at 112/112.
+milestone evidence; the later complete ASan/UBSan board gate supersedes it at
+112/112, and the current migration path was rerun separately.
 
-The current generic RISC-V CSR/migration binary passes twelve subtests,
+The current generic RISC-V CSR/migration binary passes fourteen subtests,
 including
 fixed-only, active, inhibited and pending PMU migration plus Sscofpmf
 extension-on/off WARL and alias coverage.  Six freestanding Sscofpmf variants
@@ -740,10 +760,11 @@ covered M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passed 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passed.  Dependency-minimal and ASan/UBSan configurations each pass
-their five available C910 CSR/migration subtests.  Their current board gates
-both pass 112/112; the explicitly historical 108/108 sanitizer result and the
-earlier focused 9/9 CPR plus 13/13 storage results remain milestone evidence
-only.
+their seven available C910 CSR/migration subtests.  The dependency-minimal
+board gate passes 112/112; the ASan/UBSan build has a preceding 112/112 full
+board result plus a current focused whole-machine migration pass.  The
+explicitly historical 108/108 sanitizer result and the earlier focused 9/9
+CPR plus 13/13 storage results remain milestone evidence only.
 
 The XTheadVector state milestone adds a second architectural payload.  A
 reserved-EDIV ``th.vsetvl`` regression first failed because the translator
@@ -1242,7 +1263,10 @@ and bits 4:0 alias ``fflags``.  All other bits read zero and ignore writes.  The
 current implementation checkpoint replaces the former zero-valued placeholder
 with that field/alias contract, updates SoftFloat NaN selection, tracks
 exception events independently of direct ``fflags`` writes, and adds reset
-handling plus version-3 migration fields and old-stream defaults.
+handling plus version-3 migration fields.  Versions 1 and 2 retain ``frm``
+through the standard FP VMState but default the then-absent vendor DQNaN, FE
+and FFLAGS fields to zero; version 1 also defaults its absent vendor PMU
+interrupt-enable and overflow fields to zero.
 
 The FXCR execution guest passes in the normal, dependency-minimal and
 ASan/UBSan builds.  The execution payload
@@ -1268,8 +1292,33 @@ QEMU reports this host-requested system reset as cold while retaining RAM; the
 test protects the emulator contract and is not evidence for physical TH1520
 warm-reset or retention behavior.
 
-The complete current board/CSR gates pass 113/113 and 12/12 in the normal
-build, and 112/112 and 5/5 in each dependency-minimal and ASan/UBSan build.
+Two further qtests exercise synthetic, descriptor-exact C910 CSR VMState
+version-1 and version-2 inputs across all four harts.  They save an ordinary
+sequential migration stream with VMDESC suppressed, locate exactly four
+``cpu/thead-c910-csr`` version-3 subsections, and rewrite each header and
+payload to the respective v1 53-byte or v2 61-byte descriptor layout.  The
+outer ``QEVM`` stream remains version 3, so these are not captures emitted by
+preserved historical QEMU binaries.
+
+Both versions preserve the legacy core CSR fields, rotating CPUID state and
+standard FRM state.  Version 1 did not carry ``th_mcounterinten`` or
+``th_mcounterof``; post-load now explicitly defaults both to zero before
+deasserting the vendor cause-17 PMU pending bit, even when the incoming CPU was
+poisoned.  Version 2 preserves those fields and reconstructs pending state.
+Neither version carried the version-3 DQNaN, FE or vendor FFLAGS fields, so
+poisoned destination values are replaced with zero defaults: canonical-NaN
+mode is reconstructed, FFLAGS starts clear and exception-event tracking is
+rearmed.  Before its first FXCR access, the resumed hart-0 guest proves
+canonical NaN behavior, directly seeds sticky NX without creating an event,
+raises NX again, observes FS Dirty and requires ``FXCR=FRM|FE|NX``.  Harts
+1-3 are inspected directly for distinct CSR, CPUID, FRM and version-specific
+PMU state.
+
+The complete current normal and dependency-minimal board/CSR gates pass
+113/113 plus 14/14 and 112/112 plus 7/7 respectively.  ASan/UBSan passes all
+7 CSR tests and the current focused whole-machine migration case; its
+preceding complete board gate passed 112/112.
+
 The generic SoftFloat quick suite passes 17/17, and its slow
 ``fp-test-mulAdd`` FMA test also passes for f16, f32, f64 and f128.
 
@@ -1289,10 +1338,21 @@ mutation evidence.  Three further restored mutations prove the new boundary:
 removing post-load NaN reconstruction produces guest status ``0xdead3001``;
 removing post-load event rearming produces ``0xdead3002``; and removing
 reset-time event rearming produces ``0xdead3006`` before the first FXCR read.
-Genuine version-1/version-2 migration streams and physical comparison remain
-open.  The C910 model is TCG-only and is rejected with KVM
-until its custom state can be synchronized; CPU-016 retains the unidentified
-TH1520 stepping rather than treating the pinned RTL as a silicon measurement.
+Four legacy-stream mutations additionally prove that the new tests detect a
+missing v1 PMU default, missing pre-v3 FXCR defaults, missing post-load NaN
+reconstruction and missing post-load exception-event rearming.  Their binaries
+are preserved under
+``../validation-artifacts/c910-legacy-migration-mutations-20260825``.
+
+Actual streams from preserved historical v1/v2 producers and cross-binary
+migration have not yet been compared with the synthetic layouts.  A dedicated
+destination-poison gate for a stale SoftFloat raised-event accumulator also
+remains open because ``-incoming defer`` prevents pre-load guest execution;
+the existing guest still covers post-load rearming and derived behavior.
+Physical comparison remains open.  The C910 model is TCG-only and is rejected
+with KVM until its custom state can be synchronized; CPU-016 retains the
+unidentified TH1520 stepping rather than treating the pinned RTL as a silicon
+measurement.
 
 P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
 privilege combinations, B/SH/SEC effects, remaining scalar/FP/masked/vector
@@ -1412,14 +1472,17 @@ four-/eight-bit CMD21 data.  CMD21 is part of the tested reference workflow,
 while the card enforces HS plus DDR8 as the immediate HS400 predecessor;
 generic eMMC defaults are unchanged.  Three new focused qtests and the
 fail-before comparison pass; the current complete board gates are 113/113 in
-the normal build and 112/112 in both dependency-minimal and ASan/UBSan builds.
-The earlier ASan/UBSan storage-only gate passed 13/13.  Pinned Linux reaches HS400
-in both builds, but its TH1520 callback intentionally skips CMD21, leaving an
-end-to-end CMD21 guest and physical validation open.  A portable single-hart
-Linux gate and its four-hart counterpart wrap the pinned filesystem in the
-deterministic ``PARTUUID=1520a110-01`` MBR, mount the aliased ``mmc0`` eMMC as
-root and preserve the stable 1 MiB payload hash across sync, read-only remount
-and fresh-QEMU-process reopen.  Both gates pass in normal and minimal builds.
+the normal build and 112/112 in the dependency-minimal build.  The preceding
+complete ASan/UBSan board gate passed 112/112, and the current focused
+whole-machine migration case also passes under ASan/UBSan.
+The earlier ASan/UBSan storage-only gate passed 13/13.  Pinned Linux reaches
+HS400 in both builds, but its TH1520 callback intentionally skips CMD21,
+leaving an end-to-end CMD21 guest and physical validation open.  A portable
+single-hart Linux gate and its four-hart counterpart wrap the pinned filesystem
+in the deterministic ``PARTUUID=1520a110-01`` MBR, mount the aliased ``mmc0``
+eMMC as root and preserve the stable 1 MiB payload hash across sync, read-only
+remount and fresh-QEMU-process reopen.  Both gates pass in normal and minimal
+builds.
 The generated DT checks vendor ``mmc0``/``mmc1``/``mmc2`` aliases, while the
 pinned upstream DTS omission remains an explicit compatibility uncertainty.
 Official image/U-Boot, longer SMP repetition, filesystem/block stress and
