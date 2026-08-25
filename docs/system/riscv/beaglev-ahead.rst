@@ -280,9 +280,12 @@ unit-stride, strided, indexed and two-field segment forms; segment
 fault-only-first loads trap on a denied field in element zero and shorten
 ``vl`` for a later denied segment.
 Ratified-RVV translation is gated off on this XTheadVector-only CPU even where
-the instruction encodings overlap.  Cacheability, buffering, shareability,
-security-bus and actual ordering effects are not modeled.  Some custom CSRs
-remain placeholders.  Fixed counters, TLB-miss events and the C9xx overflow
+the instruction encodings overlap.  All four XTheadSync variants provide a
+full inter-vCPU TCG memory barrier and retain a translation-block exit for the
+pipeline boundary.  Cacheability, buffering, shareability, security-bus,
+cache-operation completion, timing and a physical instruction-refetch
+pipeline are not modeled.  Some custom CSRs remain placeholders.  Fixed
+counters, TLB-miss events and the C9xx overflow
 protocol are implemented, but cache, branch, pipeline and other
 microarchitectural performance events are not yet hardware-accurate.  The
 TH1520 integration exposes no writable PMP entries,

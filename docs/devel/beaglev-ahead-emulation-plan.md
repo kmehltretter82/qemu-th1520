@@ -1052,9 +1052,18 @@ and every XTheadCmo encoding in M/S/U, checks exact illegal-instruction PCs,
 values and destination preservation, exercises THEADISAEE and UCME in both
 directions, and observes 64 expected traps.  Its XTheadBa-disabled companion
 checks four further traps while XTheadCmo keeps the shared decoder active.
+All four XTheadSync instructions now emit a full sequentially consistent TCG
+memory barrier before the existing translation-block exit.  A three-hart
+store-buffering payload checks 4,096 trials for each instruction under MTTCG,
+alongside M/S/U legality and THEADISAEE gating.  A deterministic translation-
+IR check requires the barrier, PC advance and TB exit for every variant and
+fails against the preserved pre-fix binary.  This establishes QEMU's
+architectural inter-vCPU ordering contract; physical ordering strength,
+latency, cache-operation completion and the ``.i`` pipeline/refetch behavior
+remain silicon-comparison items.
 P2 remains open for exhaustive scalar/illegal decode, all custom-CSR and
 privilege combinations, B/SH/SEC effects, remaining scalar/FP/masked/vector
-forms and boundary combinations, cache/CMO and actual ordering effects,
+forms and boundary combinations, cache/CMO and remaining ordering effects,
 physical-map provenance and migration/reset refills, reset-vector/security
 behavior, randomized differential testing and physical comparison.
 
