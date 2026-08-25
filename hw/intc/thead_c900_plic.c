@@ -527,6 +527,58 @@ static int thead_c900_plic_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool thead_c900_plic_legacy_needed(void *opaque)
+{
+    return false;
+}
+
+static int thead_c900_plic_legacy_pre_load(void *opaque)
+{
+    THeadC900PLICState *s = opaque;
+
+    /*
+     * The generic PLIC accepted S-mode accesses across its aperture.  Treat
+     * that as delegated operation, and default state which did not exist in
+     * its migration stream to inactive level-triggered inputs.  This follows
+     * the current Ahead wiring contract; the old model's edge-like input
+     * latch cannot be recovered without saved line and trigger state.
+     */
+    s->control = 1;
+    memset(s->source_level, 0,
+           sizeof(*s->source_level) * s->bitfield_words);
+    memset(s->edge_trigger, 0,
+           sizeof(*s->edge_trigger) * s->bitfield_words);
+    return 0;
+}
+
+/*
+ * The first Ahead machine used QEMU's generic SiFive PLIC.  Its arrays have
+ * direct C900 counterparts, but its section name and payload were replaced
+ * when the dedicated controller was introduced.  Keep this description
+ * load-only: current streams must continue to use thead.c900-plic.
+ */
+static const VMStateDescription vmstate_thead_c900_plic_legacy_ahead = {
+    .name = "riscv_sifive_plic",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_load = thead_c900_plic_legacy_pre_load,
+    .post_load = thead_c900_plic_post_load,
+    .needed = thead_c900_plic_legacy_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_VARRAY_UINT32(source_priority, THeadC900PLICState,
+                              num_sources, 0, vmstate_info_uint32, uint32_t),
+        VMSTATE_VARRAY_UINT32(threshold, THeadC900PLICState, num_contexts, 0,
+                              vmstate_info_uint32, uint32_t),
+        VMSTATE_VARRAY_UINT32(pending, THeadC900PLICState, bitfield_words, 0,
+                              vmstate_info_uint32, uint32_t),
+        VMSTATE_VARRAY_UINT32(active, THeadC900PLICState, bitfield_words, 0,
+                              vmstate_info_uint32, uint32_t),
+        VMSTATE_VARRAY_UINT32(enable, THeadC900PLICState, num_enables, 0,
+                              vmstate_info_uint32, uint32_t),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static const VMStateDescription vmstate_thead_c900_plic = {
     .name = TYPE_THEAD_C900_PLIC,
     .version_id = 1,
@@ -582,6 +634,15 @@ static void thead_c900_plic_realize(DeviceState *dev, Error **errp)
     s->m_external_irqs = g_new0(qemu_irq, s->num_harts);
     s->s_external_irqs = g_new0(qemu_irq, s->num_harts);
 
+    if (s->legacy_ahead_vmstate &&
+        (s->hartid_base != 0 || s->num_harts != 4 ||
+         s->num_sources != 241 || s->num_contexts != 8 ||
+         s->bitfield_words != 8 || s->num_enables != 64)) {
+        error_setg(errp, "legacy Ahead PLIC VMState requires 4 harts and "
+                   "241 sources at hart base 0");
+        return;
+    }
+
     qdev_init_gpio_in_named(dev, thead_c900_plic_source, "source",
                             s->num_sources);
     qdev_init_gpio_in_named(dev, thead_c900_plic_edge_trigger,
@@ -612,6 +673,23 @@ static void thead_c900_plic_realize(DeviceState *dev, Error **errp)
                           TYPE_THEAD_C900_PLIC, THEAD_C900_PLIC_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mmio);
     msi_nonbroken = true;
+
+    if (s->legacy_ahead_vmstate &&
+        vmstate_register_with_alias_id(
+            VMSTATE_IF(dev), 0,
+            &vmstate_thead_c900_plic_legacy_ahead, s, -1, 0, errp) < 0) {
+        return;
+    }
+}
+
+static void thead_c900_plic_unrealize(DeviceState *dev)
+{
+    THeadC900PLICState *s = THEAD_C900_PLIC(dev);
+
+    if (s->legacy_ahead_vmstate) {
+        vmstate_unregister(VMSTATE_IF(dev),
+                           &vmstate_thead_c900_plic_legacy_ahead, s);
+    }
 }
 
 static void thead_c900_plic_finalize(Object *obj)
@@ -633,6 +711,8 @@ static const Property thead_c900_plic_properties[] = {
     DEFINE_PROP_UINT32("hartid-base", THeadC900PLICState, hartid_base, 0),
     DEFINE_PROP_UINT32("num-harts", THeadC900PLICState, num_harts, 1),
     DEFINE_PROP_UINT32("num-sources", THeadC900PLICState, num_sources, 2),
+    DEFINE_PROP_BOOL("legacy-ahead-vmstate", THeadC900PLICState,
+                     legacy_ahead_vmstate, false),
 };
 
 static void thead_c900_plic_class_init(ObjectClass *oc, const void *data)
@@ -641,6 +721,7 @@ static void thead_c900_plic_class_init(ObjectClass *oc, const void *data)
     ResettableClass *rc = RESETTABLE_CLASS(oc);
 
     dc->realize = thead_c900_plic_realize;
+    dc->unrealize = thead_c900_plic_unrealize;
     dc->vmsd = &vmstate_thead_c900_plic;
     device_class_set_props(dc, thead_c900_plic_properties);
     rc->phases.enter = thead_c900_plic_reset_enter;

@@ -32,6 +32,7 @@ struct DWAPBUARTState {
     bool busy_irq;
     bool uart_16550_compatible;
     bool fifo_stat;
+    bool legacy_ahead_vmstate;
 };
 
 #endif /* HW_CHAR_DW_APB_UART_H */

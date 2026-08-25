@@ -255,6 +255,79 @@ static int thead_c900_clint_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool thead_c900_clint_legacy_needed(void *opaque)
+{
+    return false;
+}
+
+static int thead_c900_clint_legacy_pre_load(void *opaque)
+{
+    THeadC900CLINTState *s = opaque;
+
+    for (uint32_t i = 0; i < s->num_harts; i++) {
+        s->msip[i] = 0;
+        s->ssip[i] = 0;
+        /*
+         * The old device had no supervisor timer state.  Do not turn a
+         * software-written CPU MIP.STIP into a persistent C900 deadline that
+         * an old guest may not know how to clear.
+         */
+        s->stimecmp[i] = UINT64_MAX;
+        timer_del(s->stimers[i]);
+    }
+    return 0;
+}
+
+static int thead_c900_clint_legacy_post_load(void *opaque, int version_id)
+{
+    THeadC900CLINTState *s = opaque;
+
+    /*
+     * The old ACLINT stream saved an offset from QEMU_CLOCK_VIRTUAL rather
+     * than the architectural counter.  Reconstruct the latter before using
+     * the C900 post-load path.  Software-interrupt state lived in each CPU's
+     * migrated MIP field because the old SWI device had no VMState section.
+     */
+    s->time_at_save = thead_c900_clint_raw_time(s) + s->time_delta;
+    for (uint32_t i = 0; i < s->num_harts; i++) {
+        CPUState *cs = cpu_by_arch_id(s->hartid_base + i);
+        CPURISCVState *env;
+
+        if (!cs) {
+            return -EINVAL;
+        }
+        env = cpu_env(cs);
+        s->msip[i] = !!(env->mip & MIP_MSIP);
+        s->ssip[i] = !!(env->mip & MIP_SSIP);
+    }
+    return thead_c900_clint_post_load(s, 1);
+}
+
+/*
+ * Early Ahead revisions used the generic ACLINT MTIMER.  Consume its exact
+ * version-3 payload but never emit that obsolete section from a current
+ * machine.  The loaded timer deadlines are rescheduled from mtimecmp by the
+ * C900 post-load path.  That old board did not expose TIME through this
+ * device; loading its state does not remove the current C900 TIME facility.
+ */
+static const VMStateDescription vmstate_thead_c900_clint_legacy_ahead = {
+    .name = "riscv_mtimer",
+    .version_id = 3,
+    .minimum_version_id = 3,
+    .pre_load = thead_c900_clint_legacy_pre_load,
+    .post_load = thead_c900_clint_legacy_post_load,
+    .needed = thead_c900_clint_legacy_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT64(time_delta, THeadC900CLINTState),
+        VMSTATE_VARRAY_UINT32(mtimecmp, THeadC900CLINTState, num_harts, 0,
+                              vmstate_info_uint64, uint64_t),
+        VMSTATE_VARRAY_OF_POINTER_UINT32(mtimers, THeadC900CLINTState,
+                                         num_harts, 0, vmstate_info_timer,
+                                         QEMUTimer),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static int thead_c900_clint_pre_save(void *opaque)
 {
     THeadC900CLINTState *s = opaque;
@@ -293,6 +366,13 @@ static void thead_c900_clint_realize(DeviceState *dev, Error **errp)
     }
     if (!s->timebase_freq) {
         error_setg(errp, "C900 CLINT timebase frequency must be nonzero");
+        return;
+    }
+    if (s->legacy_ahead_vmstate &&
+        (s->hartid_base != 0 || s->num_harts != 4 ||
+         s->timebase_freq != 3000000)) {
+        error_setg(errp, "legacy Ahead MTIMER VMState requires 4 harts at "
+                   "hart base 0 and a 3 MHz timebase");
         return;
     }
 
@@ -355,6 +435,23 @@ static void thead_c900_clint_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->mmio, OBJECT(dev), &thead_c900_clint_ops, s,
                           TYPE_THEAD_C900_CLINT, THEAD_C900_CLINT_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mmio);
+
+    if (s->legacy_ahead_vmstate &&
+        vmstate_register_with_alias_id(
+            VMSTATE_IF(dev), 0,
+            &vmstate_thead_c900_clint_legacy_ahead, s, -1, 0, errp) < 0) {
+        return;
+    }
+}
+
+static void thead_c900_clint_unrealize(DeviceState *dev)
+{
+    THeadC900CLINTState *s = THEAD_C900_CLINT(dev);
+
+    if (s->legacy_ahead_vmstate) {
+        vmstate_unregister(VMSTATE_IF(dev),
+                           &vmstate_thead_c900_clint_legacy_ahead, s);
+    }
 }
 
 static void thead_c900_clint_finalize(Object *obj)
@@ -383,6 +480,8 @@ static const Property thead_c900_clint_properties[] = {
     DEFINE_PROP_UINT32("num-harts", THeadC900CLINTState, num_harts, 1),
     DEFINE_PROP_UINT32("timebase-freq", THeadC900CLINTState,
                        timebase_freq, 0),
+    DEFINE_PROP_BOOL("legacy-ahead-vmstate", THeadC900CLINTState,
+                     legacy_ahead_vmstate, false),
 };
 
 static void thead_c900_clint_class_init(ObjectClass *oc, const void *data)
@@ -391,6 +490,7 @@ static void thead_c900_clint_class_init(ObjectClass *oc, const void *data)
     ResettableClass *rc = RESETTABLE_CLASS(oc);
 
     dc->realize = thead_c900_clint_realize;
+    dc->unrealize = thead_c900_clint_unrealize;
     dc->vmsd = &vmstate_thead_c900_clint;
     device_class_set_props(dc, thead_c900_clint_properties);
     rc->phases.enter = thead_c900_clint_reset_enter;

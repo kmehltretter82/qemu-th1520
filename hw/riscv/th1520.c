@@ -440,6 +440,10 @@ static void th1520_soc_init(Object *obj)
                                 TYPE_DW_APB_UART);
         qdev_prop_set_uint32(DEVICE(&s->uart[i]), "baudbase",
                              TH1520_UART_INPUT_FREQ / 16);
+        if (i == 0) {
+            qdev_prop_set_bit(DEVICE(&s->uart[i]),
+                              "legacy-ahead-vmstate", true);
+        }
     }
     for (int i = 0; i < TH1520_GPIO_COUNT; i++) {
         object_initialize_child(obj, th1520_gpio_info[i].name, &s->gpio[i],
@@ -594,11 +598,13 @@ static void th1520_soc_init(Object *obj)
                          TH1520_C910_HARTS);
     qdev_prop_set_uint32(DEVICE(&s->clint), "timebase-freq",
                          TH1520_TIMEBASE_FREQ);
+    qdev_prop_set_bit(DEVICE(&s->clint), "legacy-ahead-vmstate", true);
     qdev_prop_set_uint32(DEVICE(&s->plic), "hartid-base", 0);
     qdev_prop_set_uint32(DEVICE(&s->plic), "num-harts",
                          TH1520_C910_HARTS);
     qdev_prop_set_uint32(DEVICE(&s->plic), "num-sources",
                          TH1520_PLIC_NUM_SOURCES);
+    qdev_prop_set_bit(DEVICE(&s->plic), "legacy-ahead-vmstate", true);
 }
 
 static void th1520_soc_realize(DeviceState *dev, Error **errp)

@@ -23,6 +23,7 @@ struct THeadC900PLICState {
     uint32_t bitfield_words;
     uint32_t num_contexts;
     uint32_t num_enables;
+    bool legacy_ahead_vmstate;
 
     uint32_t control;
     uint32_t *source_priority;

@@ -323,6 +323,9 @@
 #define CSR_TH_FXCR                0x800
 #define CSR_TH_CPUID               0xfc0
 
+#define MIP_SSIP                   BIT(1)
+#define MIP_MSIP                   BIT(3)
+
 #define C910_HARTS                 4
 #define C900_PLIC_CONTEXTS         (C910_HARTS * 2)
 #define C900_PLIC_WORDS            8
@@ -10104,6 +10107,557 @@ static void test_c900_clint_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+#define AHEAD_VM_SECTION_FULL              0x04
+#define AHEAD_VM_SECTION_FOOTER            0x7e
+#define AHEAD_CURRENT_PLIC_VMSTATE         "thead.c900-plic"
+#define AHEAD_LEGACY_PLIC_VMSTATE          "riscv_sifive_plic"
+#define AHEAD_CURRENT_CLINT_VMSTATE        "thead.c900-clint"
+#define AHEAD_LEGACY_CLINT_VMSTATE         "riscv_mtimer"
+#define AHEAD_CURRENT_UART_VMSTATE         "dw-apb-uart"
+#define AHEAD_LEGACY_UART_VMSTATE          "serial"
+#define AHEAD_CURRENT_CPU_VMSTATE          "cpu"
+#define AHEAD_CURRENT_CPU_VMSTATE_VERSION  12
+
+#define AHEAD_PLIC_SOURCES                 241
+#define AHEAD_PLIC_ENABLE_WORDS            (C900_PLIC_CONTEXTS * \
+                                            C900_PLIC_WORDS)
+#define AHEAD_LEGACY_PLIC_PAYLOAD_SIZE     \
+    ((AHEAD_PLIC_SOURCES + C900_PLIC_CONTEXTS + 2 * C900_PLIC_WORDS + \
+      AHEAD_PLIC_ENABLE_WORDS) * sizeof(uint32_t))
+#define AHEAD_CURRENT_PLIC_PAYLOAD_SIZE    \
+    (sizeof(uint32_t) + AHEAD_LEGACY_PLIC_PAYLOAD_SIZE + \
+     2 * C900_PLIC_WORDS * sizeof(uint32_t))
+#define AHEAD_CURRENT_CLINT_PAYLOAD_SIZE   \
+    (sizeof(uint64_t) + 2 * C910_HARTS * sizeof(uint32_t) + \
+     2 * C910_HARTS * sizeof(uint64_t))
+#define AHEAD_LEGACY_CLINT_PAYLOAD_SIZE    \
+    (sizeof(uint64_t) + 2 * C910_HARTS * sizeof(uint64_t))
+#define AHEAD_CURRENT_UART_PAYLOAD_SIZE    24
+#define AHEAD_LEGACY_UART_PAYLOAD_SIZE     11
+
+/* env.mip in the unchanged RISC-V CPU v11/v12 parent payload. */
+#define AHEAD_RISCV_CPU_MIP_OFFSET         \
+    (2 * 32 * sizeof(uint64_t) + 2 * 64 * sizeof(uint8_t) + \
+     3 * sizeof(uint64_t) + sizeof(uint8_t) + 2 * sizeof(uint64_t) + \
+     6 * sizeof(uint32_t) + 2 * sizeof(uint8_t) + \
+     3 * sizeof(uint64_t))
+
+#define AHEAD_LEGACY_PLIC_CONTEXT          1
+#define AHEAD_LEGACY_PLIC_ACTIVE_IRQ       120
+#define AHEAD_LEGACY_PLIC_PENDING_IRQ      124
+#define AHEAD_LEGACY_PLIC_EDGE_IRQ         130
+
+typedef struct AheadVMStateFullSection {
+    gsize offset;
+    gsize payload_offset;
+    uint32_t section_id;
+} AheadVMStateFullSection;
+
+static bool ahead_vmstate_full_header_at(const uint8_t *data, gsize size,
+                                         gsize offset, const char *name,
+                                         uint32_t instance_id,
+                                         uint32_t version,
+                                         gsize minimum_payload_size)
+{
+    gsize name_len = strlen(name);
+    gsize header_size = 1 + sizeof(uint32_t) + 1 + name_len +
+                        2 * sizeof(uint32_t);
+    gsize instance_offset;
+    gsize version_offset;
+
+    if (name_len > UINT8_MAX || offset > size ||
+        header_size > size - offset ||
+        minimum_payload_size > size - offset - header_size) {
+        return false;
+    }
+    instance_offset = offset + 1 + sizeof(uint32_t) + 1 + name_len;
+    version_offset = instance_offset + sizeof(uint32_t);
+
+    return data[offset] == AHEAD_VM_SECTION_FULL &&
+           data[offset + 1 + sizeof(uint32_t)] == name_len &&
+           !memcmp(data + offset + 1 + sizeof(uint32_t) + 1,
+                   name, name_len) &&
+           ldl_be_p(data + instance_offset) == instance_id &&
+           ldl_be_p(data + version_offset) == version;
+}
+
+static bool ahead_vmstate_full_fixed_at(const uint8_t *data, gsize size,
+                                        gsize offset, const char *name,
+                                        uint32_t instance_id,
+                                        uint32_t version, gsize payload_size)
+{
+    gsize header_size = 1 + sizeof(uint32_t) + 1 + strlen(name) +
+                        2 * sizeof(uint32_t);
+    gsize footer_offset;
+
+    if (!ahead_vmstate_full_header_at(data, size, offset, name, instance_id,
+                                      version, payload_size)) {
+        return false;
+    }
+    footer_offset = offset + header_size + payload_size;
+    if (sizeof(uint8_t) + sizeof(uint32_t) > size - footer_offset) {
+        return false;
+    }
+    return data[footer_offset] == AHEAD_VM_SECTION_FOOTER &&
+           ldl_be_p(data + footer_offset + 1) == ldl_be_p(data + offset + 1);
+}
+
+static guint ahead_vmstate_full_count(const GByteArray *stream,
+                                      const char *name,
+                                      uint32_t instance_id,
+                                      uint32_t version, gsize payload_size)
+{
+    guint count = 0;
+
+    for (gsize offset = 0; offset < stream->len; offset++) {
+        count += ahead_vmstate_full_fixed_at(stream->data, stream->len,
+                                             offset, name, instance_id,
+                                             version, payload_size);
+    }
+    return count;
+}
+
+static AheadVMStateFullSection
+ahead_vmstate_find_full(const GByteArray *stream, const char *name,
+                        uint32_t instance_id, uint32_t version,
+                        gsize payload_size, bool fixed_payload)
+{
+    AheadVMStateFullSection section = { 0 };
+    gsize name_len = strlen(name);
+    guint count = 0;
+
+    for (gsize offset = 0; offset < stream->len; offset++) {
+        bool match = fixed_payload ?
+            ahead_vmstate_full_fixed_at(stream->data, stream->len, offset,
+                                        name, instance_id, version,
+                                        payload_size) :
+            ahead_vmstate_full_header_at(stream->data, stream->len, offset,
+                                         name, instance_id, version,
+                                         payload_size);
+
+        if (!match) {
+            continue;
+        }
+        section = (AheadVMStateFullSection) {
+            .offset = offset,
+            .payload_offset = offset + 1 + sizeof(uint32_t) + 1 +
+                              name_len + 2 * sizeof(uint32_t),
+            .section_id = ldl_be_p(stream->data + offset + 1),
+        };
+        count++;
+    }
+    g_assert_cmpuint(count, ==, 1);
+    return section;
+}
+
+static GByteArray *ahead_vmstate_read(const char *path)
+{
+    g_autofree char *contents = NULL;
+    g_autoptr(GError) error = NULL;
+    gsize size;
+
+    g_assert_true(g_file_get_contents(path, &contents, &size, &error));
+    g_assert_no_error(error);
+    g_assert_cmpuint(size, >=, 8);
+    g_assert_cmpuint(size, <=, G_MAXUINT);
+    g_assert_cmpmem(contents, 4, "QEVM", 4);
+    g_assert_cmpuint(ldl_be_p(contents + 4), ==, 3);
+    return g_byte_array_new_take((uint8_t *)g_steal_pointer(&contents), size);
+}
+
+static void ahead_vmstate_append_be32(GByteArray *stream, uint32_t value)
+{
+    uint8_t encoded[sizeof(value)];
+
+    stl_be_p(encoded, value);
+    g_byte_array_append(stream, encoded, sizeof(encoded));
+}
+
+static void ahead_vmstate_replace_full(GByteArray **stream_ptr,
+                                       const char *current_name,
+                                       uint32_t current_instance,
+                                       uint32_t current_version,
+                                       gsize current_payload_size,
+                                       const char *legacy_name,
+                                       uint32_t legacy_instance,
+                                       uint32_t legacy_version,
+                                       const uint8_t *legacy_payload,
+                                       gsize legacy_payload_size)
+{
+    GByteArray *stream = *stream_ptr;
+    AheadVMStateFullSection section =
+        ahead_vmstate_find_full(stream, current_name, current_instance,
+                                current_version, current_payload_size, true);
+    gsize old_end = section.payload_offset + current_payload_size;
+    gsize legacy_name_len = strlen(legacy_name);
+    g_autoptr(GByteArray) replacement = g_byte_array_new();
+    g_autoptr(GByteArray) updated = g_byte_array_new();
+    uint8_t marker = AHEAD_VM_SECTION_FULL;
+    uint8_t name_len;
+
+    g_assert_cmpuint(legacy_name_len, <=, UINT8_MAX);
+    name_len = legacy_name_len;
+    g_assert_cmpuint(old_end + 1 + sizeof(uint32_t), <=, stream->len);
+    g_assert_cmpuint(stream->data[old_end], ==,
+                     AHEAD_VM_SECTION_FOOTER);
+    g_assert_cmpuint(ldl_be_p(stream->data + old_end + 1), ==,
+                     section.section_id);
+
+    g_byte_array_append(replacement, &marker, sizeof(marker));
+    ahead_vmstate_append_be32(replacement, section.section_id);
+    g_byte_array_append(replacement, &name_len, sizeof(name_len));
+    g_byte_array_append(replacement, (const uint8_t *)legacy_name,
+                        name_len);
+    ahead_vmstate_append_be32(replacement, legacy_instance);
+    ahead_vmstate_append_be32(replacement, legacy_version);
+    g_byte_array_append(replacement, legacy_payload, legacy_payload_size);
+
+    g_byte_array_append(updated, stream->data, section.offset);
+    g_byte_array_append(updated, replacement->data, replacement->len);
+    g_byte_array_append(updated, stream->data + old_end,
+                        stream->len - old_end);
+    g_byte_array_unref(stream);
+    *stream_ptr = g_steal_pointer(&updated);
+}
+
+static void ahead_assert_device_vmstate_identities(const GByteArray *stream,
+                                                   bool legacy)
+{
+    g_assert_cmpuint(ahead_vmstate_full_count(
+                         stream, AHEAD_CURRENT_PLIC_VMSTATE, 0, 1,
+                         AHEAD_CURRENT_PLIC_PAYLOAD_SIZE), ==,
+                     legacy ? 0 : 1);
+    g_assert_cmpuint(ahead_vmstate_full_count(
+                         stream, AHEAD_CURRENT_CLINT_VMSTATE, 0, 1,
+                         AHEAD_CURRENT_CLINT_PAYLOAD_SIZE), ==,
+                     legacy ? 0 : 1);
+    g_assert_cmpuint(ahead_vmstate_full_count(
+                         stream, AHEAD_CURRENT_UART_VMSTATE, 0, 1,
+                         AHEAD_CURRENT_UART_PAYLOAD_SIZE), ==,
+                     legacy ? 0 : 1);
+    g_assert_cmpuint(ahead_vmstate_full_count(
+                         stream, AHEAD_LEGACY_PLIC_VMSTATE, 0, 1,
+                         AHEAD_LEGACY_PLIC_PAYLOAD_SIZE), ==,
+                     legacy ? 1 : 0);
+    g_assert_cmpuint(ahead_vmstate_full_count(
+                         stream, AHEAD_LEGACY_CLINT_VMSTATE, 0, 3,
+                         AHEAD_LEGACY_CLINT_PAYLOAD_SIZE), ==,
+                     legacy ? 1 : 0);
+    g_assert_cmpuint(ahead_vmstate_full_count(
+                         stream, AHEAD_LEGACY_UART_VMSTATE, 0, 3,
+                         AHEAD_LEGACY_UART_PAYLOAD_SIZE), ==,
+                     legacy ? 1 : 0);
+}
+
+/*
+ * Recast current fixed-size sections into the exact layouts emitted by the
+ * first Ahead machine: SiFive PLIC v1, ACLINT MTIMER v3, and serial v3.  The
+ * stream-local section IDs do not carry device identity and are preserved.
+ */
+static void ahead_downgrade_legacy_device_vmstate(const char *path)
+{
+    g_autoptr(GByteArray) stream = ahead_vmstate_read(path);
+    AheadVMStateFullSection section;
+    uint8_t legacy_plic[AHEAD_LEGACY_PLIC_PAYLOAD_SIZE];
+    uint8_t legacy_clint[AHEAD_LEGACY_CLINT_PAYLOAD_SIZE] = { 0 };
+    uint8_t legacy_uart[AHEAD_LEGACY_UART_PAYLOAD_SIZE];
+    g_autoptr(GError) error = NULL;
+    uint8_t *payload;
+    gsize priority_offset = sizeof(uint32_t);
+    gsize threshold_offset = priority_offset +
+                             AHEAD_PLIC_SOURCES * sizeof(uint32_t);
+    gsize pending_offset = threshold_offset +
+                           C900_PLIC_CONTEXTS * sizeof(uint32_t);
+    gsize active_offset = pending_offset +
+                          C900_PLIC_WORDS * sizeof(uint32_t);
+    gsize enable_offset = active_offset +
+                          C900_PLIC_WORDS * sizeof(uint32_t);
+    gsize source_level_offset = enable_offset +
+                                AHEAD_PLIC_ENABLE_WORDS * sizeof(uint32_t);
+    gsize edge_trigger_offset = source_level_offset +
+                                C900_PLIC_WORDS * sizeof(uint32_t);
+    uint32_t word;
+    uint32_t mask;
+
+    ahead_assert_device_vmstate_identities(stream, false);
+
+    /*
+     * The old ACLINT SWI had no section of its own.  Its pending state was
+     * carried in each CPU's mip field, from which the compatibility loader
+     * reconstructs the C900 MSIP and SSIP banks.
+     */
+    for (uint32_t hart = 0; hart < C910_HARTS; hart++) {
+        uint64_t mip;
+
+        section = ahead_vmstate_find_full(
+            stream, AHEAD_CURRENT_CPU_VMSTATE, hart,
+            AHEAD_CURRENT_CPU_VMSTATE_VERSION,
+            AHEAD_RISCV_CPU_MIP_OFFSET + sizeof(uint64_t), false);
+        payload = stream->data + section.payload_offset;
+        mip = ldq_be_p(payload + AHEAD_RISCV_CPU_MIP_OFFSET);
+        mip &= ~(MIP_MSIP | MIP_SSIP);
+        if (hart == 1) {
+            mip |= MIP_MSIP;
+        } else if (hart == 2) {
+            mip |= MIP_SSIP;
+        }
+        stq_be_p(payload + AHEAD_RISCV_CPU_MIP_OFFSET, mip);
+    }
+
+    section = ahead_vmstate_find_full(stream, AHEAD_CURRENT_PLIC_VMSTATE,
+                                      0, 1,
+                                      AHEAD_CURRENT_PLIC_PAYLOAD_SIZE, true);
+    payload = stream->data + section.payload_offset;
+    g_assert_cmphex(ldl_be_p(payload), ==, 0);
+    g_assert_cmphex(ldl_be_p(payload + priority_offset +
+                            AHEAD_LEGACY_PLIC_ACTIVE_IRQ *
+                            sizeof(uint32_t)), ==, 6);
+    g_assert_cmphex(ldl_be_p(payload + threshold_offset +
+                            AHEAD_LEGACY_PLIC_CONTEXT *
+                            sizeof(uint32_t)), ==, 2);
+    word = AHEAD_LEGACY_PLIC_PENDING_IRQ >> 5;
+    mask = BIT(AHEAD_LEGACY_PLIC_PENDING_IRQ & 31);
+    g_assert_true(ldl_be_p(payload + pending_offset +
+                           word * sizeof(uint32_t)) & mask);
+    word = AHEAD_LEGACY_PLIC_ACTIVE_IRQ >> 5;
+    mask = BIT(AHEAD_LEGACY_PLIC_ACTIVE_IRQ & 31);
+    g_assert_true(ldl_be_p(payload + active_offset +
+                           word * sizeof(uint32_t)) & mask);
+    g_assert_true(ldl_be_p(payload + enable_offset +
+                           (AHEAD_LEGACY_PLIC_CONTEXT * C900_PLIC_WORDS +
+                            word) * sizeof(uint32_t)) & mask);
+    g_assert_true(ldl_be_p(payload + source_level_offset +
+                           word * sizeof(uint32_t)) & mask);
+    word = AHEAD_LEGACY_PLIC_EDGE_IRQ >> 5;
+    mask = BIT(AHEAD_LEGACY_PLIC_EDGE_IRQ & 31);
+    g_assert_true(ldl_be_p(payload + edge_trigger_offset +
+                           word * sizeof(uint32_t)) & mask);
+    memcpy(legacy_plic, payload + sizeof(uint32_t),
+           sizeof(legacy_plic));
+    ahead_vmstate_replace_full(&stream, AHEAD_CURRENT_PLIC_VMSTATE, 0, 1,
+                               AHEAD_CURRENT_PLIC_PAYLOAD_SIZE,
+                               AHEAD_LEGACY_PLIC_VMSTATE, 0, 1,
+                               legacy_plic, sizeof(legacy_plic));
+
+    section = ahead_vmstate_find_full(stream, AHEAD_CURRENT_CLINT_VMSTATE,
+                                      0, 1,
+                                      AHEAD_CURRENT_CLINT_PAYLOAD_SIZE, true);
+    payload = stream->data + section.payload_offset;
+    g_assert_cmphex(ldq_be_p(payload), ==, 3);
+    g_assert_cmphex(ldl_be_p(payload + sizeof(uint64_t) +
+                            sizeof(uint32_t)), ==, 1);
+    g_assert_cmphex(ldl_be_p(payload + sizeof(uint64_t) +
+                            C910_HARTS * sizeof(uint32_t) +
+                            2 * sizeof(uint32_t)), ==, 1);
+    g_assert_cmphex(ldq_be_p(payload + sizeof(uint64_t) +
+                            2 * C910_HARTS * sizeof(uint32_t) +
+                            3 * sizeof(uint64_t)), ==, 12);
+    g_assert_cmphex(ldq_be_p(payload + sizeof(uint64_t) +
+                            2 * C910_HARTS * sizeof(uint32_t) +
+                            C910_HARTS * sizeof(uint64_t)), ==, 17);
+    stq_be_p(legacy_clint, 3);
+    memcpy(legacy_clint + sizeof(uint64_t),
+           payload + sizeof(uint64_t) +
+           2 * C910_HARTS * sizeof(uint32_t),
+           C910_HARTS * sizeof(uint64_t));
+    memset(legacy_clint + sizeof(uint64_t) +
+           C910_HARTS * sizeof(uint64_t), 0xff,
+           C910_HARTS * sizeof(uint64_t));
+    stq_be_p(legacy_clint + sizeof(uint64_t) +
+             C910_HARTS * sizeof(uint64_t) +
+             3 * sizeof(uint64_t), 4000);
+    ahead_vmstate_replace_full(&stream, AHEAD_CURRENT_CLINT_VMSTATE, 0, 1,
+                               AHEAD_CURRENT_CLINT_PAYLOAD_SIZE,
+                               AHEAD_LEGACY_CLINT_VMSTATE, 0, 3,
+                               legacy_clint, sizeof(legacy_clint));
+
+    section = ahead_vmstate_find_full(stream, AHEAD_CURRENT_UART_VMSTATE,
+                                      0, 1,
+                                      AHEAD_CURRENT_UART_PAYLOAD_SIZE, true);
+    payload = stream->data + section.payload_offset;
+    g_assert_cmphex(lduw_be_p(payload), ==, 0x1234);
+    g_assert_cmphex(payload[5], ==, 3);
+    g_assert_cmphex(payload[9], ==, 0x5a);
+    g_assert_cmphex(ldl_be_p(payload + AHEAD_LEGACY_UART_PAYLOAD_SIZE),
+                    ==, 0xb);
+    memcpy(legacy_uart, payload, sizeof(legacy_uart));
+    ahead_vmstate_replace_full(&stream, AHEAD_CURRENT_UART_VMSTATE, 0, 1,
+                               AHEAD_CURRENT_UART_PAYLOAD_SIZE,
+                               AHEAD_LEGACY_UART_VMSTATE, 0, 3,
+                               legacy_uart, sizeof(legacy_uart));
+
+    ahead_assert_device_vmstate_identities(stream, true);
+    g_assert_true(g_file_set_contents(path, (const char *)stream->data,
+                                      stream->len, &error));
+    g_assert_no_error(error);
+}
+
+static void test_ahead_legacy_device_vmstate(void)
+{
+    const char *args =
+        "-machine beaglev-ahead,suppress-vmdesc=on -bios none "
+        "-global dw-apb-uart.dlf-width=4";
+    g_autofree char *legacy_path = NULL;
+    g_autofree char *legacy_uri = NULL;
+    g_autofree char *modern_path = NULL;
+    g_autofree char *modern_uri = NULL;
+    g_autoptr(GByteArray) modern_stream = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-legacy-vmstate-XXXXXX",
+                         &legacy_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    legacy_uri = g_strdup_printf("file:%s", legacy_path);
+    fd = g_file_open_tmp("beaglev-ahead-modern-vmstate-XXXXXX",
+                         &modern_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    modern_uri = g_strdup_printf("file:%s", modern_path);
+
+    src = qtest_init(args);
+    dst = qtest_initf("%s -incoming defer", args);
+    qtest_irq_intercept_out_named(dst, C900_CLINT_QOM_PATH, "mtimer");
+
+    qtest_writel(src, C900_PLIC_PRIORITY(AHEAD_LEGACY_PLIC_ACTIVE_IRQ), 6);
+    qtest_writel(src, C900_PLIC_PRIORITY(AHEAD_LEGACY_PLIC_PENDING_IRQ), 7);
+    qtest_writel(src, C900_PLIC_THRESHOLD(AHEAD_LEGACY_PLIC_CONTEXT), 2);
+    c900_plic_set_enable(src, AHEAD_LEGACY_PLIC_CONTEXT,
+                         AHEAD_LEGACY_PLIC_ACTIVE_IRQ, true);
+    c900_plic_set_enable(src, AHEAD_LEGACY_PLIC_CONTEXT,
+                         AHEAD_LEGACY_PLIC_PENDING_IRQ, true);
+    c900_plic_set_input(src, "source", AHEAD_LEGACY_PLIC_ACTIVE_IRQ, 1);
+    g_assert_cmphex(qtest_readl(
+                        src, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT)),
+                    ==, AHEAD_LEGACY_PLIC_ACTIVE_IRQ);
+    c900_plic_set_pending(src, AHEAD_LEGACY_PLIC_PENDING_IRQ, true);
+    c900_plic_set_input(src, "edge-trigger", AHEAD_LEGACY_PLIC_EDGE_IRQ,
+                        1);
+    g_assert_cmphex(qtest_readl(src, C900_PLIC_CONTROL), ==, 0);
+
+    g_assert_cmpint(qtest_clock_set(src, 1000), ==, 1000);
+    qtest_writel(src, C900_MSIP(1), 1);
+    qtest_writel(src, C900_SSIP(2), 1);
+    write_compare(src, C900_MTIMECMP(3), 12);
+    write_compare(src, C900_STIMECMP(0), 17);
+
+    qtest_writel(src, DW_UART_LCR, UART_LCR_DLAB | 3);
+    qtest_writel(src, DW_UART_RBR_THR_DLL, 0x34);
+    qtest_writel(src, DW_UART_IER_DLH, 0x12);
+    qtest_writel(src, DW_UART_DLF, 0xb);
+    qtest_writel(src, DW_UART_LCR, 3);
+    qtest_writel(src, DW_UART_SCR, 0x5a);
+
+    /* Poison fields absent from the old layouts before invoking pre_load. */
+    c900_plic_set_input(dst, "source", AHEAD_LEGACY_PLIC_ACTIVE_IRQ, 1);
+    c900_plic_set_input(dst, "edge-trigger", AHEAD_LEGACY_PLIC_EDGE_IRQ,
+                        1);
+    qtest_writel(dst, C900_MSIP(0), 1);
+    qtest_writel(dst, C900_SSIP(3), 1);
+    write_compare(dst, C900_STIMECMP(0), 42);
+    qtest_writel(dst, DW_UART_DLF, 7);
+    qtest_writel(dst, DW_UART_SCR, 0xa5);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", legacy_uri);
+    wait_for_migration_complete(src);
+    ahead_downgrade_legacy_device_vmstate(legacy_path);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        legacy_uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, C900_PLIC_CONTROL), ==, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                C900_PLIC_PRIORITY(
+                                    AHEAD_LEGACY_PLIC_ACTIVE_IRQ)), ==, 6);
+    g_assert_cmphex(qtest_readl(dst,
+                                C900_PLIC_THRESHOLD(
+                                    AHEAD_LEGACY_PLIC_CONTEXT)), ==, 2);
+    g_assert_true(qtest_readl(
+        dst, C900_PLIC_ENABLE(AHEAD_LEGACY_PLIC_CONTEXT,
+                              AHEAD_LEGACY_PLIC_ACTIVE_IRQ >> 5)) &
+                  BIT(AHEAD_LEGACY_PLIC_ACTIVE_IRQ & 31));
+    g_assert_true(c900_plic_pending(dst, AHEAD_LEGACY_PLIC_PENDING_IRQ));
+    g_assert_cmphex(qtest_readl(
+                        dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT)),
+                    ==, AHEAD_LEGACY_PLIC_PENDING_IRQ);
+    qtest_writel(dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT),
+                  AHEAD_LEGACY_PLIC_PENDING_IRQ);
+
+    /* The active bitmap maps, while the absent source-level bitmap clears. */
+    c900_plic_set_pending(dst, AHEAD_LEGACY_PLIC_ACTIVE_IRQ, true);
+    g_assert_cmphex(qtest_readl(
+                        dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT)),
+                    ==, 0);
+    qtest_writel(dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT),
+                  AHEAD_LEGACY_PLIC_ACTIVE_IRQ);
+    g_assert_cmphex(qtest_readl(
+                        dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT)),
+                    ==, AHEAD_LEGACY_PLIC_ACTIVE_IRQ);
+    qtest_writel(dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT),
+                  AHEAD_LEGACY_PLIC_ACTIVE_IRQ);
+    g_assert_false(c900_plic_pending(dst, AHEAD_LEGACY_PLIC_ACTIVE_IRQ));
+
+    /* The absent edge bitmap defaults to level-triggered operation. */
+    qtest_writel(dst, C900_PLIC_PRIORITY(AHEAD_LEGACY_PLIC_EDGE_IRQ), 5);
+    c900_plic_set_enable(dst, AHEAD_LEGACY_PLIC_CONTEXT,
+                         AHEAD_LEGACY_PLIC_EDGE_IRQ, true);
+    c900_plic_set_input(dst, "source", AHEAD_LEGACY_PLIC_EDGE_IRQ, 1);
+    g_assert_cmphex(qtest_readl(
+                        dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT)),
+                    ==, AHEAD_LEGACY_PLIC_EDGE_IRQ);
+    qtest_writel(dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT),
+                  AHEAD_LEGACY_PLIC_EDGE_IRQ);
+    g_assert_cmphex(qtest_readl(
+                        dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT)),
+                    ==, AHEAD_LEGACY_PLIC_EDGE_IRQ);
+    c900_plic_set_input(dst, "source", AHEAD_LEGACY_PLIC_EDGE_IRQ, 0);
+    qtest_writel(dst, C900_PLIC_CLAIM(AHEAD_LEGACY_PLIC_CONTEXT),
+                  AHEAD_LEGACY_PLIC_EDGE_IRQ);
+    g_assert_false(c900_plic_pending(dst, AHEAD_LEGACY_PLIC_EDGE_IRQ));
+
+    g_assert_cmphex(get_csr(dst, 0, CSR_TIME), ==, 3);
+    g_assert_cmphex(qtest_readl(dst, C900_MSIP(0)), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, C900_MSIP(1)), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, C900_SSIP(2)), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, C900_SSIP(3)), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, C900_MTIMECMP(3)), ==, 12);
+    g_assert_cmphex(qtest_readl(dst, C900_MTIMECMP(3) + 4), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, C900_STIMECMP(0)), ==, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(dst, C900_STIMECMP(0) + 4), ==,
+                    UINT32_MAX);
+    assert_no_irq(dst);
+    qtest_clock_step(dst, 2999);
+    g_assert_cmphex(get_csr(dst, 0, CSR_TIME), ==, 11);
+    assert_no_irq(dst);
+    qtest_clock_step(dst, 1);
+    g_assert_cmphex(get_csr(dst, 0, CSR_TIME), ==, 12);
+    assert_only_irq(dst, 3);
+
+    g_assert_cmphex(qtest_readl(dst, DW_UART_LCR), ==, 3);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_SCR), ==, 0x5a);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_DLF), ==, 0);
+    qtest_writel(dst, DW_UART_LCR, UART_LCR_DLAB | 3);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_RBR_THR_DLL), ==, 0x34);
+    g_assert_cmphex(qtest_readl(dst, DW_UART_IER_DLH), ==, 0x12);
+    qtest_writel(dst, DW_UART_LCR, 3);
+
+    /* Loading old identities must not make a subsequent save emit them. */
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", modern_uri);
+    wait_for_migration_complete(dst);
+    modern_stream = ahead_vmstate_read(modern_path);
+    ahead_assert_device_vmstate_identities(modern_stream, false);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(legacy_path), ==, 0);
+    g_assert_cmpint(g_unlink(modern_path), ==, 0);
+}
+
 static void test_dwcmshc_emmc_tuning_migration(void)
 {
     const uint64_t base = TH1520_EMMC_BASE;
@@ -10992,6 +11546,8 @@ int main(int argc, char **argv)
                        test_dmac_migration);
         qtest_add_func("/beaglev-ahead/migration/whole-machine",
                        test_whole_machine_migration);
+        qtest_add_func("/beaglev-ahead/migration/legacy-device-vmstate",
+                       test_ahead_legacy_device_vmstate);
         qtest_add_func("/beaglev-ahead/gmac/registers",
                        test_gmac_registers);
         for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {

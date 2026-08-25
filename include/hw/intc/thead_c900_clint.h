@@ -22,6 +22,7 @@ struct THeadC900CLINTState {
     uint32_t hartid_base;
     uint32_t num_harts;
     uint32_t timebase_freq;
+    bool legacy_ahead_vmstate;
     uint64_t time_delta;
     uint64_t time_at_save;
 

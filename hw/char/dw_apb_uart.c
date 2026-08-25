@@ -304,6 +304,40 @@ static int dw_apb_uart_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool dw_apb_uart_legacy_needed(void *opaque)
+{
+    return false;
+}
+
+static int dw_apb_uart_legacy_pre_load(void *opaque)
+{
+    DWAPBUARTState *s = opaque;
+
+    s->dlf = 0;
+    s->busy_until = 0;
+    s->busy_irq = false;
+    return 0;
+}
+
+/*
+ * The first Ahead machine exposed UART0 through serial-mm.  Reuse the exact
+ * 16550 VMState payload inside the current wrapper while defaulting the
+ * DesignWare-only fields.  This top-level legacy identity is load-only.
+ */
+static const VMStateDescription vmstate_dw_apb_uart_legacy_ahead = {
+    .name = "serial",
+    .version_id = 3,
+    .minimum_version_id = 3,
+    .pre_load = dw_apb_uart_legacy_pre_load,
+    .post_load = dw_apb_uart_post_load,
+    .needed = dw_apb_uart_legacy_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_STRUCT(serial, DWAPBUARTState, 0, vmstate_serial,
+                       SerialState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static const VMStateDescription vmstate_dw_apb_uart = {
     .name = "dw-apb-uart",
     .version_id = 1,
@@ -344,6 +378,16 @@ static void dw_apb_uart_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    if (s->legacy_ahead_vmstate &&
+        vmstate_register_with_alias_id(
+            NULL, 0, &vmstate_dw_apb_uart_legacy_ahead,
+            s, -1, 0, errp) < 0) {
+        qdev_unrealize(DEVICE(&s->serial));
+        qemu_free_irq(s->serial_irq_sink);
+        s->serial_irq_sink = NULL;
+        return;
+    }
+
     serial_set_divisor_fraction(&s->serial, s->dlf, s->dlf_width);
 }
 
@@ -351,6 +395,10 @@ static void dw_apb_uart_unrealize(DeviceState *dev)
 {
     DWAPBUARTState *s = DW_APB_UART(dev);
 
+    if (s->legacy_ahead_vmstate) {
+        vmstate_unregister(NULL, &vmstate_dw_apb_uart_legacy_ahead, s);
+    }
+    qdev_unrealize(DEVICE(&s->serial));
     qemu_free_irq(s->serial_irq_sink);
     s->serial_irq_sink = NULL;
 }
@@ -379,6 +427,8 @@ static const Property dw_apb_uart_properties[] = {
     DEFINE_PROP_BOOL("uart-16550-compatible", DWAPBUARTState,
                      uart_16550_compatible, false),
     DEFINE_PROP_BOOL("fifo-stat", DWAPBUARTState, fifo_stat, false),
+    DEFINE_PROP_BOOL("legacy-ahead-vmstate", DWAPBUARTState,
+                     legacy_ahead_vmstate, false),
 };
 
 static void dw_apb_uart_class_init(ObjectClass *oc, const void *data)
