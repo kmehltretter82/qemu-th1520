@@ -107,6 +107,7 @@ typedef struct DisasContext {
     bool altfmt;
     bool theadisaee;
     bool thead_mm;
+    bool thead_ucme;
     CPUState *cs;
     TCGv zero;
     /* actual address width */
@@ -1373,6 +1374,7 @@ static void riscv_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     ctx->altfmt = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, ALTFMT);
     ctx->theadisaee = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, THEADISAEE);
     ctx->thead_mm = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, THEAD_MM);
+    ctx->thead_ucme = FIELD_EX64(ext_tb_flags, EXT_TB_FLAGS, THEAD_UCME);
     ctx->misa_mxl_max = mcc->def->misa_mxl_max;
     ctx->xl = FIELD_EX32(tb_flags, TB_FLAGS, XL);
     ctx->address_xl = FIELD_EX32(tb_flags, TB_FLAGS, AXL);

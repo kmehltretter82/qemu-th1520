@@ -205,11 +205,16 @@ static TCGTBCPUState riscv_get_tb_cpu_state(CPUState *cs)
                            object_dynamic_cast(OBJECT(cpu),
                                                TYPE_RISCV_CPU_THEAD_C910) &&
                            (env->th_mxstatus & THEAD_MXSTATUS_MM));
+    ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEAD_UCME,
+                           !object_dynamic_cast(OBJECT(cpu),
+                                                TYPE_RISCV_CPU_THEAD_C910) ||
+                           (env->th_mxstatus & THEAD_MXSTATUS_UCME));
 #else
     ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEADISAEE, 1);
     ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEAD_MM,
                            object_dynamic_cast(OBJECT(cpu),
                                                TYPE_RISCV_CPU_THEAD_C910));
+    ext_flags = FIELD_DP64(ext_flags, EXT_TB_FLAGS, THEAD_UCME, 1);
 #endif
 
     return (TCGTBCPUState){

@@ -748,6 +748,7 @@ typedef enum {
 #define PTE_THEAD_SO        BIT_ULL(63)
 
 /* T-Head C9xx machine-extension status bits. */
+#define THEAD_MXSTATUS_UCME       BIT_ULL(16)
 #define THEAD_MXSTATUS_MAEE       BIT_ULL(21)
 #define THEAD_MXSTATUS_THEADISAEE BIT_ULL(22)
 #define THEAD_MXSTATUS_MM         BIT_ULL(15)
