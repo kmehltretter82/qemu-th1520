@@ -21,6 +21,14 @@ destination overlapping implicit source `v0` at LMUL=2.  The fail-before
 guest exited at stage 1 because `th.vmseq.vv` executed instead of trapping.
 The focused normal, dependency-minimal and sanitizer runs pass after the five
 shared translator checks were corrected.
+
+The later GMAC Type-2 receive-status checkpoint ``46df230d5d`` introduced no
+new fixed-bug ID.  Two independent reviews removed blanket checksum-error
+dropping, undocumented TCP Data Offset validation and double-VLAN offload
+before the checkpoint.  The reduced descriptor-status contract and its
+normal/minimal/sanitizer regressions are clean; uncertain silicon behavior
+remains under ``GMAC-001`` instead of being labeled a bug.
+
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
 establishes the expected behavior.
@@ -54,7 +62,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Normal build
 
-* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **103/103**.
+* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **105/105**.
 * `build-beaglev-ahead/tests/qtest/riscv-csr-test -q`: **11/11**.
 * Local TCG payloads: **15/15** — XTheadVector smoke/state/overlap/FP/
   reduction, standard RVV widening legality, C910 MM/priority/MAEE/
@@ -64,14 +72,14 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Dependency-minimal build
 
-* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **102/102**.
+* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **104/104**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **5/5**.
 
 ### Dependency-minimal ASan/UBSan build
 
-* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **102/102**.
+* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **104/104**.
 * `build-sanitize/tests/qtest/riscv-csr-test -q`: **4/4** (C910 CSR and the
   active/inhibited/pending PMU migration cases present in this build).
 * Machine-specific semihosted payloads: **9/9** — C910 MM/priority/MAEE/
@@ -100,14 +108,19 @@ change must add a reproducer and a regression before changing any of them.
 * `MIG-001`: storage, GMAC, and USB migration during in-flight DMA or an
   attached transfer still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
-  registers and proves post-load reject/accept behavior, but creates the
-  destination socket separately and does not migrate queued packets or the
-  backend.  DMAC, I2C, SPI, and PVT are intentionally synchronous today;
+  registers, IPC state and an active enhanced ring, then proves post-load
+  reject/accept behavior and a Type-2 RDES4 result.  It creates the destination
+  socket separately and does not migrate queued packets or the backend.  DMAC,
+  I2C, SPI, and PVT are intentionally synchronous today;
   adding asynchronous timing requires versioned VMState and boundary tests.
 * `GMAC-001`: the receive-filter model follows the current DT contract of 64
   hash bins and 32 total perfect addresses, but no physical capability dump
-  proves that synthesis.  VLAN-hash mode remains disabled; exact filter,
-  control-frame, pause and VLAN behavior still requires owner-board capture.
+  proves that synthesis.  VLAN-hash mode remains disabled.  Type-2 descriptor
+  status is now modeled for a bounded documented subset, but checksum-error
+  drop/forward threshold behavior, malformed/zero-checksum corners, double
+  VLAN, PTP composition, bus-fault ordering and exact physical status words
+  still require owner-board capture, as do filter, control-frame, pause and
+  VLAN behavior.
 * `USB-002`: the current model is a host-only digital DWC3/xHCI integration
   with synthetic capability values.  PHY/link timing, device/OTG role,
   ID/VBUS, suspend/resume, and reset-domain independence are not modeled.
