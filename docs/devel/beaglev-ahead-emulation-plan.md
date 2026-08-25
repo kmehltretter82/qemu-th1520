@@ -361,7 +361,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction and mask-overlap boundaries | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the complete board/CSR gates pass 113/113 and 11/11 in normal and 112/112 and 4/4 in both minimal and sanitizer builds.  Qtest directly verifies reset values and stored-field migration, while stage-45 fast-path and stage-46 raised-event mutations fail at their intended same-sticky event cases.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; add guest execution after migration load, genuine version-1/version-2 FXCR streams and an explicit first exception-producing operation after reset, then compare every physical hart/stepping under CPU-016 |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the complete board/CSR gates pass 113/113 and 12/12 in normal and 112/112 and 5/5 in both minimal and sanitizer builds.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while stage-45 fast-path and stage-46 raised-event mutations fail at their intended same-sticky event cases.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; add genuine version-1/version-2 FXCR streams, then compare every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -705,8 +705,8 @@ address and supplies no strap, media, security or release-controller behavior,
 so it is only the first bounded Phase-4 checkpoint.
 
 At the current checkpoint the complete gate passes 113/113 board qtests and
-11/11 CSR qtests in the normal build, 112/112 and 4/4 respectively in the
-dependency-minimal build, and 112/112 and 4/4 in the ASan/UBSan build.  The
+12/12 CSR qtests in the normal build, 112/112 and 5/5 respectively in the
+dependency-minimal build, and 112/112 and 5/5 in the ASan/UBSan build.  The
 sole conditional difference in the board totals is the HID
 hotplug test because ``usb-kbd`` is intentionally absent from the minimal
 configuration.  The four remaining USB tests cover exact
@@ -732,15 +732,15 @@ passed, and the complete 13-test storage group passed under ASan/UBSan.  The
 historical 108-test sanitizer-board run predates these tests and remains useful
 milestone evidence; the current ASan/UBSan board gate supersedes it at 112/112.
 
-At that checkpoint the generic RISC-V CSR/migration binary passed eleven
-subtests, including
+The current generic RISC-V CSR/migration binary passes twelve subtests,
+including
 fixed-only, active, inhibited and pending PMU migration plus Sscofpmf
 extension-on/off WARL and alias coverage.  Six freestanding Sscofpmf variants
 covered M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passed 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passed.  Dependency-minimal and ASan/UBSan configurations each pass
-their four available C910 CSR/migration subtests.  Their current board gates
+their five available C910 CSR/migration subtests.  Their current board gates
 both pass 112/112; the explicitly historical 108/108 sanitizer result and the
 earlier focused 9/9 CPR plus 13/13 storage results remain milestone evidence
 only.
@@ -1252,13 +1252,26 @@ NaNs, all five IEEE exception classes, direct flag writes, and a new occurrence
 of an already-sticky exception.  It also proves that an integer-result
 quiet-NaN ``flt.s`` which raises an already-sticky invalid exception sets FE
 and changes FS from Clean to Dirty.  The C910 CSR qtest checks aliases and
-that emulated warm/system reset clears both FXCR and FS.  Its whole-machine
-migration case directly sets and reads back the stored FXCR/FRM/FFLAGS fields;
-it does not yet execute a guest FP operation after load.  The complete current
-board/CSR gates pass 113/113 and 11/11 in the normal build, and 112/112 and 4/4
-in each dependency-minimal and ASan/UBSan build.  The generic SoftFloat quick
-suite passes 17/17, and its slow ``fp-test-mulAdd`` FMA test also passes for
-f16, f32, f64 and f128.
+that QEMU system reset clears both FXCR and FS.  Its whole-machine
+migration case directly sets and reads back the stored FXCR/FRM/FFLAGS fields.
+
+A dedicated TCG qtest now supplies the missing execution boundary.  Before
+incoming migration it poisons the stopped destination with DQNaN clear, FE set
+and exception-event tracking disabled.  The source migrates ``DQNaN|NX`` with
+FE clear and preloaded floating-point operands.  Without an intervening FXCR
+access, the destination guest proves source-qNaN payload propagation and then
+raises an already-sticky NX event, requiring ``DQNaN|FE|NX``.  A retained-RAM
+cookie next selects a post-system-reset phase.  That phase verifies FS Off,
+enables FP, seeds standard ``fflags.NV`` without touching FXCR, performs
+quiet-NaN ``flt.s``, requires FS Dirty, and only then reads ``FXCR=FE|NV``.
+QEMU reports this host-requested system reset as cold while retaining RAM; the
+test protects the emulator contract and is not evidence for physical TH1520
+warm-reset or retention behavior.
+
+The complete current board/CSR gates pass 113/113 and 12/12 in the normal
+build, and 112/112 and 5/5 in each dependency-minimal and ASan/UBSan build.
+The generic SoftFloat quick suite passes 17/17, and its slow
+``fp-test-mulAdd`` FMA test also passes for f16, f32, f64 and f128.
 
 A targeted mutant which removes the event-tracking guard from
 ``can_use_fpu()`` allows the host floating-point fast path while FE detection
@@ -1272,10 +1285,12 @@ A separate targeted mutation which removes the raised-event arm from
 raises an already-sticky invalid event and must dirty FS.  That second mutant
 was restored immediately after the observed exit-at-stage-46 result; no mutant
 binary or immutable transcript is claimed.  Thus both event paths have
-mutation evidence.  Guest execution after migration load, genuine
-version-1/version-2 migration streams, an explicit
-first exception-producing operation after emulated reset, and physical
-comparison remain open.  The C910 model is TCG-only and is rejected with KVM
+mutation evidence.  Three further restored mutations prove the new boundary:
+removing post-load NaN reconstruction produces guest status ``0xdead3001``;
+removing post-load event rearming produces ``0xdead3002``; and removing
+reset-time event rearming produces ``0xdead3006`` before the first FXCR read.
+Genuine version-1/version-2 migration streams and physical comparison remain
+open.  The C910 model is TCG-only and is rejected with KVM
 until its custom state can be synchronized; CPU-016 retains the unidentified
 TH1520 stepping rather than treating the pinned RTL as a silicon measurement.
 
