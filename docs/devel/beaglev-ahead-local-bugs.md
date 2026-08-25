@@ -9,33 +9,38 @@ baseline reproducer.
 
 * Audit checkpoint: 2026-08-25
 * Branch: `beaglev-ahead`
-* Latest-finding pre-fix workspace HEAD: `45d753db5c`
+* Latest-finding pre-fix workspace HEAD: `1dee59932a`
 * Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
 
 ## Current disposition
 
-The ten local findings recorded during implementation (`UQ-L001` through
-`UQ-L010`) are fixed and have focused regressions.  The latest audit found
-that masked XTheadVector comparisons and mask-prefix instructions accepted a
-destination overlapping implicit source `v0` at LMUL=2.  The fail-before
-guest exited at stage 1 because `th.vmseq.vv` executed instead of trapping.
-The focused normal, dependency-minimal and sanitizer runs pass after the five
-shared translator checks were corrected.
+The eleven local findings recorded during implementation (`UQ-L001` through
+`UQ-L011`) are fixed and have focused regressions.  The latest audit found that
+the reusable DWC GMAC transmit path advertised checksum offload while its
+inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
+did not model the feature/TSF gates or descriptor-format error status.  At the
+pre-fix checkpoint, the new IPv6, CIC2, TSF and status contract would fail;
+for example, an IPv6 CIC3 frame retained its guest checksum.  Checkpoint
+``f441cf709f`` replaces that shortcut with the bounded engine described under
+``GMAC-001``.
 
-The later GMAC Type-2 receive-status checkpoint ``46df230d5d`` introduced no
-new fixed-bug ID.  Two independent reviews removed blanket checksum-error
-dropping, undocumented TCP Data Offset validation and double-VLAN offload
-before the checkpoint.  The reduced descriptor-status contract and its
-normal/minimal/sanitizer regressions are clean; uncertain silicon behavior
-remains under ``GMAC-001`` instead of being labeled a bug.
+Independent source and test reviews corrected the local policy before the
+checkpoint: trailing bytes are stuff rather than an error, only computed-zero
+UDP is mapped to ``0xffff``, TSF gates the complete engine, normal ES excludes
+IHE/IPE, and short-payload versus UDP-length-mismatch tests are independent.
+The 18-case matrix is clean in normal, dependency-minimal and sanitizer builds.
+Uncertain silicon behavior remains under ``GMAC-001`` rather than being
+labeled a bug.
 
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
 establishes the expected behavior.
 
-The detailed historical reproducer and fix records remain in the `UQ-L*`
-sections of [the upstream handoff](beaglev-ahead-upstream-bugs.md).  This file
-is the short review index and current test checkpoint.
+Detailed historical reproducer and fix records for the earlier findings remain
+in the `UQ-L*` sections of
+[the upstream handoff](beaglev-ahead-upstream-bugs.md).  Per owner direction,
+the current GMAC finding is recorded only here.  This file is the short review
+index and current test checkpoint.
 
 ## Fixed local findings
 
@@ -51,6 +56,7 @@ is the short review index and current test checkpoint.
 | UQ-L008 | XTheadVector reductions | `vl=0`, nonzero `vstart`, LMUL=8 widening, and widening-dispatch bounds were mishandled. | Fixed in helpers and dispatch validation; the reduction and standard-RVV bounds payloads pass. |
 | UQ-L009 | XTheadVector mask query | `th.vmfirst.m` executed when `vstart` was nonzero instead of raising an illegal-instruction exception. | Fixed by requiring zero `vstart` in the translator; the state payload proves the trap, destination and `vstart` preservation, first-set index and no-hit result. |
 | UQ-L010 | XTheadVector overlap | Masked comparison and mask-prefix destinations could overlap implicit source `v0` at LMUL greater than one. | Fixed in the four comparison checkers and mask-prefix macro; the overlap payload proves eight illegal forms, preservation of `v0`/`vstart` after the first trap, and legal LMUL=1, unmasked and non-`v0` controls. |
+| UQ-L011 | DWC GMAC TX checksum | The local reusable/TH1520 integration collapsed CIC2 and CIC3 into the same IPv4 TCP/UDP recalculation and did not enforce the advertised TXCOESEL/store-and-forward contract, leaving IPv6 offload and descriptor error status incomplete. | Fixed with bounded CIC0-3 IPv4/IPv6 TCP/UDP/ICMP insertion, first/terminal split-frame handling and format-aware IHE/IPE/ES writeback; an 18-case BeagleV matrix and one NPCM normal-descriptor CIC3 compatibility case cover the correction. |
 
 ## Audit evidence
 
@@ -62,7 +68,10 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Normal build
 
-* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **105/105**.
+* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **106/106**.
+* `build-npcm/tests/qtest/npcm_gmac-test`: **7/7**; its added normal-descriptor
+  case is a bounded shared-model compatibility check, not a claim of complete
+  NPCM TX-offload coverage.
 * `build-beaglev-ahead/tests/qtest/riscv-csr-test -q`: **11/11**.
 * Local TCG payloads: **15/15** — XTheadVector smoke/state/overlap/FP/
   reduction, standard RVV widening legality, C910 MM/priority/MAEE/
@@ -72,14 +81,14 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Dependency-minimal build
 
-* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **104/104**.
+* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **105/105**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **5/5**.
 
 ### Dependency-minimal ASan/UBSan build
 
-* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **104/104**.
+* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **105/105**.
 * `build-sanitize/tests/qtest/riscv-csr-test -q`: **4/4** (C910 CSR and the
   active/inhibited/pending PMU migration cases present in this build).
 * Machine-specific semihosted payloads: **9/9** — C910 MM/priority/MAEE/
@@ -117,10 +126,15 @@ change must add a reproducer and a regression before changing any of them.
   hash bins and 32 total perfect addresses, but no physical capability dump
   proves that synthesis.  VLAN-hash mode remains disabled.  Type-2 descriptor
   status is now modeled for a bounded documented subset, but checksum-error
-  drop/forward threshold behavior, malformed/zero-checksum corners, double
-  VLAN, PTP composition, bus-fault ordering and exact physical status words
-  still require owner-board capture, as do filter, control-frame, pause and
-  VLAN behavior.
+  drop/forward threshold behavior still requires owner-board capture.  TX
+  checksum insertion now has a bounded CIC0-3 contract, but the exact physical
+  feature word, FIFO/PBL and threshold recovery, CIC2 seed and CIC1-on-IPv6
+  semantics, normal/enhanced status, malformed/trailing/padding behavior,
+  fragments and IPv6 extensions, stacked/alternate VLANs, UDP-zero behavior,
+  PTP composition, descriptor/bus-fault ordering and sustained traffic remain
+  open.  The previous generic helper's incidental S-VLAN/QinQ traversal is not
+  claimed by the new one-tag/ESVL parser.  Exact filter, control-frame, pause
+  and VLAN behavior also requires physical comparison.
 * `USB-002`: the current model is a host-only digital DWC3/xHCI integration
   with synthetic capability values.  PHY/link timing, device/OTG role,
   ID/VBUS, suspend/resume, and reset-domain independence are not modeled.
