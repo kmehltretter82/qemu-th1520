@@ -69,8 +69,19 @@ struct DWGMACRxDesc {
 #define RX_DESC_RDES0_DRBL_BIT_ERR_MASK BIT(2)
 /* Cyclcic Redundancy Check Error */
 #define RX_DESC_RDES0_CRC_ERR_MASK BIT(1)
-/* Rx MAC Address/Payload Checksum Error */
-#define RC_DESC_RDES0_RCE_MASK BIT(0)
+/* Extended Status Available */
+#define RX_DESC_RDES0_EXT_STATUS_AVAIL_MASK BIT(0)
+
+/* Enhanced receive descriptor word 4 */
+#define RX_DESC_RDES4_PAYLOAD_UNKNOWN 0
+#define RX_DESC_RDES4_PAYLOAD_UDP 1
+#define RX_DESC_RDES4_PAYLOAD_TCP 2
+#define RX_DESC_RDES4_PAYLOAD_ICMP 3
+#define RX_DESC_RDES4_IP_HEADER_ERR BIT(3)
+#define RX_DESC_RDES4_IP_PAYLOAD_ERR BIT(4)
+#define RX_DESC_RDES4_IP_CSUM_BYPASSED BIT(5)
+#define RX_DESC_RDES4_IPV4_PACKET BIT(6)
+#define RX_DESC_RDES4_IPV6_PACKET BIT(7)
 
 /* Disable Interrupt on Completion */
 #define RX_DESC_RDES1_DIS_INTR_COMP_MASK BIT(31)
@@ -162,6 +173,7 @@ typedef struct DWGMACState {
     uint32_t version;
     uint32_t hw_feature;
     bool rx_filtering;
+    bool rx_coe_type2;
     uint16_t hash_bins;
     uint8_t num_mac_addrs;
     uint8_t phy_addr;

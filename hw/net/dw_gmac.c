@@ -92,6 +92,7 @@ REG32(DW_GMAC_PTP_TTSR, 0x71c)
 
 #define DWMAC_DMA_BUS_MODE_SWR               BIT(0)
 #define DWMAC_DMA_BUS_MODE_ATDS              BIT(7)
+#define DWMAC_DMA_HW_FEATURE_RX_COE_TYPE2     BIT(18)
 #define DWMAC_DMA_HW_FEATURE_ENH_DESC         BIT(24)
 
 #define DW_GMAC_MAC_ADDR0_BASE                0x40
@@ -110,11 +111,14 @@ REG32(DW_GMAC_PTP_TTSR, 0x71c)
 #define DW_GMAC_VLAN_TAG_MASK                   0x0007ffffu
 
 #define DW_GMAC_MAC_CONFIG_DM                  BIT(11)
+#define DW_GMAC_MAC_CONFIG_IPC                 BIT(10)
 #define DW_GMAC_FLOW_CTRL_UP                   BIT(3)
 #define DW_GMAC_FLOW_CTRL_RFE                  BIT(2)
 
 #define DW_GMAC_CONTROL_ETHERTYPE              0x8808
 #define DW_GMAC_PAUSE_OPCODE                   0x0001
+#define DW_GMAC_IP_PROTO_ICMP                  1
+#define DW_GMAC_IP_PROTO_ICMPV6                58
 
 typedef struct DWGMACRxFilterResult {
     bool accept;
@@ -122,6 +126,11 @@ typedef struct DWGMACRxFilterResult {
     bool sa_fail;
     bool vlan_tag;
 } DWGMACRxFilterResult;
+
+typedef struct DWGMACRxCOEStatus {
+    bool available;
+    uint32_t rdes4;
+} DWGMACRxCOEStatus;
 
 static hwaddr gmac_mac_addr_reg(unsigned int index, bool high)
 {
@@ -459,6 +468,272 @@ static bool gmac_uses_enhanced_desc(const DWGMACState *gmac)
     return gmac->hw_feature & DWMAC_DMA_HW_FEATURE_ENH_DESC;
 }
 
+static bool gmac_rx_coe_type2_active(const DWGMACState *gmac)
+{
+    return gmac->rx_coe_type2 && gmac_uses_enhanced_desc(gmac) &&
+           (gmac->regs[R_DWMAC_DMA_BUS_MODE] & DWMAC_DMA_BUS_MODE_ATDS) &&
+           (gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_IPC);
+}
+
+static bool gmac_rx_is_type_frame(const uint8_t *buf, size_t len)
+{
+    return len >= sizeof(struct eth_header) &&
+           lduw_be_p(buf + offsetof(struct eth_header, h_proto)) >= 0x600;
+}
+
+static bool gmac_rx_l3_protocol(const DWGMACState *gmac,
+                                const uint8_t *buf, size_t len,
+                                uint16_t *protocol, size_t *offset)
+{
+    if (len < sizeof(struct eth_header)) {
+        return false;
+    }
+
+    *protocol = lduw_be_p(buf + offsetof(struct eth_header, h_proto));
+    *offset = sizeof(struct eth_header);
+    if (*protocol == ETH_P_VLAN ||
+        (*protocol == ETH_P_DVLAN &&
+         (gmac->regs[R_DW_GMAC_VLAN_FLAG] &
+          DW_GMAC_VLAN_TAG_ESVL_MASK))) {
+        if (len - *offset < sizeof(struct vlan_header)) {
+            return false;
+        }
+        *protocol = lduw_be_p(buf + *offset +
+                              offsetof(struct vlan_header, h_proto));
+        *offset += sizeof(struct vlan_header);
+    }
+    return true;
+}
+
+static bool gmac_rx_checksum_valid(uint32_t initial, const uint8_t *buf,
+                                   size_t len)
+{
+    g_assert(len <= UINT16_MAX);
+    return net_checksum_finish(initial +
+                               net_checksum_add(len, (uint8_t *)buf)) == 0;
+}
+
+static bool gmac_rx_ip4_l4_checksum_valid(const uint8_t *ip,
+                                          const uint8_t *l4,
+                                          size_t l4_len, uint8_t protocol)
+{
+    uint8_t pseudo_tail[4] = {
+        0, protocol, l4_len >> 8, l4_len,
+    };
+    uint32_t sum = net_checksum_add(8, (uint8_t *)ip + 12);
+
+    sum += net_checksum_add(sizeof(pseudo_tail), pseudo_tail);
+    return gmac_rx_checksum_valid(sum, l4, l4_len);
+}
+
+static bool gmac_rx_ip6_l4_checksum_valid(const uint8_t *ip,
+                                          const uint8_t *l4,
+                                          size_t l4_len, uint8_t protocol)
+{
+    uint8_t pseudo_tail[8] = { 0 };
+    uint32_t sum = net_checksum_add(32, (uint8_t *)ip + 8);
+
+    stl_be_p(pseudo_tail, l4_len);
+    pseudo_tail[7] = protocol;
+    sum += net_checksum_add(sizeof(pseudo_tail), pseudo_tail);
+    return gmac_rx_checksum_valid(sum, l4, l4_len);
+}
+
+static uint32_t gmac_rx_coe_l4_status(const uint8_t *ip, bool ipv6,
+                                      const uint8_t *l4, size_t l4_len,
+                                      uint8_t protocol)
+{
+    uint32_t status;
+    bool valid;
+
+    switch (protocol) {
+    case IP_PROTO_UDP:
+        status = RX_DESC_RDES4_PAYLOAD_UDP;
+        if (l4_len < sizeof(udp_header) ||
+            lduw_be_p(l4 + offsetof(udp_header, uh_ulen)) != l4_len) {
+            return status | RX_DESC_RDES4_IP_PAYLOAD_ERR;
+        }
+        if (!lduw_be_p(l4 + offsetof(udp_header, uh_sum))) {
+            return ipv6 ? status | RX_DESC_RDES4_IP_PAYLOAD_ERR : status;
+        }
+        valid = ipv6 ?
+            gmac_rx_ip6_l4_checksum_valid(ip, l4, l4_len, protocol) :
+            gmac_rx_ip4_l4_checksum_valid(ip, l4, l4_len, protocol);
+        return status | (valid ? 0 : RX_DESC_RDES4_IP_PAYLOAD_ERR);
+
+    case IP_PROTO_TCP:
+        status = RX_DESC_RDES4_PAYLOAD_TCP;
+        if (l4_len < sizeof(tcp_header)) {
+            return status | RX_DESC_RDES4_IP_PAYLOAD_ERR;
+        }
+        valid = ipv6 ?
+            gmac_rx_ip6_l4_checksum_valid(ip, l4, l4_len, protocol) :
+            gmac_rx_ip4_l4_checksum_valid(ip, l4, l4_len, protocol);
+        return status | (valid ? 0 : RX_DESC_RDES4_IP_PAYLOAD_ERR);
+
+    case DW_GMAC_IP_PROTO_ICMP:
+        if (ipv6) {
+            break;
+        }
+        status = RX_DESC_RDES4_PAYLOAD_ICMP;
+        valid = l4_len >= 4 && gmac_rx_checksum_valid(0, l4, l4_len);
+        return status | (valid ? 0 : RX_DESC_RDES4_IP_PAYLOAD_ERR);
+
+    case DW_GMAC_IP_PROTO_ICMPV6:
+        if (!ipv6) {
+            break;
+        }
+        status = RX_DESC_RDES4_PAYLOAD_ICMP;
+        valid = l4_len >= 4 &&
+                gmac_rx_ip6_l4_checksum_valid(ip, l4, l4_len, protocol);
+        return status | (valid ? 0 : RX_DESC_RDES4_IP_PAYLOAD_ERR);
+    }
+
+    return RX_DESC_RDES4_PAYLOAD_UNKNOWN |
+           RX_DESC_RDES4_IP_CSUM_BYPASSED;
+}
+
+static uint32_t gmac_rx_coe_ip4_status(const uint8_t *buf, size_t len,
+                                       size_t offset)
+{
+    const uint8_t *ip = buf + offset;
+    size_t available = len - offset;
+    size_t header_len;
+    size_t total_len;
+    uint32_t status = RX_DESC_RDES4_IPV4_PACKET;
+
+    if (available < sizeof(struct ip_header) ||
+        IP_HEADER_VERSION((struct ip_header *)ip) != IP_HEADER_VERSION_4) {
+        return status | RX_DESC_RDES4_IP_HEADER_ERR;
+    }
+
+    header_len = IP_HDR_GET_LEN(ip);
+    total_len = lduw_be_p(ip + offsetof(struct ip_header, ip_len));
+    if (header_len < sizeof(struct ip_header) || header_len > available ||
+        total_len < header_len || total_len > available ||
+        !gmac_rx_checksum_valid(0, ip, header_len)) {
+        return status | RX_DESC_RDES4_IP_HEADER_ERR;
+    }
+    if (lduw_be_p(ip + offsetof(struct ip_header, ip_off)) &
+        (IP_OFFMASK | IP_MF)) {
+        return status | RX_DESC_RDES4_IP_CSUM_BYPASSED;
+    }
+
+    return status |
+           gmac_rx_coe_l4_status(ip, false, ip + header_len,
+                                 total_len - header_len,
+                                 ip[offsetof(struct ip_header, ip_p)]);
+}
+
+static uint32_t gmac_rx_coe_ip6_status(const uint8_t *buf, size_t len,
+                                       size_t offset)
+{
+    const uint8_t *ip = buf + offset;
+    size_t available = len - offset;
+    size_t payload_len;
+    size_t cursor;
+    size_t end;
+    uint8_t protocol;
+    uint32_t status = RX_DESC_RDES4_IPV6_PACKET;
+
+    if (available < sizeof(struct ip6_header) || (ip[0] >> 4) != 6) {
+        return status | RX_DESC_RDES4_IP_HEADER_ERR;
+    }
+
+    payload_len = lduw_be_p(ip + 4);
+    if (payload_len > available - sizeof(struct ip6_header)) {
+        return status | RX_DESC_RDES4_IP_HEADER_ERR;
+    }
+    cursor = sizeof(struct ip6_header);
+    end = cursor + payload_len;
+    protocol = ip[6];
+
+    for (;;) {
+        size_t extension_len;
+
+        switch (protocol) {
+        case IP6_ROUTING:
+            if (end - cursor < sizeof(struct ip6_ext_hdr)) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            extension_len = ((size_t)ip[cursor + 1] + 1) *
+                            IP6_EXT_GRANULARITY;
+            if (extension_len > end - cursor) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            return status | RX_DESC_RDES4_IP_CSUM_BYPASSED;
+        case IP6_FRAGMENT:
+            if (end - cursor < IP6_EXT_GRANULARITY) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            return status | RX_DESC_RDES4_IP_CSUM_BYPASSED;
+        case IP6_AUTHENTICATION:
+            if (end - cursor < sizeof(struct ip6_ext_hdr)) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            extension_len = ((size_t)ip[cursor + 1] + 2) * 4;
+            if (extension_len > end - cursor) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            return status | RX_DESC_RDES4_IP_CSUM_BYPASSED;
+        case IP6_ESP:
+            if (end - cursor < IP6_EXT_GRANULARITY) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            return status | RX_DESC_RDES4_IP_CSUM_BYPASSED;
+        case IP6_HOP_BY_HOP:
+        case IP6_DESTINATON:
+        case IP6_MOBILITY:
+            if (end - cursor < sizeof(struct ip6_ext_hdr)) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            extension_len = ((size_t)ip[cursor + 1] + 1) *
+                            IP6_EXT_GRANULARITY;
+            if (extension_len > end - cursor) {
+                return status | RX_DESC_RDES4_IP_HEADER_ERR;
+            }
+            protocol = ip[cursor];
+            cursor += extension_len;
+            break;
+        default:
+            return status |
+                   gmac_rx_coe_l4_status(ip, true, ip + cursor,
+                                         end - cursor, protocol);
+        }
+    }
+}
+
+static DWGMACRxCOEStatus gmac_rx_coe_status(const DWGMACState *gmac,
+                                            const uint8_t *buf, size_t len)
+{
+    DWGMACRxCOEStatus result = {
+        .available = gmac_rx_coe_type2_active(gmac),
+    };
+    uint16_t protocol;
+    size_t offset;
+
+    if (!result.available) {
+        return result;
+    }
+    if (!gmac_rx_l3_protocol(gmac, buf, len, &protocol, &offset)) {
+        result.rdes4 = RX_DESC_RDES4_IP_CSUM_BYPASSED;
+    } else if (protocol == ETH_P_IP) {
+        result.rdes4 = gmac_rx_coe_ip4_status(buf, len, offset);
+    } else if (protocol == ETH_P_IPV6) {
+        result.rdes4 = gmac_rx_coe_ip6_status(buf, len, offset);
+    } else {
+        result.rdes4 = RX_DESC_RDES4_IP_CSUM_BYPASSED;
+    }
+    return result;
+}
+
+static bool gmac_rx_coe_has_error(const DWGMACRxCOEStatus *status)
+{
+    return status->available &&
+           (status->rdes4 & (RX_DESC_RDES4_IP_HEADER_ERR |
+                             RX_DESC_RDES4_IP_PAYLOAD_ERR));
+}
+
 static size_t gmac_desc_stride(const DWGMACState *gmac)
 {
     return gmac->regs[R_DWMAC_DMA_BUS_MODE] & DWMAC_DMA_BUS_MODE_ATDS ?
@@ -666,6 +941,21 @@ static int gmac_write_rx_desc(dma_addr_t addr, struct DWGMACRxDesc *desc)
     return 0;
 }
 
+static int gmac_write_rx_ext_status(dma_addr_t addr, uint32_t status)
+{
+    uint32_t le_status = cpu_to_le32(status);
+
+    addr += sizeof(struct DWGMACRxDesc);
+    if (dma_memory_write(&address_space_memory, addr, &le_status,
+                         sizeof(le_status), MEMTXATTRS_UNSPECIFIED)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Failed to write descriptor status @ 0x%"
+                      HWADDR_PRIx "\n", __func__, addr);
+        return -1;
+    }
+    return 0;
+}
+
 static int gmac_read_tx_desc(dma_addr_t addr, struct DWGMACTxDesc *desc)
 {
     if (dma_memory_read(&address_space_memory, addr, desc,
@@ -787,6 +1077,8 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
     uint32_t descriptors = 0;
     bool first_desc = true;
     DWGMACRxFilterResult filter_result = { .accept = true };
+    DWGMACRxCOEStatus coe_status;
+    uint32_t frame_type;
 
     trace_dw_gmac_packet_receive(DEVICE(gmac)->canonical_path, len);
     if (!gmac_can_receive(nc)) {
@@ -805,6 +1097,10 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
             return len;
         }
     }
+
+    frame_type = !gmac->rx_coe_type2 || gmac_rx_is_type_frame(buf, len) ?
+                 RX_DESC_RDES0_FRM_TYPE_MASK : 0;
+    coe_status = gmac_rx_coe_status(gmac, buf, len);
 
     /* QEMU network backends omit the FCS, but DWMAC DMA includes it. */
     frame = g_malloc(len + ETH_FCS_LEN);
@@ -861,7 +1157,7 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
         }
 
         next_desc_addr = gmac_rx_next_desc(gmac, desc_addr, &rx_desc);
-        rx_desc.rdes0 = RX_DESC_RDES0_FRM_TYPE_MASK;
+        rx_desc.rdes0 = frame_type;
         if (first_desc) {
             rx_desc.rdes0 |= RX_DESC_RDES0_FIRST_DESC_MASK;
         }
@@ -900,6 +1196,12 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
 
         if (eof_transferred) {
             rx_desc.rdes0 |= RX_DESC_RDES0_LAST_DESC_MASK;
+            if (coe_status.available) {
+                rx_desc.rdes0 |= RX_DESC_RDES0_EXT_STATUS_AVAIL_MASK;
+                if (gmac_rx_coe_has_error(&coe_status)) {
+                    rx_desc.rdes0 |= RX_DESC_RDES0_ERR_SUMM_MASK;
+                }
+            }
             if (filter_result.da_fail) {
                 rx_desc.rdes0 |= RX_DESC_RDES0_DEST_ADDR_FILT_FAIL;
             }
@@ -920,6 +1222,12 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
 
         gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
                            DWMAC_DMA_STATUS_RX_RUNNING_CLOSING_STATE);
+        if (eof_transferred && coe_status.available &&
+            gmac_write_rx_ext_status(desc_addr, coe_status.rdes4)) {
+            gmac_dma_bus_error(gmac,
+                               DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
+            return len;
+        }
         if (gmac_write_rx_desc(desc_addr, &rx_desc)) {
             gmac_dma_bus_error(gmac,
                                DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
@@ -1452,6 +1760,15 @@ static void dw_gmac_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "hash-bins must be either 0 or 64");
         return;
     }
+    if (gmac->rx_coe_type2 &&
+        (gmac->hw_feature & (DWMAC_DMA_HW_FEATURE_RX_COE_TYPE2 |
+                             DWMAC_DMA_HW_FEATURE_ENH_DESC)) !=
+        (DWMAC_DMA_HW_FEATURE_RX_COE_TYPE2 |
+         DWMAC_DMA_HW_FEATURE_ENH_DESC)) {
+        error_setg(errp, "rx-coe-type2 requires Type-2 RX checksum and "
+                   "enhanced-descriptor hardware features");
+        return;
+    }
 
     memory_region_init_io(&gmac->iomem, OBJECT(gmac), &dw_gmac_ops, gmac,
                           object_get_typename(OBJECT(dev)), 8 * KiB);
@@ -1517,6 +1834,8 @@ static const Property dw_gmac_properties[] = {
     DEFINE_PROP_UINT32("hw-feature", DWGMACState, hw_feature, 0x100d4f37),
     /* Preserve legacy users' accept-all behavior unless explicitly enabled. */
     DEFINE_PROP_BOOL("rx-filtering", DWGMACState, rx_filtering, false),
+    /* Preserve legacy descriptor status unless explicitly enabled. */
+    DEFINE_PROP_BOOL("rx-coe-type2", DWGMACState, rx_coe_type2, false),
     DEFINE_PROP_UINT16("hash-bins", DWGMACState, hash_bins, 64),
     DEFINE_PROP_UINT8("num-mac-addresses", DWGMACState, num_mac_addrs, 4),
     DEFINE_PROP_UINT8("phy-addr", DWGMACState, phy_addr, 0),

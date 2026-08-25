@@ -506,6 +506,20 @@
 #define DWMAC_DMA_HOST_RX_DESC     0x104c
 #define DWMAC_DMA_HW_FEATURE       0x1058
 
+#define DWMAC_MAC_CONFIG_IPC       BIT(10)
+
+#define DWMAC_RX_DESC_ES           BIT(15)
+#define DWMAC_RX_DESC_FT           BIT(5)
+#define DWMAC_RX_DESC_ESA          BIT(0)
+#define DWMAC_RX_DESC4_IPHE        BIT(3)
+#define DWMAC_RX_DESC4_IPPE        BIT(4)
+#define DWMAC_RX_DESC4_BYPASS      BIT(5)
+#define DWMAC_RX_DESC4_IPV4        BIT(6)
+#define DWMAC_RX_DESC4_IPV6        BIT(7)
+#define DWMAC_RX_DESC4_UDP         1
+#define DWMAC_RX_DESC4_TCP         2
+#define DWMAC_VLAN_TAG_ESVL        BIT(18)
+
 #define TH1520_GMAC_VERSION_RESET  0x00001037
 #define TH1520_GMAC_FEATURE_RESET  0x110d0107
 #define TH1520_GMAC_PHY_ADDR       1
@@ -3536,6 +3550,18 @@ static void gmac_send_two_packets(int fd,
     g_assert_cmpint(iov_send(fd, iov, ARRAY_SIZE(iov), 0, total), ==, total);
 }
 
+static void gmac_send_packet(int fd, const uint8_t *packet, size_t packet_len)
+{
+    uint32_t wire_len = htonl(packet_len);
+    const struct iovec iov[] = {
+        { .iov_base = &wire_len, .iov_len = sizeof(wire_len) },
+        { .iov_base = (void *)packet, .iov_len = packet_len },
+    };
+    size_t total = sizeof(wire_len) + packet_len;
+
+    g_assert_cmpint(iov_send(fd, iov, ARRAY_SIZE(iov), 0, total), ==, total);
+}
+
 static int gmac_wait_for_packet(QTestState *qts, uint32_t first_buffer,
                                 uint32_t second_buffer,
                                 const uint8_t *packet, size_t packet_len)
@@ -3976,6 +4002,351 @@ static void test_gmac_rx_filter_matrix(void)
     }
 }
 
+static const uint8_t gmac_ipv4_udp_packet[64] = {
+    0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+    0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x32, 0x12, 0x34, 0x40, 0x00,
+    0x40, 0x11, 0x3c, 0x50, 0xc0, 0x00, 0x02, 0x01,
+    0xc6, 0x33, 0x64, 0x02,
+    0x04, 0xd2, 0x16, 0x2e, 0x00, 0x1e, 0x7e, 0xf6,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+};
+
+static const uint8_t gmac_ipv6_tcp_packet[74] = {
+    0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+    0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+    0x86, 0xdd,
+    0x60, 0x00, 0x00, 0x00, 0x00, 0x14, 0x06, 0x40,
+    0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+    0x04, 0xd2, 0x16, 0x2e, 0x01, 0x02, 0x03, 0x04,
+    0x00, 0x00, 0x00, 0x00, 0x50, 0x02, 0x40, 0x00,
+    0xf5, 0x67, 0x00, 0x00,
+};
+
+static const uint32_t gmac_rx_extension[4] = {
+    0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00,
+};
+
+typedef enum GMACRxCOEPacket {
+    GMAC_RX_COE_IPV4_UDP,
+    GMAC_RX_COE_IPV4_HEADER_BAD,
+    GMAC_RX_COE_IPV4_UDP_BAD,
+    GMAC_RX_COE_IPV6_TCP,
+    GMAC_RX_COE_IPV6_EXT_TRUNCATED,
+    GMAC_RX_COE_IPV4_FRAGMENT,
+    GMAC_RX_COE_NON_IP,
+    GMAC_RX_COE_VLAN_IPV4_UDP,
+    GMAC_RX_COE_SVLAN_IPV4_UDP,
+    GMAC_RX_COE_TRUNCATED_VLAN,
+} GMACRxCOEPacket;
+
+typedef struct GMACRxCOECase {
+    const char *name;
+    GMACRxCOEPacket packet;
+    bool ipc;
+    bool atds;
+    bool status_available;
+    bool error_summary;
+    uint32_t rdes4;
+    uint32_t vlan_tag;
+} GMACRxCOECase;
+
+static void gmac_write_rx_extension(QTestState *qts, uint32_t desc_addr,
+                                    const uint32_t extension[4])
+{
+    uint32_t le_extension[4];
+
+    for (size_t i = 0; i < ARRAY_SIZE(le_extension); i++) {
+        le_extension[i] = cpu_to_le32(extension[i]);
+    }
+    qtest_memwrite(qts, desc_addr + sizeof(GMACDesc), le_extension,
+                   sizeof(le_extension));
+}
+
+static void gmac_read_rx_extension(QTestState *qts, uint32_t desc_addr,
+                                   uint32_t extension[4])
+{
+    qtest_memread(qts, desc_addr + sizeof(GMACDesc), extension,
+                  4 * sizeof(*extension));
+    for (size_t i = 0; i < 4; i++) {
+        extension[i] = le32_to_cpu(extension[i]);
+    }
+}
+
+static size_t gmac_make_rx_coe_packet(GMACRxCOEPacket kind, uint8_t *packet)
+{
+    size_t packet_len;
+
+    if (kind == GMAC_RX_COE_IPV6_TCP) {
+        memcpy(packet, gmac_ipv6_tcp_packet, sizeof(gmac_ipv6_tcp_packet));
+        return sizeof(gmac_ipv6_tcp_packet);
+    }
+    if (kind == GMAC_RX_COE_IPV6_EXT_TRUNCATED) {
+        /* The 8-byte payload's Routing header claims a 16-byte extent. */
+        memcpy(packet, gmac_ipv6_tcp_packet, 54);
+        packet[18] = 0x00;
+        packet[19] = 0x08;
+        packet[20] = 43;
+        packet[54] = 6;
+        packet[55] = 1;
+        memset(packet + 56, 0, 6);
+        return 62;
+    }
+    if (kind == GMAC_RX_COE_VLAN_IPV4_UDP) {
+        memcpy(packet, gmac_ipv4_udp_packet, 12);
+        packet[12] = 0x81;
+        packet[13] = 0x00;
+        packet[14] = 0x01;
+        packet[15] = 0x23;
+        packet[16] = 0x08;
+        packet[17] = 0x00;
+        memcpy(packet + 18, gmac_ipv4_udp_packet + 14,
+               sizeof(gmac_ipv4_udp_packet) - 14);
+        return sizeof(gmac_ipv4_udp_packet) + 4;
+    }
+    if (kind == GMAC_RX_COE_SVLAN_IPV4_UDP) {
+        memcpy(packet, gmac_ipv4_udp_packet, 12);
+        packet[12] = 0x88;
+        packet[13] = 0xa8;
+        packet[14] = 0x01;
+        packet[15] = 0x23;
+        packet[16] = 0x08;
+        packet[17] = 0x00;
+        memcpy(packet + 18, gmac_ipv4_udp_packet + 14,
+               sizeof(gmac_ipv4_udp_packet) - 14);
+        return sizeof(gmac_ipv4_udp_packet) + 4;
+    }
+    if (kind == GMAC_RX_COE_TRUNCATED_VLAN) {
+        memcpy(packet, gmac_ipv4_udp_packet, 12);
+        packet[12] = 0x81;
+        packet[13] = 0x00;
+        packet[14] = 0x01;
+        packet[15] = 0x23;
+        return 16;
+    }
+
+    memcpy(packet, gmac_ipv4_udp_packet, sizeof(gmac_ipv4_udp_packet));
+    packet_len = sizeof(gmac_ipv4_udp_packet);
+    switch (kind) {
+    case GMAC_RX_COE_IPV4_UDP:
+        break;
+    case GMAC_RX_COE_IPV4_HEADER_BAD:
+        packet[24] ^= 1;
+        break;
+    case GMAC_RX_COE_IPV4_UDP_BAD:
+        packet[40] ^= 1;
+        break;
+    case GMAC_RX_COE_IPV4_FRAGMENT:
+        packet[20] = 0x20;
+        packet[24] = 0x5c;
+        break;
+    case GMAC_RX_COE_NON_IP:
+        packet[12] = 0x88;
+        packet[13] = 0xb5;
+        break;
+    case GMAC_RX_COE_IPV6_TCP:
+    case GMAC_RX_COE_IPV6_EXT_TRUNCATED:
+    case GMAC_RX_COE_VLAN_IPV4_UDP:
+    case GMAC_RX_COE_SVLAN_IPV4_UDP:
+    case GMAC_RX_COE_TRUNCATED_VLAN:
+        g_assert_not_reached();
+    }
+    return packet_len;
+}
+
+static void gmac_run_rx_coe_case(const GMACRxCOECase *test)
+{
+    uint8_t packet[sizeof(gmac_ipv6_tcp_packet)];
+    uint32_t actual_extension[4];
+    GMACDesc desc = {
+        .des0 = BIT(31),
+        .des1 = 2048,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    uint32_t stride = test->atds ? GMAC_ENHANCED_DESC_STRIDE :
+                                   sizeof(desc);
+    size_t packet_len = gmac_make_rx_coe_packet(test->packet, packet);
+    QTestState *qts;
+    int sockets[2];
+    uint32_t expected_rdes0;
+
+    g_test_message("GMAC RX checksum case: %s", test->name);
+    qts = gmac_packet_test_init(sockets);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_write_rx_extension(qts, GMAC_TEST_DESC_ADDR, gmac_rx_extension);
+    if (test->atds) {
+        desc = (GMACDesc) { 0 };
+        gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + stride, &desc);
+    }
+
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                  BIT(31) | 0x5634);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12005452);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | (test->atds ? BIT(7) : 0));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(6));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_VLAN_TAG,
+                  test->vlan_tag);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG,
+                  (test->ipc ? DWMAC_MAC_CONFIG_IPC : 0) | BIT(2));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+
+    gmac_send_packet(sockets[0], packet, packet_len);
+    g_assert_true(gmac_wait_status(qts, BIT(6)));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_cmphex(desc.des0 & (BIT(9) | BIT(8)), ==, BIT(9) | BIT(8));
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==,
+                     packet_len + sizeof(uint32_t));
+    expected_rdes0 = DWMAC_RX_DESC_FT |
+                     (test->status_available ? DWMAC_RX_DESC_ESA : 0) |
+                     (test->error_summary ? DWMAC_RX_DESC_ES : 0);
+    g_assert_cmphex(desc.des0 &
+                    (DWMAC_RX_DESC_ES | DWMAC_RX_DESC_FT |
+                     DWMAC_RX_DESC_ESA), ==, expected_rdes0);
+    gmac_read_rx_extension(qts, GMAC_TEST_DESC_ADDR, actual_extension);
+    g_assert_cmphex(actual_extension[0], ==,
+                    test->status_available ? test->rdes4 :
+                                             gmac_rx_extension[0]);
+    for (size_t i = 1; i < ARRAY_SIZE(gmac_rx_extension); i++) {
+        g_assert_cmphex(actual_extension[i], ==, gmac_rx_extension[i]);
+    }
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_RX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR + stride);
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+static void test_gmac_rx_checksum_type2(void)
+{
+    static const GMACRxCOECase cases[] = {
+        { "valid-ipv4-udp", GMAC_RX_COE_IPV4_UDP, true, true, true, false,
+          DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_UDP },
+        { "bad-ipv4-header", GMAC_RX_COE_IPV4_HEADER_BAD, true, true, true,
+          true, DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_IPHE },
+        { "bad-ipv4-udp", GMAC_RX_COE_IPV4_UDP_BAD, true, true, true, true,
+          DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_IPPE |
+          DWMAC_RX_DESC4_UDP },
+        { "valid-ipv6-tcp", GMAC_RX_COE_IPV6_TCP, true, true, true, false,
+          DWMAC_RX_DESC4_IPV6 | DWMAC_RX_DESC4_TCP },
+        { "truncated-ipv6-extension", GMAC_RX_COE_IPV6_EXT_TRUNCATED,
+          true, true, true, true,
+          DWMAC_RX_DESC4_IPV6 | DWMAC_RX_DESC4_IPHE },
+        { "fragmented-ipv4", GMAC_RX_COE_IPV4_FRAGMENT, true, true, true,
+          false, DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_BYPASS },
+        { "non-ip", GMAC_RX_COE_NON_IP, true, true, true, false,
+          DWMAC_RX_DESC4_BYPASS },
+        { "vlan-ipv4-udp", GMAC_RX_COE_VLAN_IPV4_UDP,
+          true, true, true, false,
+          DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_UDP },
+        { "svlan-esvl-clear", GMAC_RX_COE_SVLAN_IPV4_UDP,
+          true, true, true, false, DWMAC_RX_DESC4_BYPASS },
+        { "svlan-esvl-set", GMAC_RX_COE_SVLAN_IPV4_UDP,
+          true, true, true, false,
+          DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_UDP,
+          DWMAC_VLAN_TAG_ESVL },
+        { "truncated-vlan", GMAC_RX_COE_TRUNCATED_VLAN,
+          true, true, true, false, DWMAC_RX_DESC4_BYPASS },
+        { "ipc-disabled", GMAC_RX_COE_IPV4_UDP, false, true, false, false,
+          0 },
+        { "atds-disabled", GMAC_RX_COE_IPV4_UDP, true, false, false, false,
+          0 },
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+        gmac_run_rx_coe_case(&cases[i]);
+    }
+}
+
+static void test_gmac_rx_checksum_type2_split(void)
+{
+    uint32_t first_extension[4];
+    uint32_t second_extension[4];
+    GMACDesc first = {
+        .des0 = BIT(31),
+        .des1 = 32,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    GMACDesc second = {
+        .des0 = BIT(31),
+        .des1 = 2048,
+        .des2 = GMAC_TEST_DATA2_ADDR,
+    };
+    QTestState *qts;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &first);
+    gmac_write_rx_extension(qts, GMAC_TEST_DESC_ADDR, gmac_rx_extension);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &second);
+    gmac_write_rx_extension(qts,
+                            GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                            gmac_rx_extension);
+
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                  BIT(31) | 0x5634);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12005452);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(6));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG,
+                  DWMAC_MAC_CONFIG_IPC | BIT(2));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+
+    gmac_send_packet(sockets[0], gmac_ipv4_udp_packet,
+                     sizeof(gmac_ipv4_udp_packet));
+    g_assert_true(gmac_wait_status(qts, BIT(6)));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &first);
+    g_assert_cmphex(first.des0 &
+                    (BIT(31) | DWMAC_RX_DESC_ES | BIT(9) | BIT(8) |
+                     DWMAC_RX_DESC_FT | DWMAC_RX_DESC_ESA), ==,
+                    BIT(9) | DWMAC_RX_DESC_FT);
+    gmac_read_rx_extension(qts, GMAC_TEST_DESC_ADDR, first_extension);
+    g_assert_cmpmem(first_extension, sizeof(first_extension),
+                    gmac_rx_extension, sizeof(gmac_rx_extension));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                   &second);
+    g_assert_cmphex(second.des0 &
+                    (BIT(31) | DWMAC_RX_DESC_ES | BIT(9) | BIT(8) |
+                     DWMAC_RX_DESC_FT | DWMAC_RX_DESC_ESA), ==,
+                    BIT(8) | DWMAC_RX_DESC_FT | DWMAC_RX_DESC_ESA);
+    g_assert_cmpuint(extract32(second.des0, 16, 14), ==,
+                     sizeof(gmac_ipv4_udp_packet) + sizeof(uint32_t));
+    gmac_read_rx_extension(qts,
+                           GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                           second_extension);
+    g_assert_cmphex(second_extension[0], ==,
+                    DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_UDP);
+    for (size_t i = 1; i < ARRAY_SIZE(gmac_rx_extension); i++) {
+        g_assert_cmphex(second_extension[i], ==, gmac_rx_extension[i]);
+    }
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_RX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR +
+                        2 * GMAC_ENHANCED_DESC_STRIDE);
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
 static void test_gmac_enhanced_descriptors(void)
 {
     static const uint8_t packet[64] = {
@@ -4103,11 +4474,8 @@ static void test_gmac_rx_filter_migration(void)
         0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
         0x08, 0x00, 0x45, 0x00, 0x31,
     };
-    static const uint8_t new_mac_packet[64] = {
-        0x02, 0x00, 0x00, 0x12, 0x34, 0x56,
-        0x02, 0x00, 0x00, 0x65, 0x43, 0x21,
-        0x08, 0x00, 0x45, 0x00, 0x32,
-    };
+    uint8_t new_mac_packet[sizeof(gmac_ipv4_udp_packet)];
+    uint32_t actual_extension[4];
     GMACDesc desc = {
         .des0 = BIT(31),
         .des1 = BIT(31) | 2048,
@@ -4120,6 +4488,15 @@ static void test_gmac_rx_filter_migration(void)
     int src_sockets[2];
     int dst_sockets[2];
     int fd;
+
+    memcpy(new_mac_packet, gmac_ipv4_udp_packet,
+           sizeof(gmac_ipv4_udp_packet));
+    new_mac_packet[0] = 0x02;
+    new_mac_packet[1] = 0x00;
+    new_mac_packet[2] = 0x00;
+    new_mac_packet[3] = 0x12;
+    new_mac_packet[4] = 0x34;
+    new_mac_packet[5] = 0x56;
 
     fd = g_file_open_tmp("beaglev-ahead-gmac-filter-XXXXXX", &path, NULL);
     g_assert_cmpint(fd, >=, 0);
@@ -4139,6 +4516,7 @@ static void test_gmac_rx_filter_migration(void)
 
     qtest_memset(src, GMAC_TEST_DATA_ADDR, 0xa5, 8192);
     gmac_write_desc(src, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_write_rx_extension(src, GMAC_TEST_DESC_ADDR, gmac_rx_extension);
     desc = (GMACDesc) {
         .des0 = BIT(31),
         .des1 = 2048,
@@ -4169,7 +4547,8 @@ static void test_gmac_rx_filter_migration(void)
                   GMAC_TEST_DESC_ADDR);
     qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
                   BIT(16) | BIT(6));
-    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(2));
+    qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG,
+                  DWMAC_MAC_CONFIG_IPC | BIT(2));
     qtest_writel(src, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
 
     qtest_qmp_assert_success(src,
@@ -4194,6 +4573,9 @@ static void test_gmac_rx_filter_migration(void)
                     BIT(31) | 0x6655);
     g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE +
                                 DWMAC_MAC_ADDR_LO(31)), ==, 0x44332211);
+    g_assert_cmphex(qtest_readl(dst, TH1520_GMAC0_BASE +
+                                DWMAC_MAC_CONFIG), ==,
+                    DWMAC_MAC_CONFIG_IPC | BIT(2));
 
     gmac_send_two_packets(dst_sockets[0], old_mac_packet,
                           sizeof(old_mac_packet), new_mac_packet,
@@ -4204,6 +4586,17 @@ static void test_gmac_rx_filter_migration(void)
                                          sizeof(new_mac_packet)), ==, 0);
     gmac_assert_rx_frame(dst, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
                          new_mac_packet, sizeof(new_mac_packet), 0);
+    gmac_read_desc(dst, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 &
+                    (DWMAC_RX_DESC_ES | DWMAC_RX_DESC_FT |
+                     DWMAC_RX_DESC_ESA), ==,
+                    DWMAC_RX_DESC_FT | DWMAC_RX_DESC_ESA);
+    gmac_read_rx_extension(dst, GMAC_TEST_DESC_ADDR, actual_extension);
+    g_assert_cmphex(actual_extension[0], ==,
+                    DWMAC_RX_DESC4_IPV4 | DWMAC_RX_DESC4_UDP);
+    for (size_t i = 1; i < ARRAY_SIZE(gmac_rx_extension); i++) {
+        g_assert_cmphex(actual_extension[i], ==, gmac_rx_extension[i]);
+    }
     gmac_read_desc(dst, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
                    &desc);
     g_assert_cmphex(desc.des0 & BIT(31), ==, BIT(31));
@@ -9071,6 +9464,10 @@ int main(int argc, char **argv)
                        test_gmac_rx_filter_matrix);
         qtest_add_func("/beaglev-ahead/gmac/rx-filter-migration",
                        test_gmac_rx_filter_migration);
+        qtest_add_func("/beaglev-ahead/gmac/rx-checksum-type2",
+                       test_gmac_rx_checksum_type2);
+        qtest_add_func("/beaglev-ahead/gmac/rx-checksum-type2-split",
+                       test_gmac_rx_checksum_type2_split);
         qtest_add_func("/beaglev-ahead/gmac/enhanced-descriptors",
                        test_gmac_enhanced_descriptors);
 #endif

@@ -340,7 +340,13 @@ static void test_init(gconstpointer test_data)
 
 #define GMAC_TEST_DESC_ADDR 0x00100000
 #define GMAC_TEST_DATA_ADDR 0x00110000
+#define GMAC_ENHANCED_DESC_STRIDE 32
 #define GMAC_TEST_TIMEOUT_S 5
+
+#define DWMAC_MAC_CONFIG_IPC BIT(10)
+#define DWMAC_RX_DESC_ES BIT(15)
+#define DWMAC_RX_DESC_FT BIT(5)
+#define DWMAC_RX_DESC_ESA BIT(0)
 
 typedef struct GMACDesc {
     uint32_t des0;
@@ -513,6 +519,80 @@ static void test_normal_descriptors(gconstpointer test_data)
     close(sockets[0]);
 }
 
+static void test_type2_checksum_default_off(gconstpointer test_data)
+{
+    const TestData *td = test_data;
+    const GMACModule *mod = td->module;
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00,
+        0x45, 0x00, 0x00, 0x32, 0x12, 0x34, 0x40, 0x00,
+        0x40, 0x11, 0x3c, 0x50, 0xc0, 0x00, 0x02, 0x01,
+        0xc6, 0x33, 0x64, 0x02,
+        0x04, 0xd2, 0x16, 0x2e, 0x00, 0x1e, 0x7e, 0xf6,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    };
+    static const uint32_t extension[4] = {
+        0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00,
+    };
+    uint32_t le_extension[ARRAY_SIZE(extension)];
+    uint32_t actual_extension[ARRAY_SIZE(extension)];
+    GMACDesc desc = {
+        .des0 = BIT(31),
+        .des1 = 2047,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    QTestState *qts;
+    int sockets[2];
+    uint32_t wire_len;
+    const struct iovec iov[] = {
+        { .iov_base = &wire_len, .iov_len = sizeof(wire_len) },
+        { .iov_base = (void *)packet, .iov_len = sizeof(packet) },
+    };
+
+    qts = gmac_packet_test_init(sockets);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    for (size_t i = 0; i < ARRAY_SIZE(extension); i++) {
+        le_extension[i] = cpu_to_le32(extension[i]);
+    }
+    qtest_memwrite(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), le_extension,
+                   sizeof(le_extension));
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+
+    gmac_write(qts, mod, NPCM_DMA_BUS_MODE, 0x00020100 | BIT(7));
+    gmac_write(qts, mod, NPCM_DMA_RCV_BASE_ADDR, GMAC_TEST_DESC_ADDR);
+    gmac_write(qts, mod, NPCM_DMA_INTR_ENA, BIT(16) | BIT(6));
+    gmac_write(qts, mod, NPCM_GMAC_MAC_CONFIG,
+               DWMAC_MAC_CONFIG_IPC | BIT(2));
+    gmac_write(qts, mod, NPCM_DMA_CONTROL, BIT(1));
+
+    wire_len = htonl(sizeof(packet));
+    g_assert_cmpint(iov_send(sockets[0], iov, ARRAY_SIZE(iov), 0,
+                             sizeof(wire_len) + sizeof(packet)),
+                    ==, sizeof(wire_len) + sizeof(packet));
+    g_assert_true(gmac_wait_status(qts, mod, BIT(6)));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 &
+                    (DWMAC_RX_DESC_ES | DWMAC_RX_DESC_FT |
+                     DWMAC_RX_DESC_ESA), ==, DWMAC_RX_DESC_FT);
+    qtest_memread(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), actual_extension,
+                  sizeof(actual_extension));
+    for (size_t i = 0; i < ARRAY_SIZE(extension); i++) {
+        g_assert_cmphex(le32_to_cpu(actual_extension[i]), ==, extension[i]);
+    }
+    g_assert_cmphex(gmac_read(qts, mod, NPCM_DMA_HOST_RX_DESC), ==,
+                    GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE);
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
 #endif /* _WIN32 */
 
 static void gmac_add_test(const char *name, const TestData* td,
@@ -540,6 +620,8 @@ int main(int argc, char **argv)
 #ifndef _WIN32
     gmac_add_test("normal-descriptors", &test_data_list[0],
                   test_normal_descriptors);
+    gmac_add_test("rx-type2-default-off", &test_data_list[0],
+                  test_type2_checksum_default_off);
 #endif
 
     return g_test_run();
