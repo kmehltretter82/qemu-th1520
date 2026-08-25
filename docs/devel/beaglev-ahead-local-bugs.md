@@ -9,13 +9,13 @@ baseline reproducer.
 
 * Audit checkpoint: 2026-08-25
 * Branch: `beaglev-ahead`
-* Latest-finding pre-fix workspace HEAD: `1dee59932a`
+* Latest-finding pre-fix workspace HEAD: `b56201ad61`
 * Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
 
 ## Current disposition
 
-The eleven local findings recorded during implementation (`UQ-L001` through
-`UQ-L011`) are fixed and have focused regressions.  The latest audit found that
+The twelve local findings recorded during implementation (`UQ-L001` through
+`UQ-L012`) are fixed and have focused regressions.  The GMAC audit found that
 the reusable DWC GMAC transmit path advertised checksum offload while its
 inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
 did not model the feature/TSF gates or descriptor-format error status.  At the
@@ -40,6 +40,16 @@ C910 U-mode CMO translation follows the writable UCME bit.  These are not
 assigned new ``UQ-L`` identifiers because the affected translator predates the
 branch-only board implementation.  Hardware conflict and comparison work is
 kept under ``CPU-015`` in the validation ledger.
+
+The latest board-local finding was a scheduler-observability bug in the
+TH1520 AP clock controller.  A tight Linux-style PLL poll could advance
+virtual time beyond the modeled lock deadline before the I/O thread dispatched
+the timer callback, leaving ``PLL_STS`` stale until after Linux's timeout.
+QEMU now materializes an expired deadline when that status register is read as
+well as in the existing timer callback.  The same 21.25 microsecond modeled
+delay, reset behavior and migration state are retained.  A raw RV64 qtest
+reproduces the old failure under single-threaded TCG and passes before and
+after system reset with the fix.
 
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
@@ -66,6 +76,7 @@ index and current test checkpoint.
 | UQ-L009 | XTheadVector mask query | `th.vmfirst.m` executed when `vstart` was nonzero instead of raising an illegal-instruction exception. | Fixed by requiring zero `vstart` in the translator; the state payload proves the trap, destination and `vstart` preservation, first-set index and no-hit result. |
 | UQ-L010 | XTheadVector overlap | Masked comparison and mask-prefix destinations could overlap implicit source `v0` at LMUL greater than one. | Fixed in the four comparison checkers and mask-prefix macro; the overlap payload proves eight illegal forms, preservation of `v0`/`vstart` after the first trap, and legal LMUL=1, unmasked and non-`v0` controls. |
 | UQ-L011 | DWC GMAC TX checksum | The local reusable/TH1520 integration collapsed CIC2 and CIC3 into the same IPv4 TCP/UDP recalculation and did not enforce the advertised TXCOESEL/store-and-forward contract, leaving IPv6 offload and descriptor error status incomplete. | Fixed with bounded CIC0-3 IPv4/IPv6 TCP/UDP/ICMP insertion, first/terminal split-frame handling and format-aware IHE/IPE/ES writeback; an 18-case BeagleV matrix and one NPCM normal-descriptor CIC3 compatibility case cover the correction. |
+| UQ-L012 | TH1520 PLL polling | A guest could observe virtual time beyond a due PLL-lock deadline while ``PLL_STS`` remained stale until the I/O thread dispatched its timer callback. | Fixed by materializing an expired deadline on ``PLL_STS`` reads through the existing lock helper; the raw RV64 single-threaded-TCG qtest fails with the preserved pre-fix binary and passes twice, across reset, with the fix. |
 
 ## Audit evidence
 
@@ -77,7 +88,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Normal build
 
-* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **109/109**.
+* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **113/113**.
 * `build-npcm/tests/qtest/npcm_gmac-test`: **7/7**; its added normal-descriptor
   case is a bounded shared-model compatibility check, not a claim of complete
   NPCM TX-offload coverage.
@@ -90,13 +101,25 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Dependency-minimal build
 
-* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **108/108**.
+* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **112/112**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
 * C910 scalar-legality and XTheadBa-off payloads: **2/2**.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **5/5**.
 
-### Dependency-minimal ASan/UBSan build
+### ASan/UBSan builds
+
+The current rebuilt sanitizer binary passes the complete AP-clock/CPR group
+**9/9** and the DWC MSHC/storage group **13/13**, including the PLL poll and
+eMMC HS400 tests, with no ASan/UBSan finding.  Under instrumentation the Linux
+functional run had not completed after 180 seconds and emitted guest
+soft-lockup warnings.  No ASan/UBSan diagnostic appeared; the run is
+inconclusive and remains a non-pass whose cause is unassigned.
+
+The following complete-board result is the earlier dependency-minimal
+sanitizer checkpoint; it predates four sanitizer-available board additions
+(the three storage tests and PLL poll test) and is retained
+as historical evidence rather than relabeled as current:
 
 * `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **108/108**.
 * `build-sanitize/tests/qtest/riscv-csr-test -q`: **4/4** (C910 CSR and the
@@ -113,9 +136,30 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
   dependency-minimal sanitizer binary does not build.  The normal suite and
   the sanitizer CSR/board tests cover their branch-relevant paths.
 
-These results show that the known local fixes are stable under normal and
-sanitized execution.  They do not establish conformance to the physical
-TH1520; the open ledger remains authoritative for that distinction.
+The current focused groups and retained historical evidence show no sanitizer
+finding in the covered paths; there is no current complete sanitizer-board
+pass.  These results do not establish conformance to the physical TH1520; the
+open ledger remains authoritative for that distinction.
+
+### Portable Linux eMMC-root gate
+
+The functional test pins Linux 6.11.9
+(``174f8bb87f08961e54fa3fcd954a8e31f4645f6d6af4dd43983d5e9841490fb0``)
+and groeck's RISC-V ext2 rootfs at commit
+``9819da19e6eef291686fdd7b029ea00e764dc62f``
+(``b6ed95610310b7956f9bf20c4c9c0c05fea647900df441da9dfe767d24e8b28b``).
+With ``maxcpus=1`` and probe-order-dependent ``root=/dev/mmcblk1``, Linux
+enumerates HS400, mounts the eMMC-backed ext2 root, enters a controlled root
+shell, writes and syncs a deterministic 1 MiB payload, verifies its SHA-256,
+and remounts read-only.  After QMP closes that QEMU process, a new process
+reopens the same scratch image and verifies the hash again.  The deterministic
+payload SHA-256 is
+``fb5ac1fab9c5b0e2b328bbe2149dee4664cf064618884f78c10e5c3bf6a05cda``.
+Normal and dependency-minimal builds pass.
+
+This proves a single-hart root mount plus one clean sync/remount/process-reopen
+path.  It is not an official-image, normal-distro-init, SMP, host-cache
+eviction, power-loss durability, ``e2fsck`` or storage-stress result.
 
 ## Open local fidelity gaps (not confirmed bugs)
 
@@ -127,6 +171,20 @@ change must add a reproducer and a regression before changing any of them.
   ranges, C910 scalar/XTheadVector stepping behavior, PMU event semantics,
   CMO privilege, and alignment/vector exception behavior still need silicon
   comparison.
+* One exploratory Linux 6.11.9 four-hart boot brought up only three CPUs and
+  then reported a CPU0 soft lockup in ``smp_call_function_many_cond`` while
+  checking unaligned access.  It has not been reproduced or isolated from the
+  portable kernel/configuration, so it is not a confirmed ``UQ-L`` defect.
+  The raw log is preserved in the workspace, but not committed, as
+  ``../validation-artifacts/beaglev-ahead-linux611-smp-failure-20260825.log``;
+  add a separate SMP gate before making a full-board Linux claim.
+* Runtime UART0 remains deferred for an unresolved reason in the portable
+  Linux 6.11.9/generated-DT combination; pinctrl/fw-devlink involvement is
+  suspected but not established.  Earlycon works, and other pinned-kernel and
+  external-DT control runs bind ``ttyS0``.  Stock init waits for absent
+  ``eth0`` and subsequently reports network-interface and TPM selftest
+  failures before printing ``Boot successful.``  These configuration-specific
+  observations are recorded, not treated as board-model regressions.
 * `MIG-001`: storage, GMAC, and USB migration during in-flight DMA or an
   attached transfer still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
