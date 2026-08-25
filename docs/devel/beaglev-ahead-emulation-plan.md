@@ -2,12 +2,11 @@
 
 Status: portable Linux single- and four-hart eMMC root/integrity/process-reopen,
 PLL-polling, C910 FXCR, synthetic C910 CSR VMState v1/v2 compatibility,
-genuine historical v1/v2 wire authenticity, v2 producer-to-current migration,
-and complete normal/dependency-minimal board/CSR checkpoints validated;
-ASan/UBSan covers
-every current CSR case and focused migration with a preceding complete board
-pass.  A v1 whole-board historical load is blocked by an obsolete PLIC section;
-the official image and physical-card/CPU validation remain open, 2026-08-25
+genuine historical v1/v2 producer-to-current migration, and Ahead-scoped
+load-only compatibility for the former PLIC, timer and boot-UART sections
+validated; complete normal/dependency-minimal board/CSR checkpoints and the
+recorded ASan/UBSan gates also pass.  The official image and
+physical-card/CPU validation remain open, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -26,6 +25,8 @@ User mask-ROM checkpoint: 0d45dbf7b6
 C910 legacy-VMState checkpoint: ca34c481bb
 
 C910 historical-parent compatibility checkpoint: 4df303a8f3
+
+Ahead legacy-device migration checkpoint: d6f2cb0239
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -56,16 +57,16 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The current bounded milestone validates backward
-loading of the C910 CSR VMState v1 and v2 subsection layouts on all four harts.
-It fixes v1 loading so the absent PMU interrupt-enable and overflow fields
-default to zero before the derived pending interrupt is rebuilt.  The synthetic
-qtests now also reproduce the historical parent ``cpu`` version: v1 lowers all
-four parent sections from version 12 to version 11, while v2 keeps version 12.
-QEMU accepts parent version 11 only under TCG.  KVM retains a version-12 floor,
-because version 12 added KVM MP-state migration; no RISC-V KVM runtime was
-available, so that KVM boundary is enforced by the validator and is not a
-runtime migration result.
+than upstream bug reporting.  The current bounded milestone completes backward
+loading of the captured C910 CSR VMState v1 and v2 subsection layouts on all
+four harts and the obsolete board-device sections around them.  The CPU bridge
+defaults the v1-absent PMU interrupt-enable and overflow fields to zero before
+the derived pending interrupt is rebuilt.  The synthetic CPU qtests reproduce
+the historical parent ``cpu`` version: v1 lowers all four parent sections from
+version 12 to version 11, while v2 keeps version 12.  QEMU accepts parent
+version 11 only under TCG.  KVM retains a version-12 floor, because version 12
+added KVM MP-state migration; no RISC-V KVM runtime was available, so that KVM
+boundary is enforced by the validator and is not a runtime migration result.
 
 The historical evidence is no longer an open capture task.  A disk-backed,
 re-runnable harness at
@@ -86,20 +87,59 @@ it has four parent version-12 sections and four C910 version-2, 61-byte
 subsections.  The manifests, streams, guest binaries and logs remain under the
 same artifact directory; all persistent output and ``TMPDIR`` data are on disk.
 
-The genuine v2 stream loads into current QEMU and preserves the distinct
-four-hart MXSTATUS, MHCR, MCOR, MHINT, MHINT2, MHINT3, MCOUNTERWEN, CPUID
-cursor and v2 PMU interrupt-enable/overflow state.  The genuine v1 stream
-passes producer, structure, payload-size and field-authenticity checks, but
-current whole-board
-loading stops before its C910 subsection at ``Unknown section or instance
-'riscv_sifive_plic' 0``.  That producer predates the dedicated C900 PLIC and
-emits an obsolete, unversioned device section which the current board no longer
-registers.  This is a board-topology compatibility barrier, not evidence that
-the v1 C910 payload is rejected.  The synthetic four-hart v1 test isolates and
-passes the CPU compatibility path.  As a mutation proof, restoring the old
-parent minimum of version 12 makes it fail with ``incoming version_id 11 is too
-old for local minimum version_id 12``; restoring the TCG-only version-11 rule
-makes it pass.
+The genuine v1 and v2 streams now both load completely into current QEMU.  The
+harness directly inspects the destination and confirms the distinct four-hart
+MXSTATUS, MHCR, MCOR, MHINT, MHINT2, MHINT3, MCOUNTERWEN and CPUID cursor in
+both epochs, plus the v2 PMU interrupt-enable/overflow state.  The v1 producer
+predates the dedicated C900 interrupt devices and DesignWare UART wrapper, so
+the Ahead machine opts three current devices into narrowly scoped, load-only
+legacy identities:
+
+* the C900 PLIC accepts ``riscv_sifive_plic`` version 1's 1,316-byte payload:
+  241 source priorities, eight target priorities mapped to current thresholds,
+  eight pending words, eight claimed words mapped to active state, and 64
+  enable words.  It defaults the delegation control to one and the absent
+  source-level and edge-trigger arrays to zero before the normal post-load
+  reconciliation;
+* the C900 CLINT accepts ``riscv_mtimer`` version 3's 72-byte payload: the time
+  delta, four ``mtimecmp`` values and four serialized timer deadlines.  It
+  reconstructs architectural time, consumes then normalizes the old deadlines
+  by rescheduling from ``mtimecmp``, derives MSIP and SSIP from the already
+  loaded architectural ``mip`` state, defaults all four absent ``stimecmp``
+  values to infinity, and removes stale S-timer deadlines;
+  and
+* UART0 alone accepts ``serial`` version 3's 11-byte 16550 core payload.  The
+  current DesignWare wrapper restores that core state and defaults its absent
+  fractional divisor, busy deadline and busy interrupt state to zero before
+  reconstructing the wrapper IRQ.
+
+The aliases are enabled only by TH1520 board construction, with the PLIC and
+timer additionally rejecting any topology other than the historical Ahead
+layout; other users of the reusable C900 and DesignWare devices do not acquire
+them.  They are never emitted: a save after legacy load contains only the
+current C900 PLIC, C900 CLINT and DesignWare UART identities.  A focused qtest
+rewrites a current sequential stream into the exact three historical layouts,
+loads deliberately nonzero priority, threshold, pending, claimed, enable,
+timer and UART state, checks the synthesized defaults and live interrupt/timer
+behavior, then re-saves and proves that no legacy identity escaped.  This
+nonzero regression complements the genuine v1 capture, whose former PLIC state
+was all zero.
+
+Some information never existed on the old wire and cannot be reconstructed.
+The old PLIC omitted live input levels and trigger configuration, used
+edge-like latching, and differed in M/S arbitration and completion; choosing
+delegated access and level wiring is the deterministic Ahead default, not proof
+of exact old
+in-flight behavior.  Its combined CPU ``mip.SEIP`` bit also cannot distinguish
+software from external origin, so a simultaneous or software-written SEIP may
+not survive PLIC reconciliation identically.  The old timer exposed neither
+S-mode compare state nor ``rdtime``; an old software-written STIP is discarded
+rather than converted into a persistent current timer interrupt, while the
+current C900 still exposes TIME.  These are explicit compatibility limits, not
+hidden guesses.  As a CPU mutation proof, restoring the old parent minimum of
+version 12 makes the v1 path fail with ``incoming version_id 11 is too old for
+local minimum version_id 12``; restoring the TCG-only version-11 rule makes it
+pass.
 
 The preceding bounded storage milestone adds an opt-in eMMC 5.1 speed profile
 only to the BeagleV Ahead eMMC attachment; generic QEMU eMMC users retain their
@@ -278,10 +318,11 @@ differential validation, USB device/OTG and PHY behavior, display/GPU,
 media/NPU, auxiliary processors, security/power domains, stock-image coverage,
 physical comparison and final source pruning.
 
-The genuine historical C910 migration checkpoint closes an important evidence
-gap but does not move either rounded estimate: it validates one compatibility
-boundary, while v1 whole-board loading and the much larger physical and
-peripheral fidelity inventory remain open.
+The genuine historical C910 migration checkpoint now includes complete v1 and
+v2 board-stream loading through the Ahead-scoped legacy-device bridges.  It
+closes an important compatibility boundary but does not move either rounded
+estimate: the irrecoverable old-wire ambiguities above and the much larger
+physical and peripheral fidelity inventory remain open.
 
 The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
 miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
@@ -418,7 +459,7 @@ validation.
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
 | C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction and mask-overlap boundaries | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests downgrade current savevm subsections to descriptor-exact C910 CSR VMState v1/v2 layouts and reproduce the v1 parent-CPU version 11, then validate legacy defaults and carried state in poisoned destinations.  Genuine pinned last-v1 and last-v2 producer streams independently prove the four-hart wire layouts; the v2 stream loads into current QEMU with hart-distinct CSR/CPUID/PMU state intact.  The v1 CPU path passes synthetically, while its genuine whole-board stream stops first at the removed unversioned `riscv_sifive_plic` section.  Parent CPU v11 is accepted only under TCG; KVM remains version 12 or newer.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the complete normal and dependency-minimal board/CSR gates pass 113/113 plus 14/14 and 112/112 plus 7/7.  ASan/UBSan passes all 7 CSR tests and the current whole-machine migration case; its preceding complete board gate passed 112/112.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; decide whether an explicit historical PLIC compatibility bridge is supportable before claiming complete v1 whole-board loading, and compare every physical hart/stepping under CPU-016 |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests downgrade current savevm subsections to descriptor-exact C910 CSR VMState v1/v2 layouts and reproduce the v1 parent-CPU version 11, then validate legacy defaults and carried state in poisoned destinations.  Genuine pinned last-v1 and last-v2 producer streams independently prove the four-hart wire layouts; both now load completely into current QEMU through Ahead-only legacy device aliases, and direct destination inspection preserves the hart-distinct CSR/CPUID state plus v2 PMU state.  Parent CPU v11 is accepted only under TCG; KVM remains version 12 or newer.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the current complete normal and dependency-minimal board/CSR gates pass 114/114 plus 14/14 and 113/113 plus 7/7.  ASan/UBSan passes all 7 CSR tests and the current focused whole-machine and legacy-device migration cases; its preceding complete board gate passed 112/112.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; characterize the documented legacy-device ambiguity boundaries on physical hardware, and compare every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -439,7 +480,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  The C910 CSR subsection accepts synthetic, descriptor-exact v1/v2 layouts across four harts, including version-specific PMU defaults and derived FP state.  Pinned genuine v1/v2 producer captures establish the corresponding historical wire layouts, and genuine v2 old-to-current migration preserves the seeded four-hart state.  TCG accepts the v1-era parent CPU version 11, with a validator retaining the KVM version-12 floor.  Genuine v1 whole-board loading remains blocked before the CPU subsection by its obsolete `riscv_sifive_plic` section.  A focused GMAC test preserves MAC0/MAC31, frame-filter, address-hash and VLAN state and proves post-load old-address rejection/new-address acceptance using a separately created destination socket | Extend the same state inventory and boundary testing to every new controller and backend; determine whether the old unversioned PLIC topology can be bridged safely before claiming v1 whole-board compatibility; add in-flight state if synchronous devices later gain timing, queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  The C910 CSR subsection accepts synthetic, descriptor-exact v1/v2 layouts across four harts, including version-specific PMU defaults and derived FP state.  Pinned genuine v1/v2 producer captures establish the corresponding historical wire layouts, and both old-to-current board streams now load completely with direct seeded four-hart state validation.  TCG accepts the v1-era parent CPU version 11, with a validator retaining the KVM version-12 floor.  Ahead-only load aliases consume the old `riscv_sifive_plic`, `riscv_mtimer` and UART0 `serial` layouts; a nonzero synthetic regression checks their mappings, synthesized defaults, behavior and current-identity-only re-save.  Missing old PLIC line/trigger/cause state and old S-timer/TIME state impose documented irreducible limits.  A focused GMAC test preserves MAC0/MAC31, frame-filter, address-hash and VLAN state and proves post-load old-address rejection/new-address acceptance using a separately created destination socket | Extend the same state inventory and boundary testing to every new controller and backend; characterize the legacy bridge's irrecoverable interrupt/timer cases against hardware rather than broadening its load-only scope; add in-flight state if synchronous devices later gain timing, queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -493,11 +534,14 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   Version 1 correctly defaults its absent vendor counter interrupt-enable and
   overflow state to zero before recomputing the vendor cause-17 pending bit;
   version 2 retains those fields and their derived pending state.  Genuine
-  pinned historical streams confirm both subsection layouts, and the v2
-  producer stream passes old-to-current four-hart state validation.  Genuine
-  v1 whole-board loading stops earlier at its obsolete unversioned SiFive PLIC
-  section, while its isolated CPU path passes.  Version-11 parent CPU input is
-  accepted only with TCG; the KVM floor remains version 12.
+  pinned historical streams confirm both subsection layouts, and both producer
+  streams pass complete old-to-current loading plus direct four-hart state
+  validation.  Ahead-scoped load-only aliases consume the v1-era SiFive PLIC,
+  RISC-V machine-timer and UART0 serial sections without changing the identity
+  emitted by a new save.  A separate synthetic device-stream test carries
+  nonzero state through all three mappings and checks their documented
+  defaults and behavior.  Version-11 parent CPU input is accepted only with
+  TCG; the KVM floor remains version 12.
   Microarchitectural event values remain an explicit hardware-differential
   task;
 * XTheadVector decode/translation/helpers, 128-bit vector state, T-Head status
@@ -771,11 +815,12 @@ the migration channel.  It still starts all four C910 harts at the same
 address and supplies no strap, media, security or release-controller behavior,
 so it is only the first bounded Phase-4 checkpoint.
 
-At the current checkpoint the complete gate passes 113/113 board qtests and
-14/14 CSR qtests in the normal build, and 112/112 plus 7/7 in the
+At the current checkpoint the complete gate passes 114/114 board qtests and
+14/14 CSR qtests in the normal build, and 113/113 plus 7/7 in the
 dependency-minimal build.  The ASan/UBSan build passes all 7 CSR tests and the
-current focused whole-machine migration test; its preceding complete board
-gate passed 112/112.  The sole conditional difference in the board totals is
+current focused whole-machine and legacy-device migration tests; its preceding
+complete board gate passed 112/112.  The sole conditional difference in the
+board totals is
 the HID hotplug test because ``usb-kbd`` is intentionally absent from the
 minimal configuration.  The four remaining USB tests cover exact
 misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
@@ -810,8 +855,9 @@ and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passed 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passed.  Dependency-minimal and ASan/UBSan configurations each pass
 their seven available C910 CSR/migration subtests.  The dependency-minimal
-board gate passes 112/112; the ASan/UBSan build has a preceding 112/112 full
-board result plus a current focused whole-machine migration pass.  The
+board gate passes 113/113; the ASan/UBSan build has a preceding 112/112 full
+board result plus current focused whole-machine and legacy-device migration
+passes.  The
 explicitly historical 108/108 sanitizer result and the earlier focused 9/9
 CPR plus 13/13 storage results remain milestone evidence only.
 
@@ -1366,9 +1412,24 @@ raises NX again, observes FS Dirty and requires ``FXCR=FRM|FE|NX``.  Harts
 1-3 are inspected directly for distinct CSR, CPUID, FRM and version-specific
 PMU state.
 
-The complete current normal and dependency-minimal board/CSR gates pass
-113/113 plus 14/14 and 112/112 plus 7/7 respectively.  ASan/UBSan passes all
-7 CSR tests and the current focused whole-machine migration case; its
+A separate board-stream regression converts the current C900 PLIC, C900 CLINT
+and UART0 sections to the exact layouts emitted by the v1 producer.  Unlike
+the captured v1 PLIC, it deliberately seeds nonzero priority, threshold,
+pending, claimed/active and enable words, plus source-level and edge-trigger
+state which conversion deliberately removes so the documented clear/level
+defaults are tested.  It also seeds a nonzero timer delta, compare and deadline,
+architectural software-interrupt bits, and 16550 divisor/LCR/scratch state.  The
+loaded machine is exercised rather than merely inspected: claim/active state,
+pending and level repending, timer expiry and IRQ delivery all have behavioral
+checks.  A second save must contain the current
+device identities and no ``riscv_sifive_plic``, ``riscv_mtimer`` or legacy
+UART ``serial`` identity.  This proves both that the load-only handlers run and
+that they do not create a reverse-migration promise.
+
+The current complete normal and dependency-minimal board/CSR gates pass
+114/114 plus 14/14 and 113/113 plus 7/7 respectively.  ASan/UBSan passes all
+7 CSR tests and the current focused whole-machine and legacy-device migration
+cases; its
 preceding complete board gate passed 112/112.
 
 The generic SoftFloat quick suite passes 17/17, and its slow
@@ -1406,26 +1467,29 @@ CPU-v11 sections and four 53-byte C910-v1 subsections; version 2 producer
 subsections.  ``MANIFEST.md`` and ``manifest.json`` retain the full commit,
 binary and stream hashes, decoded values, compiler identity and raw logs.
 
-The v2 historical stream loads in current QEMU, and current qtest access
-confirms its distinct MXSTATUS, MHCR, MCOR, MHINT, MHINT2, MHINT3,
-MCOUNTERWEN, CPUID cursor and PMU interrupt-enable/overflow state on all four
-harts.  The v1 historical stream passes producer identity, stream-structure
-and seeded-field checks, but
-its full-board load stops before the CPU subsection because it contains an
-unversioned ``riscv_sifive_plic`` instance which the current Ahead machine no
-longer registers.  The synthetic v1 stream therefore remains the isolated
-proof for the C910 payload and v1 defaults; it now includes the authentic
-parent CPU-v11 boundary.  Reinstating the former version-12 minimum makes that
-test fail at incoming-version validation, proving the new path is exercised.
-Current QEMU accepts parent CPU version 11 only with TCG.  KVM retains the
-version-12 minimum required for its MP-state subsection; this was code-checked,
-not runtime-tested, because no RISC-V KVM environment was available.
+Both historical streams load completely in current QEMU.  Direct destination
+inspection confirms their distinct MXSTATUS, MHCR, MCOR, MHINT, MHINT2,
+MHINT3, MCOUNTERWEN and CPUID cursor on all four harts, plus the v2 PMU
+interrupt-enable/overflow state.  The v1 stream crosses its obsolete
+``riscv_sifive_plic``, ``riscv_mtimer`` and UART0 ``serial`` sections through
+the Ahead-only load aliases described above.  The synthetic CPU-v1 stream
+still isolates the C910 payload, v1 defaults and authentic parent CPU-v11
+boundary, while the separate nonzero device transformation protects the
+legacy-device mappings that the mostly quiescent genuine capture cannot
+stress.  Reinstating the former version-12 minimum makes the CPU test fail at
+incoming-version validation, proving the new path is exercised.  Current QEMU
+accepts parent CPU version 11 only with TCG.  KVM retains the version-12 minimum
+required for its MP-state subsection; this was code-checked, not runtime-tested,
+because no RISC-V KVM environment was available.
 
 A dedicated destination-poison gate for a stale SoftFloat raised-event
 accumulator remains open because ``-incoming defer`` prevents pre-load guest
 execution; the existing guest still covers post-load rearming and derived
-behavior.  Complete v1 whole-board compatibility also remains open pending a
-safe decision on the obsolete PLIC section.  Physical comparison remains open.
+behavior.  The v1 whole-board stream now loads, but exact historical execution
+equivalence remains impossible where the old wire omitted PLIC input/trigger
+and interrupt-cause distinctions or S-timer/TIME state.  Those deterministic
+defaults require physical comparison and must not be generalized into a claim
+of lossless compatibility.  Physical comparison remains open.
 The C910 model is TCG-only and is rejected with KVM until its custom state can
 be synchronized; CPU-016 retains the unidentified TH1520 stepping rather than
 treating the pinned RTL as a silicon measurement.
@@ -1547,10 +1611,10 @@ profile is also implemented with ``EXT_CSD_REV = 8``, ``CARD_TYPE = 0x57``,
 four-/eight-bit CMD21 data.  CMD21 is part of the tested reference workflow,
 while the card enforces HS plus DDR8 as the immediate HS400 predecessor;
 generic eMMC defaults are unchanged.  Three new focused qtests and the
-fail-before comparison pass; the current complete board gates are 113/113 in
-the normal build and 112/112 in the dependency-minimal build.  The preceding
+fail-before comparison pass; the current complete board gates are 114/114 in
+the normal build and 113/113 in the dependency-minimal build.  The preceding
 complete ASan/UBSan board gate passed 112/112, and the current focused
-whole-machine migration case also passes under ASan/UBSan.
+whole-machine and legacy-device migration cases also pass under ASan/UBSan.
 The earlier ASan/UBSan storage-only gate passed 13/13.  Pinned Linux reaches
 HS400 in both builds, but its TH1520 callback intentionally skips CMD21,
 leaving an end-to-end CMD21 guest and physical validation open.  A portable
