@@ -2,10 +2,11 @@
 
 Status: portable Linux single- and four-hart eMMC root/integrity/process-reopen,
 PLL-polling, C910 FXCR, synthetic C910 CSR VMState v1/v2 compatibility,
-genuine historical v1/v2 producer-to-current migration, and Ahead-scoped
-load-only compatibility for the former PLIC, timer and boot-UART sections
-validated; complete normal/dependency-minimal board/CSR checkpoints and the
-recorded ASan/UBSan gates also pass.  The official image and
+genuine historical v1/v2 producer-to-current migration, Ahead-scoped
+load-only compatibility for the former PLIC, timer and boot-UART sections,
+and pending eMMC tuning-IRQ migration are validated; complete
+normal/dependency-minimal board/CSR checkpoints and the recorded ASan/UBSan
+gates also pass.  The official image and
 physical-card/CPU validation remain open, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
@@ -27,6 +28,8 @@ C910 legacy-VMState checkpoint: ca34c481bb
 C910 historical-parent compatibility checkpoint: 4df303a8f3
 
 Ahead legacy-device migration checkpoint: d6f2cb0239
+
+eMMC tuning-IRQ migration checkpoint: 96ac3437f0
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -57,9 +60,12 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The current bounded milestone completes backward
-loading of the captured C910 CSR VMState v1 and v2 subsection layouts on all
-four harts and the obsolete board-device sections around them.  The CPU bridge
+than upstream bug reporting.  The current bounded checkpoint closes the
+pending eMMC tuning-interrupt migration boundary without changing the SDHCI
+wire format or inventing hardware behavior.  The immediately preceding
+milestone completed backward loading of the captured C910 CSR VMState v1 and
+v2 subsection layouts on all four harts and the obsolete board-device sections
+around them.  The CPU bridge
 defaults the v1-absent PMU interrupt-enable and overflow fields to zero before
 the derived pending interrupt is rebuilt.  The synthetic CPU qtests reproduce
 the historical parent ``cpu`` version: v1 lowers all four parent sections from
@@ -236,12 +242,21 @@ with the preserved pre-fix binary and passes twice across system reset with the
 fix; focused ASan/UBSan CPR tests pass.  The modeled delay, migration and reset
 contract are unchanged, and this is not evidence for silicon PLL timing.
 
-One non-blocking migration coverage gap is explicit: the current test migrates
-an armed Execute Tuning request and then observes ``RBUFRDY`` on the
-destination, but it clears that interrupt before the next migration.  SDHCI
-VMState already carries the interrupt status/enable/signal words and post-load
-recomputes the IRQ; a later test should nevertheless migrate an already-pending
-``RBUFRDY`` directly.
+The pending-``RBUFRDY`` migration boundary is now closed by the focused
+``emmc-tuning-migration`` qtest's four hops: (1) a partially consumed 128-byte
+tuning FIFO migrates into a first destination; (2) an armed HS200 Execute
+Tuning request migrates before CMD21; (3) completed tuning migrates with
+``RBUFRDY`` status, status-enable and signal-enable set, Execute Tuning clear,
+Sampling Clock Select set, HS200 selected, and command/data state quiescent;
+and (4) after a data reset, HS/DDR8/HS400 mode migrates into the final
+destination.  For the third hop the test disconnects the PLIC path by
+intercepting the eMMC ``sysbus-irq`` directly, observes that line low before
+incoming and high after SDHCI post-load, and verifies zero block count and no
+SDHCI error status.  The data reset then clears ``RBUFRDY`` and lowers the
+direct IRQ while preserving the sampled-clock state.  Deliberately removing
+``sdhci_update_irq()`` from ``sdhci_post_load()`` makes the test fail at the
+post-load direct-IRQ assertion.  This is a QEMU migration and wiring result,
+not evidence for the physical board's interrupt or tuning timing.
 
 This is deliberately a software compatibility profile, not a claim about the
 device fitted to the owner's board.  Its identity, CID, CSD, complete EXT_CSD,
@@ -466,7 +481,7 @@ validation.
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs, AP reset pairs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior, clock-gate coupling and physical reset-scope validation |
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM with 32-byte page-write wrapping, and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, EEPROM busy/write-protect behavior, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
-| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA.  Unit 0 opts into the synthetic eMMC 5.1/1.8 V HS200/HS400 speed profile and CMD21 contract; generic eMMC remains unchanged.  The generated DT adopts the vendor `mmc0=eMMC`, `mmc1=sdio0`, `mmc2=sdio1` aliases and tests all three, while the pinned upstream DTS omission remains an explicit provenance uncertainty.  Portable Linux wraps the pinned ext2 root in an MBR with `PARTUUID=1520a110-01`; normal/minimal one- and four-hart gates mount HS400, write/sync/hash 1 MiB, remount read-only and verify the stable hash from a fresh QEMU process | Pin and boot an official image and vendor U-Boot; reconcile the vendor aliases with stock-image DT and hardware evidence; add filesystem/block stress, `e2fsck`, cache-eviction/power-loss boundaries and longer SMP repetition; validate physical CID/CSD/EXT_CSD, voltage and electrical tuning/timing; add CQE/ADMA3, boot partitions/RPMB, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
+| SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA.  Unit 0 opts into the synthetic eMMC 5.1/1.8 V HS200/HS400 speed profile and CMD21 contract; generic eMMC remains unchanged.  Four-hop qtest coverage preserves a partial tuning FIFO, an armed Execute Tuning request, completed HS200 tuning with pending `RBUFRDY` and its direct post-load IRQ, data-reset deassertion with sampled-clock retention, and final HS400 state.  The generated DT adopts the vendor `mmc0=eMMC`, `mmc1=sdio0`, `mmc2=sdio1` aliases and tests all three, while the pinned upstream DTS omission remains an explicit provenance uncertainty.  Portable Linux wraps the pinned ext2 root in an MBR with `PARTUUID=1520a110-01`; normal/minimal one- and four-hart gates mount HS400, write/sync/hash 1 MiB, remount read-only and verify the stable hash from a fresh QEMU process | Pin and boot an official image and vendor U-Boot; reconcile the vendor aliases with stock-image DT and hardware evidence; add filesystem/block stress, `e2fsck`, cache-eviction/power-loss boundaries and longer SMP repetition; validate physical CID/CSD/EXT_CSD, voltage and electrical tuning/timing; add CQE/ADMA3, boot partitions/RPMB, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
 | Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000. Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status. TH1520 additionally enables Type-2 RX status for a bounded IPv4/IPv6 TCP/UDP/ICMP subset. The shared transmit COE now honors TXCOESEL, TSF and first-descriptor CIC0-3, inserts IPv4 header and IPv4/IPv6 TCP/UDP/ICMP checksums through one C-VLAN or ESVL-enabled S-VLAN, preserves guest source buffers, and writes terminal enhanced IHE/IPE/ES status | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete RX drop/forward threshold policy and malformed/zero-checksum corners; compare TX CIC2, CIC1-on-IPv6, malformed-length/status, trailing/padding, FIFO/PBL recovery, threshold, fragment/extension and stacked-VLAN behavior; add PTP/MMC/WOL/EEE, flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node with its AP reset pair. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis, reset split and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  Its AP gate drives a provisional 125 MHz/zero QEMU clock; gating freezes the pending phase and output, including across migration, and re-enabling resumes it.  It exposes test-only QOM outputs and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, physical clock rate and gate phase/output behavior, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
@@ -671,8 +686,12 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   its interrupt output after migration.  The Ahead eMMC alone enables a
   synthetic eMMC 5.1 profile with 1.8 V HS200/HS400, legal CMD6 transitions,
   standard four-bit/eight-bit CMD21 data and SDHCI Execute Tuning consumption;
-  generic eMMC behavior is unchanged.  The three active-low misc-system reset
-  groups independently reset eMMC, SDIO0 and SDIO1; and
+  generic eMMC behavior is unchanged.  Its focused migration test now carries
+  completed tuning with ``RBUFRDY`` pending, checks the status and enable
+  words plus quiescent HS200 sampled-clock state, and proves direct eMMC IRQ
+  reconstruction and data-reset deassertion before a final HS400 migration.
+  The three active-low misc-system reset groups independently reset eMMC,
+  SDIO0 and SDIO1; and
 * a reusable DesignWare GMAC 3.x model, factored from the NPCM implementation,
   with normal and enhanced descriptors, 16/32-byte descriptor stride, TX/RX
   DMA, FCS handling, bus errors, interrupt recomputation, configurable version/
@@ -818,7 +837,8 @@ so it is only the first bounded Phase-4 checkpoint.
 At the current checkpoint the complete gate passes 114/114 board qtests and
 14/14 CSR qtests in the normal build, and 113/113 plus 7/7 in the
 dependency-minimal build.  The ASan/UBSan build passes all 7 CSR tests and the
-current focused whole-machine and legacy-device migration tests; its preceding
+current focused whole-machine, legacy-device and eMMC tuning migration tests;
+its preceding
 complete board gate passed 112/112.  The sole conditional difference in the
 board totals is
 the HID hotplug test because ``usb-kbd`` is intentionally absent from the
@@ -839,12 +859,16 @@ synthetic EXT_CSD fields, rejected CMD6 transitions and ``SWITCH_ERROR``
 lifetime, both standard CMD21 patterns, Execute Tuning IRQ/FIFO state, the
 reference HS200/CMD21/HS/DDR8/HS400 workflow, enhanced-strobe rejection and
 reset.  ``emmc-tuning-migration`` checks a partially consumed 128-byte tuning
-FIFO, an armed Execute Tuning request and migrated HS200/HS400 card/controller
-mode.  The old binary failed before the change, the normal and minimal suites
-passed, and the complete 13-test storage group passed under ASan/UBSan.  The
-historical 108-test sanitizer-board run predates these tests and remains useful
-milestone evidence; the later complete ASan/UBSan board gate supersedes it at
-112/112, and the current migration path was rerun separately.
+FIFO, an armed Execute Tuning request, completed HS200 tuning with pending
+``RBUFRDY`` status/enable/signal state and a directly reconstructed eMMC IRQ,
+data-reset IRQ clearing with sampled-clock retention, and a final HS400
+card/controller migration.  Removing the SDHCI post-load IRQ update fails at
+the direct destination IRQ assertion.  The old binary failed before the
+change, the normal and minimal suites passed, and the complete 13-test storage
+group passed under ASan/UBSan.  The historical 108-test sanitizer-board run
+predates these tests and remains useful milestone evidence; the later complete
+ASan/UBSan board gate supersedes it at 112/112, and the current migration path
+was rerun separately.
 
 The current generic RISC-V CSR/migration binary passes fourteen subtests,
 including
@@ -856,8 +880,8 @@ passed 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passed.  Dependency-minimal and ASan/UBSan configurations each pass
 their seven available C910 CSR/migration subtests.  The dependency-minimal
 board gate passes 113/113; the ASan/UBSan build has a preceding 112/112 full
-board result plus current focused whole-machine and legacy-device migration
-passes.  The
+board result plus current focused whole-machine, legacy-device and eMMC tuning
+migration passes.  The
 explicitly historical 108/108 sanitizer result and the earlier focused 9/9
 CPR plus 13/13 storage results remain milestone evidence only.
 
@@ -1428,8 +1452,8 @@ that they do not create a reverse-migration promise.
 
 The current complete normal and dependency-minimal board/CSR gates pass
 114/114 plus 14/14 and 113/113 plus 7/7 respectively.  ASan/UBSan passes all
-7 CSR tests and the current focused whole-machine and legacy-device migration
-cases; its
+7 CSR tests and the current focused whole-machine, legacy-device and eMMC
+tuning migration cases; its
 preceding complete board gate passed 112/112.
 
 The generic SoftFloat quick suite passes 17/17, and its slow
@@ -1610,11 +1634,17 @@ profile is also implemented with ``EXT_CSD_REV = 8``, ``CARD_TYPE = 0x57``,
 ``DRIVER_STRENGTH = 0``/Type 0, validated CMD6 mode changes and standard
 four-/eight-bit CMD21 data.  CMD21 is part of the tested reference workflow,
 while the card enforces HS plus DDR8 as the immediate HS400 predecessor;
-generic eMMC defaults are unchanged.  Three new focused qtests and the
-fail-before comparison pass; the current complete board gates are 114/114 in
-the normal build and 113/113 in the dependency-minimal build.  The preceding
-complete ASan/UBSan board gate passed 112/112, and the current focused
-whole-machine and legacy-device migration cases also pass under ASan/UBSan.
+generic eMMC defaults are unchanged.  The four-hop tuning migration qtest now
+covers partial FIFO state, an armed Execute Tuning request, completed HS200
+tuning with ``RBUFRDY`` status/status-enable/signal-enable state and direct
+post-load eMMC IRQ reconstruction, data-reset deassertion with sampled-clock
+retention, and final HS400 migration.  Removing the SDHCI post-load IRQ update
+fails at the direct IRQ boundary.  Three focused qtests and the fail-before
+comparison pass; the current complete board gates are 114/114 in the normal
+build and 113/113 in the dependency-minimal build.  The preceding complete
+ASan/UBSan board gate passed 112/112, and the current focused
+whole-machine, legacy-device and eMMC tuning migration cases also pass under
+ASan/UBSan.
 The earlier ASan/UBSan storage-only gate passed 13/13.  Pinned Linux reaches
 HS400 in both builds, but its TH1520 callback intentionally skips CMD21,
 leaving an end-to-end CMD21 guest and physical validation open.  A portable
