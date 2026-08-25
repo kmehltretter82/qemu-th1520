@@ -1497,6 +1497,7 @@ static bool opivv_cmp_check_th(DisasContext *s, arg_rmrr *a)
             vext_check_isa_ill(s) &&
             th_check_reg(s, a->rs2, false) &&
             th_check_reg(s, a->rs1, false) &&
+            th_check_overlap_mask(s, a->rd, a->vm, false) &&
             ((th_check_overlap_group(a->rd, 1, a->rs1, 1 << s->lmul) &&
               th_check_overlap_group(a->rd, 1, a->rs2, 1 << s->lmul)) ||
              (s->lmul == 0)));
@@ -1513,6 +1514,7 @@ static bool opivx_cmp_check_th(DisasContext *s, arg_rmrr *a)
     return (require_xtheadvector(s) &&
             vext_check_isa_ill(s) &&
             th_check_reg(s, a->rs2, false) &&
+            th_check_overlap_mask(s, a->rd, a->vm, false) &&
             (th_check_overlap_group(a->rd, 1, a->rs2, 1 << s->lmul) ||
              (s->lmul == 0)));
 }
@@ -2190,6 +2192,7 @@ static bool opfvv_cmp_check_th(DisasContext *s, arg_rmrr *a)
             th_check_reg(s, a->rs2, false) &&
             th_check_reg(s, a->rs1, false) &&
             (s->sew != 0) &&
+            th_check_overlap_mask(s, a->rd, a->vm, false) &&
             ((th_check_overlap_group(a->rd, 1, a->rs1, 1 << s->lmul) &&
               th_check_overlap_group(a->rd, 1, a->rs2, 1 << s->lmul)) ||
              (s->lmul == 0)));
@@ -2207,6 +2210,7 @@ static bool opfvf_cmp_check_th(DisasContext *s, arg_rmrr *a)
             vext_check_isa_ill(s) &&
             th_check_reg(s, a->rs2, false) &&
             (s->sew != 0) &&
+            th_check_overlap_mask(s, a->rd, a->vm, false) &&
             (th_check_overlap_group(a->rd, 1, a->rs2, 1 << s->lmul) ||
              (s->lmul == 0)));
 }
@@ -2621,6 +2625,7 @@ static bool trans_##NAME(DisasContext *s, arg_rmr *a)              \
 {                                                                  \
     if (require_xtheadvector(s) &&                                 \
         vext_check_isa_ill(s) &&                                   \
+        th_check_overlap_mask(s, a->rd, a->vm, false) &&           \
         (a->rd != a->rs2) &&                                       \
         s->vstart_eq_zero) {                                       \
         uint32_t data = 0;                                         \

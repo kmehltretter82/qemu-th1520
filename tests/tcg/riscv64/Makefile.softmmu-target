@@ -118,6 +118,11 @@ test-xtheadvector-state: test-xtheadvector-state.o
 run-test-xtheadvector-state: test-xtheadvector-state
 	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
 
+EXTRA_RUNS += run-test-xtheadvector-overlap
+test-xtheadvector-overlap: test-xtheadvector-overlap.o
+run-test-xtheadvector-overlap: test-xtheadvector-overlap
+	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
+
 EXTRA_RUNS += run-test-xtheadvector-fp-state
 test-xtheadvector-fp-state: test-xtheadvector-fp-state.o
 run-test-xtheadvector-fp-state: test-xtheadvector-fp-state
