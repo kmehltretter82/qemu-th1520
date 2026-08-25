@@ -38,6 +38,8 @@ struct EEPROMState {
     uint16_t cur;
     /* total size in bytes */
     uint32_t rsize;
+    /* write page size; zero preserves legacy sequential writes */
+    uint32_t page_size;
     /*
      * address byte number
      *  for  24c01, 24c02 size <= 256 byte, use only 1 byte
@@ -132,7 +134,14 @@ int at24c_eeprom_send(I2CSlave *s, uint8_t data)
         } else {
             DPRINTK("Send error %02x read-only\n", data);
         }
-        ee->cur = (ee->cur + 1u) % ee->rsize;
+        if (ee->page_size) {
+            uint32_t page_mask = ee->page_size - 1;
+
+            ee->cur = (ee->cur & ~page_mask) |
+                      ((ee->cur + 1u) & page_mask);
+        } else {
+            ee->cur = (ee->cur + 1u) % ee->rsize;
+        }
 
     }
 
@@ -147,11 +156,22 @@ I2CSlave *at24c_eeprom_init(I2CBus *bus, uint8_t address, uint32_t rom_size)
 I2CSlave *at24c_eeprom_init_rom(I2CBus *bus, uint8_t address, uint32_t rom_size,
                                 const uint8_t *init_rom, uint32_t init_rom_size)
 {
+    return at24c_eeprom_init_rom_page_size(bus, address, rom_size, 0,
+                                           init_rom, init_rom_size);
+}
+
+I2CSlave *at24c_eeprom_init_rom_page_size(I2CBus *bus, uint8_t address,
+                                          uint32_t rom_size,
+                                          uint32_t page_size,
+                                          const uint8_t *init_rom,
+                                          uint32_t init_rom_size)
+{
     EEPROMState *s;
 
     s = AT24C_EE(i2c_slave_new(TYPE_AT24C_EE, address));
 
     qdev_prop_set_uint32(DEVICE(s), "rom-size", rom_size);
+    qdev_prop_set_uint32(DEVICE(s), "page-size", page_size);
 
     /* TODO: Model init_rom with QOM properties. */
     s->init_rom = init_rom;
@@ -165,6 +185,16 @@ I2CSlave *at24c_eeprom_init_rom(I2CBus *bus, uint8_t address, uint32_t rom_size,
 static void at24c_eeprom_realize(DeviceState *dev, Error **errp)
 {
     EEPROMState *ee = AT24C_EE(dev);
+
+    if (ee->page_size &&
+        (!is_power_of_2(ee->page_size) || ee->page_size > ee->rsize ||
+         ee->rsize % ee->page_size)) {
+        error_setg(errp,
+                   "%s: page size must be a power of two that divides ROM "
+                   "size: %u, ROM size %u",
+                   TYPE_AT24C_EE, ee->page_size, ee->rsize);
+        return;
+    }
 
     if (ee->init_rom_size > ee->rsize) {
         error_setg(errp, "%s: init rom is larger than rom: %u > %u",
@@ -230,6 +260,7 @@ void at24c_eeprom_reset(DeviceState *state)
 
 static const Property at24c_eeprom_props[] = {
     DEFINE_PROP_UINT32("rom-size", EEPROMState, rsize, 0),
+    DEFINE_PROP_UINT32("page-size", EEPROMState, page_size, 0),
     DEFINE_PROP_UINT8("address-size", EEPROMState, asize, 0),
     DEFINE_PROP_BOOL("writable", EEPROMState, writable, true),
     DEFINE_PROP_DRIVE("drive", EEPROMState, blk),

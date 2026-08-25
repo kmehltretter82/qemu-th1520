@@ -1925,10 +1925,11 @@ static void beaglev_ahead_attach_eeprom(BeagleVAheadState *s)
 
     /* Factory-programmed, board-unique bytes are deliberately not invented. */
     memset(contents, 0xff, BEAGLEV_AHEAD_EEPROM_SIZE);
-    at24c_eeprom_init_rom(s->soc.i2c[0].bus,
-                          BEAGLEV_AHEAD_EEPROM_ADDRESS,
-                          BEAGLEV_AHEAD_EEPROM_SIZE, contents,
-                          BEAGLEV_AHEAD_EEPROM_SIZE);
+    at24c_eeprom_init_rom_page_size(s->soc.i2c[0].bus,
+                                    BEAGLEV_AHEAD_EEPROM_ADDRESS,
+                                    BEAGLEV_AHEAD_EEPROM_SIZE,
+                                    BEAGLEV_AHEAD_EEPROM_PAGE_SIZE,
+                                    contents, BEAGLEV_AHEAD_EEPROM_SIZE);
 }
 
 static void beaglev_ahead_attach_leds(BeagleVAheadState *s)

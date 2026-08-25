@@ -5090,25 +5090,24 @@ static void test_dw_i2c_registers(void)
 
 static void test_dw_i2c_eeprom(void)
 {
-    static const uint8_t edge_data[] = { 0x12, 0x34, 0x56 };
+    static const uint8_t page_wrap_data[] = { 0x12, 0x34, 0x56 };
     const uint8_t next_page = 0xa5;
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
 
     g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x000), ==, 0xff);
     g_assert_cmphex(dw_i2c_eeprom_read(qts, 0xfff), ==, 0xff);
 
-    /* End one 32-byte page without depending on unsupported page wrapping. */
-    dw_i2c_eeprom_write(qts, 0x01d, edge_data, ARRAY_SIZE(edge_data));
-    dw_i2c_eeprom_write(qts, 0x020, &next_page, 1);
-    for (size_t i = 0; i < ARRAY_SIZE(edge_data); i++) {
-        g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x01d + i), ==,
-                        edge_data[i]);
-    }
-    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, next_page);
+    dw_i2c_eeprom_write(qts, 0x040, &next_page, 1);
+    dw_i2c_eeprom_write(qts, 0x03f, page_wrap_data,
+                        ARRAY_SIZE(page_wrap_data));
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x03f), ==, page_wrap_data[0]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, page_wrap_data[1]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x021), ==, page_wrap_data[2]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x040), ==, next_page);
 
     qtest_system_reset(qts);
-    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x01d), ==, edge_data[0]);
-    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, next_page);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, page_wrap_data[1]);
+    g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x040), ==, next_page);
     qtest_quit(qts);
 }
 

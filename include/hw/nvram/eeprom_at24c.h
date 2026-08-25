@@ -36,4 +36,14 @@ I2CSlave *at24c_eeprom_init(I2CBus *bus, uint8_t address, uint32_t rom_size);
 I2CSlave *at24c_eeprom_init_rom(I2CBus *bus, uint8_t address, uint32_t rom_size,
                                 const uint8_t *init_rom, uint32_t init_rom_size);
 
+/*
+ * As at24c_eeprom_init_rom(), with writes wrapping within page_size bytes.
+ * A zero page size retains the legacy sequential-write behavior.
+ */
+I2CSlave *at24c_eeprom_init_rom_page_size(I2CBus *bus, uint8_t address,
+                                          uint32_t rom_size,
+                                          uint32_t page_size,
+                                          const uint8_t *init_rom,
+                                          uint32_t init_rom_size);
+
 #endif
