@@ -68,7 +68,7 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Normal build
 
-* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **106/106**.
+* `build-beaglev-ahead/tests/qtest/beaglev-ahead-test -q`: **109/109**.
 * `build-npcm/tests/qtest/npcm_gmac-test`: **7/7**; its added normal-descriptor
   case is a bounded shared-model compatibility check, not a claim of complete
   NPCM TX-offload coverage.
@@ -81,14 +81,14 @@ by the runtime and was not accompanied by an ASan or UBSan finding.
 
 ### Dependency-minimal build
 
-* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **105/105**.
+* `build-minimal/tests/qtest/beaglev-ahead-test -q`: **108/108**.
 * `build-minimal/tests/qtest/riscv-csr-test -q`: **4/4**.
 * XTheadVector smoke/state/overlap/FP/reduction payloads run directly with
   `-M beaglev-ahead -bios`: **5/5**.
 
 ### Dependency-minimal ASan/UBSan build
 
-* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **105/105**.
+* `build-sanitize/tests/qtest/beaglev-ahead-test -q`: **108/108**.
 * `build-sanitize/tests/qtest/riscv-csr-test -q`: **4/4** (C910 CSR and the
   active/inhibited/pending PMU migration cases present in this build).
 * Machine-specific semihosted payloads: **9/9** — C910 MM/priority/MAEE/

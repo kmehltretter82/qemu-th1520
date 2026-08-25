@@ -1,6 +1,6 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: reviewed GMAC transmit-checksum-insertion milestone, 2026-08-25
+Status: reviewed user mask-ROM execution milestone, 2026-08-25
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -13,6 +13,8 @@ GMAC receive-filter checkpoint: 5dd4f5794b
 GMAC Type-2 receive-status checkpoint: 46df230d5d
 
 GMAC transmit-checksum checkpoint: f441cf709f
+
+User mask-ROM checkpoint: 0d45dbf7b6
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -43,12 +45,13 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The latest bounded milestone replaces the
-shared DWC GMAC's IPv4-only checksum shortcut with a documented transmit COE
-contract: feature and store-and-forward gates, CIC0-3, IPv4/IPv6
-TCP/UDP/ICMP, split-frame handling and descriptor-format-aware error status.
-The earlier receive-filter and Type-2 receive-status milestones remain green.
-This is not a claim that the board is complete or perfectly modeled.
+than upstream bug reporting.  The latest bounded milestone adds an opt-in raw
+user mask-ROM execution path while preserving direct boot as the default.  It
+pins image bounds and loader conflicts, BIOS search paths, ROM immutability,
+reset, migration and real C910/UART execution.  The earlier GMAC receive,
+Type-2 status and transmit-checksum milestones remain green.  This is an
+execution bridge for private-ROM experiments, not a claim that the physical
+boot process or the board is complete.
 
 Upstream triage remains deferred.  The two companion bug documents continue
 to separate pre-existing QEMU issues from branch-only implementation gaps, and
@@ -511,7 +514,13 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   four-hart M-mode payload whose ordered UART transcript proves that harts
   0 through 3 all entered the common reset path.  A supplied ``-dtb`` now
   replaces the generated tree rather than being silently ignored, with a
-  marker round-trip qtest; and
+  marker round-trip qtest.  An explicit ``boot-mode=mask-rom`` alternative
+  loads a non-empty, at-most-1-MiB user raw image at ``0xffffd00000`` and
+  bypasses every direct loader and trampoline.  Tests prove ROM
+  immutability, reset, same-version migration, C910 execution, repeated UART
+  output, invalid mode/missing image/overflow errors and rejection of mixed
+  direct-loader options.  This execution bridge does not model straps, image
+  parsing, authentication, media fallback, TEE state or hart release; and
 * a whole-machine migration test that moves DRAM, SRAM, per-hart base and
   C910-specific CSR state, the rotating CPUID cursor, architectural time,
   CLINT, PLIC, AP clock/reset state, distinct state in all six UARTs and all
@@ -559,7 +568,17 @@ all four CPUs.  A separate M-mode payload serializes the four harts and checks
 the exact UART transcript ``0123\n``.  This is a deterministic direct-boot
 contract, not evidence for the physical reset controller or BootROM sequence.
 
-The focused gate currently passes 106 board qtests in the normal build and 105
+The opt-in user-ROM path is deliberately separate.  It executes raw bytes
+from the existing mask-ROM aperture and never installs the direct firmware,
+kernel or FDT handoff.  Its synthetic payload and qtests cover execution,
+UART, reset, immutability, BIOS-path lookup, migration and configuration
+errors.  The migration test proves that source ROM bytes replace deliberately
+different destination bytes and survive reset; private bytes therefore cross
+the migration channel.  It still starts all four C910 harts at the same
+address and supplies no strap, media, security or release-controller behavior,
+so it is only the first bounded Phase-4 checkpoint.
+
+The focused gate currently passes 109 board qtests in the normal build and 108
 in both the dependency-minimal and ASan/UBSan builds.  The sole conditional
 difference is the HID hotplug test because ``usb-kbd`` is intentionally absent
 from the minimal configurations.  The four remaining USB tests cover exact
@@ -579,7 +598,7 @@ cover M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passes 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passes.  Dependency-minimal and ASan/UBSan configurations each pass
-105 board tests plus their four available C910 CSR/migration subtests.
+108 board tests plus their four available C910 CSR/migration subtests.
 
 The XTheadVector state milestone adds a second architectural payload.  A
 reserved-EDIV ``th.vsetvl`` regression first failed because the translator
@@ -611,7 +630,7 @@ legality checks, unsafe reduction widths and missing exception-state
 propagation inherited from the public unmerged April 2024 XTheadVector series.
 The three payloads pass as board firmware under the normal,
 dependency-minimal and ASan/UBSan builds.  The complete normal RISC-V TCG
-guest suite and all 17 runnable RISC-V qtest suites, including the 106-case
+guest suite and all 17 runnable RISC-V qtest suites, including the 109-case
 board suite, remain green.  Silicon NaN, exception and stepping-specific
 behavior remains explicitly unverified under ``CPU-006``.
 
@@ -643,7 +662,7 @@ traps for integer VV/VX/VI and floating-point VV/VF comparisons plus
 ``vstart`` and all 16 bytes of ``v0`` survive the first trap, while LMUL=1,
 unmasked LMUL=2 and masked non-``v0`` controls remain legal.  Normal,
 dependency-minimal and ASan/UBSan runs pass, as do all 27 normal RISC-V
-softmmu TCG guests, 106 normal board qtests, and 105 board qtests in both the
+softmmu TCG guests, 109 normal board qtests, and 108 board qtests in both the
 dependency-minimal and sanitizer builds.
 
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
@@ -699,8 +718,8 @@ overlapping ratified-RVV encoding.  It passes in the normal,
 dependency-minimal and ASan/UBSan builds together with the older MXSTATUS.MM
 and guarded-priority payloads; generic Zicclsm enabled/disabled coverage also
 remains green.  The complete normal RISC-V TCG suite passes.  The normal qtest
-gate passes 106 board and eleven CSR subtests; minimal and sanitizer each pass
-their 105 available board and four CSR subtests.  QEMU still does not claim
+gate passes 109 board and eleven CSR subtests; minimal and sanitizer each pass
+their 108 available board and four CSR subtests.  QEMU still does not claim
 cache, buffering, shareability, security-bus or actual memory-order effects.
 
 A separate physical-PMA payload uses only an explicitly experimental
@@ -1092,6 +1111,13 @@ Deliver:
   reproducible, with a user-supplied BootROM option if redistribution is not
   possible;
 * QSPI and the minimum clock/reset/system-control blocks used before DRAM.
+
+Current bounded checkpoint: a user-supplied raw mask-ROM image can execute
+from the correct ROM aperture without QEMU's direct-boot trampoline.  This
+unblocks private-ROM experiments and is regression-tested across reset and
+migration.  Phase 4 remains open because no boot-source selection, image
+format, authentication, fallback, TEE entry, reset-domain or hart-release
+behavior has been established.
 
 Gate P4:
 

@@ -131,7 +131,8 @@ apertures, and a disabled generic DWC3 node.  It advertises
 Boot options
 ------------
 
-Direct boot uses QEMU's bundled generic OpenSBI by default.  For example:
+``boot-mode=direct`` is the default and uses QEMU's bundled generic OpenSBI.
+For example:
 
 .. code-block:: bash
 
@@ -156,6 +157,39 @@ trampoline jumps to its ELF entry point.  For example:
    qemu-system-riscv64 -M beaglev-ahead \
        -bios test.elf -display none -semihosting
 
+An opt-in mode can execute a privately supplied raw mask-ROM image directly
+from the 1 MiB ROM aperture:
+
+.. code-block:: bash
+
+   qemu-system-riscv64 \
+       -M beaglev-ahead,boot-mode=mask-rom \
+       -bios th1520-mask-rom.bin -nographic
+
+The image must be non-empty and no larger than 1 MiB.  In this mode QEMU does
+not load firmware or a kernel into RAM, inject a device tree, or install its
+direct-boot trampoline.  Consequently ``-kernel``, ``-initrd``, ``-append``
+and ``-dtb`` are rejected rather than silently ignored.  The ROM is read-only
+and is restored on reset.
+
+The supported migration configuration uses ``boot-mode=mask-rom`` at both
+ends.  A mask-ROM destination must start with a syntactically valid, non-empty
+image no larger than 1 MiB because machine validation precedes incoming
+migration.  The migration stream then carries the source ROM RAMBlock bytes:
+a focused test starts with different destination bytes, verifies that the
+source bytes replace them, and verifies that those bytes survive reset.  A
+private ROM is therefore sensitive migration data as well as a sensitive host
+file; keep it private unless its redistribution rights are known.
+
+This option is an execution bridge, not a claim that the TH1520 boot process
+is modeled.  QEMU does not interpret the image, select eMMC/SD/QSPI, reproduce
+authentication or fallback, enter a measured TEE state, or release harts as
+silicon does.  All four emulated C910 harts still start at the common ROM
+address.  A synthetic test ROM parks three harts and proves hart 0 can emit a
+UART marker before and after QEMU system reset.  A real ROM may stop at its
+first access to an early clock, reset, power, security, SRAM/DDR or mailbox
+interface that QEMU does not yet model faithfully.
+
 ``-bios none -kernel test.elf`` is not equivalent: without firmware the reset
 trampoline jumps to the start of DRAM and the ``-kernel`` entry is an SBI
 next-stage address.
@@ -174,21 +208,21 @@ TH1520 glue and DWC3 core, a keyboard can be attached with:
 
 The generated tree deliberately does not enable the core by itself.
 
-All four C910 harts currently enter that trampoline.  The FW_DYNAMIC handoff
-selects hart 0 for relocation, and an OpenSBI configuration node restricts its
-subsequent cold-boot lottery to hart 0.  OpenSBI consumes that node before the
-next boot stage.  This makes direct boots deterministic while leaving the
-other harts available for SBI HSM startup; a four-hart M-mode test checks the
-ordered UART transcript from harts 0 through 3.
+In direct mode, all four C910 harts currently enter that trampoline.  The
+FW_DYNAMIC handoff selects hart 0 for relocation, and an OpenSBI configuration
+node restricts its subsequent cold-boot lottery to hart 0.  OpenSBI consumes
+that node before the next boot stage.  This makes direct boots deterministic
+while leaving the other harts available for SBI HSM startup; a four-hart
+M-mode test checks the ordered UART transcript from harts 0 through 3.
 
 Storage unit 0 is attached as an eMMC device and unit 1 as a removable SD card.
 Supplying either image makes it accessible to firmware and the operating
 system, but does not select it as the reset boot source.  The reset trampoline
 and OpenSBI convention are not an emulation of the TH1520 mask ROM or reset
 controller.  The physical initial hart states, Core0 TEE mode and secondary
-release sequence remain hardware-validation items.  Boot straps, the
-USB/UART downloader, and mask-ROM booting from eMMC, SD, or QSPI are later
-milestones.
+release sequence remain hardware-validation items.  Boot straps, the USB/UART
+downloader, and mask-ROM selection, parsing and boot from eMMC, SD, or QSPI
+are later milestones.
 
 The board EEPROM defaults to 4096 bytes of ``0xff`` because its factory image
 can contain board-unique data that QEMU must not invent.  A captured 4096-byte
@@ -698,8 +732,8 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the complete board gate passes 100 tests in the normal build and
-99 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
+device tests, the complete board gate passes 109 tests in the normal build and
+108 in both the dependency-minimal and ASan/UBSan builds.  The only conditional
 omission is the keyboard-hotplug test
 because the deliberately minimal configurations exclude ``usb-kbd``; their
 register/reset/DMA/IRQ/migration USB tests still run.  The instrumented C910
