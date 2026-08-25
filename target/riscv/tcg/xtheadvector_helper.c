@@ -4104,15 +4104,19 @@ void HELPER(NAME)(void *vd, void *v0, target_ulong s1, void *vs2,         \
     uint32_t vlmax = (env_archcpu(env)->cfg.vlenb << 3) / mlen;           \
     uint32_t vm = th_vm(desc);                                            \
     uint32_t vl = env->vl;                                                \
-    target_ulong offset = s1, i;                                          \
+    target_ulong offset = s1;                                             \
+    uint32_t i;                                                           \
                                                                           \
     VSTART_CHECK_EARLY_EXIT(env);                                         \
     for (i = env->vstart; i < vl; ++i) {                                  \
-        target_ulong j = i + offset;                                      \
         if (!vm && !th_elem_mask(v0, mlen, i)) {                          \
             continue;                                                     \
         }                                                                 \
-        *((ETYPE *)vd + H(i)) = j >= vlmax ? 0 : *((ETYPE *)vs2 + H(j));  \
+        if (offset >= vlmax || i >= vlmax - offset) {                     \
+            *((ETYPE *)vd + H(i)) = 0;                                    \
+        } else {                                                          \
+            *((ETYPE *)vd + H(i)) = *((ETYPE *)vs2 + H(i + offset));      \
+        }                                                                 \
     }                                                                     \
     env->vstart = 0;                                                      \
     CLEAR_FN(vd, vl, vl * sizeof(ETYPE), vlmax * sizeof(ETYPE));          \
@@ -4227,7 +4231,8 @@ void HELPER(NAME)(void *vd, void *v0, target_ulong s1, void *vs2,         \
     uint32_t vlmax = (env_archcpu(env)->cfg.vlenb << 3) / mlen;           \
     uint32_t vm = th_vm(desc);                                            \
     uint32_t vl = env->vl;                                                \
-    uint32_t index = s1, i;                                               \
+    target_ulong index = s1;                                              \
+    uint32_t i;                                                           \
                                                                           \
     VSTART_CHECK_EARLY_EXIT(env);                                         \
     for (i = env->vstart; i < vl; i++) {                                  \

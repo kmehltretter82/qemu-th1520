@@ -133,6 +133,12 @@ test-xtheadvector-reduction: test-xtheadvector-reduction.o
 run-test-xtheadvector-reduction: test-xtheadvector-reduction
 	$(call run-test, $<, $(QEMU) -cpu thead-c910 $(QEMU_OPTS)$<)
 
+EXTRA_RUNS += run-test-xtheadvector-permute
+test-xtheadvector-permute: test-xtheadvector-permute.o
+run-test-xtheadvector-permute: test-xtheadvector-permute
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 EXTRA_RUNS += run-test-rvv-widen-illegal
 test-rvv-widen-illegal: test-rvv-widen-illegal.o
 run-test-rvv-widen-illegal: test-rvv-widen-illegal
