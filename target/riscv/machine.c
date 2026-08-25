@@ -105,7 +105,14 @@ static int thead_c910_csr_post_load(void *opaque, int version_id)
 {
     RISCVCPU *cpu = opaque;
     CPURISCVState *env = &cpu->env;
-    bool pending = env->th_mcounterinten & env->th_mcounterof;
+    bool pending;
+
+    /* Version 1 did not carry the interrupt-enable or overflow fields. */
+    if (version_id < 2) {
+        env->th_mcounterinten = 0;
+        env->th_mcounterof = 0;
+    }
+    pending = env->th_mcounterinten & env->th_mcounterof;
 
 #ifdef CONFIG_TCG
     riscv_thead_c910_csr_post_load(env, version_id);
