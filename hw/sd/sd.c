@@ -166,6 +166,7 @@ struct SDState {
     uint64_t rpmb_part_size;
     BlockBackend *blk;
     uint8_t boot_config;
+    bool emmc_5_1_hs400_1_8v;
 
     const SDProto *proto;
 
@@ -535,11 +536,21 @@ static void emmc_set_ext_csd(SDState *sd, uint64_t size)
     sd->ext_csd[207] = 0x46; /* Min read perf for 4bit@52Mhz */
     sd->ext_csd[206] = 0x46; /* Min write perf for 4bit@26Mhz */
     sd->ext_csd[205] = 0x46; /* Min read perf for 4bit@26Mhz */
-    sd->ext_csd[EXT_CSD_CARD_TYPE] = 0b11;
+    sd->ext_csd[EXT_CSD_CARD_TYPE] = EXT_CSD_CARD_TYPE_HS;
     sd->ext_csd[EXT_CSD_STRUCTURE] = 2;
-    sd->ext_csd[EXT_CSD_REV] = 5;
+    sd->ext_csd[EXT_CSD_REV] = EXT_CSD_REV_4_41;
     sd->ext_csd[EXT_CSD_RPMB_MULT] = sd->rpmb_part_size / (128 * KiB);
     sd->ext_csd[EXT_CSD_PARTITION_SUPPORT] = 0b111;
+
+    if (sd->emmc_5_1_hs400_1_8v) {
+        sd->ext_csd[EXT_CSD_REV] = EXT_CSD_REV_5_1;
+        sd->ext_csd[EXT_CSD_CARD_TYPE] = EXT_CSD_CARD_TYPE_HS |
+            EXT_CSD_CARD_TYPE_DDR_1_8V |
+            EXT_CSD_CARD_TYPE_HS200_1_8V |
+            EXT_CSD_CARD_TYPE_HS400_1_8V;
+        /* The unit of GENERIC_CMD6_TIME is 10 ms; use a safe 500 ms. */
+        sd->ext_csd[EXT_CSD_GENERIC_CMD6_TIME] = 50;
+    }
 
     /* Mode segment (RW) */
     sd->ext_csd[EXT_CSD_PART_CONFIG] = sd->boot_config;
@@ -744,6 +755,37 @@ static const uint8_t sd_tuning_block_pattern4[64] = {
     0xcc, 0x33, 0xcc, 0xcf,     0xff, 0xef, 0xff, 0xee,
     0xff, 0xfd, 0xff, 0xfd,     0xdf, 0xff, 0xbf, 0xff,
     0xbb, 0xff, 0xf7, 0xff,     0xf7, 0x7f, 0x7b, 0xde
+};
+
+/* Standard eMMC HS200 tuning blocks for 4-bit and 8-bit buses. */
+static const uint8_t emmc_tuning_block_pattern4[64] = {
+    0xff, 0x0f, 0xff, 0x00,     0xff, 0xcc, 0xc3, 0xcc,
+    0xc3, 0x3c, 0xcc, 0xff,     0xfe, 0xff, 0xfe, 0xef,
+    0xff, 0xdf, 0xff, 0xdd,     0xff, 0xfb, 0xff, 0xfb,
+    0xbf, 0xff, 0x7f, 0xff,     0x77, 0xf7, 0xbd, 0xef,
+    0xff, 0xf0, 0xff, 0xf0,     0x0f, 0xfc, 0xcc, 0x3c,
+    0xcc, 0x33, 0xcc, 0xcf,     0xff, 0xef, 0xff, 0xee,
+    0xff, 0xfd, 0xff, 0xfd,     0xdf, 0xff, 0xbf, 0xff,
+    0xbb, 0xff, 0xf7, 0xff,     0xf7, 0x7f, 0x7b, 0xde
+};
+
+static const uint8_t emmc_tuning_block_pattern8[128] = {
+    0xff, 0xff, 0x00, 0xff,     0xff, 0xff, 0x00, 0x00,
+    0xff, 0xff, 0xcc, 0xcc,     0xcc, 0x33, 0xcc, 0xcc,
+    0xcc, 0x33, 0x33, 0xcc,     0xcc, 0xcc, 0xff, 0xff,
+    0xff, 0xee, 0xff, 0xff,     0xff, 0xee, 0xee, 0xff,
+    0xff, 0xff, 0xdd, 0xff,     0xff, 0xff, 0xdd, 0xdd,
+    0xff, 0xff, 0xff, 0xbb,     0xff, 0xff, 0xff, 0xbb,
+    0xbb, 0xff, 0xff, 0xff,     0x77, 0xff, 0xff, 0xff,
+    0x77, 0x77, 0xff, 0x77,     0xbb, 0xdd, 0xee, 0xff,
+    0xff, 0xff, 0xff, 0x00,     0xff, 0xff, 0xff, 0x00,
+    0x00, 0xff, 0xff, 0xcc,     0xcc, 0xcc, 0x33, 0xcc,
+    0xcc, 0xcc, 0x33, 0x33,     0xcc, 0xcc, 0xcc, 0xff,
+    0xff, 0xff, 0xee, 0xff,     0xff, 0xff, 0xee, 0xee,
+    0xff, 0xff, 0xff, 0xdd,     0xff, 0xff, 0xff, 0xdd,
+    0xdd, 0xff, 0xff, 0xff,     0xbb, 0xff, 0xff, 0xff,
+    0xbb, 0xbb, 0xff, 0xff,     0xff, 0x77, 0xff, 0xff,
+    0xff, 0x77, 0x77, 0xff,     0x77, 0xbb, 0xdd, 0xee
 };
 
 static int sd_req_crc_validate(SDRequest *req)
@@ -1399,6 +1441,77 @@ enum ExtCsdAccessMode {
     EXT_CSD_ACCESS_MODE_WRITE_BYTE  = 3
 };
 
+static bool emmc_bus_width_valid(SDState *sd, uint8_t bus_width)
+{
+    uint8_t card_type = sd->ext_csd[EXT_CSD_CARD_TYPE];
+    uint8_t timing = sd->ext_csd[EXT_CSD_HS_TIMING] &
+                     EXT_CSD_TIMING_MASK;
+
+    if (timing == EXT_CSD_TIMING_HS200 &&
+        bus_width != EXT_CSD_BUS_WIDTH_4 &&
+        bus_width != EXT_CSD_BUS_WIDTH_8) {
+        return false;
+    }
+    if (timing == EXT_CSD_TIMING_HS400 &&
+        bus_width != EXT_CSD_DDR_BUS_WIDTH_8) {
+        return false;
+    }
+
+    switch (bus_width) {
+    case EXT_CSD_BUS_WIDTH_1:
+    case EXT_CSD_BUS_WIDTH_4:
+    case EXT_CSD_BUS_WIDTH_8:
+        return true;
+    case EXT_CSD_DDR_BUS_WIDTH_4:
+    case EXT_CSD_DDR_BUS_WIDTH_8:
+        return timing == EXT_CSD_TIMING_HS &&
+               (card_type & EXT_CSD_CARD_TYPE_DDR_52);
+    default:
+        return false;
+    }
+}
+
+static bool emmc_hs_timing_valid(SDState *sd, uint8_t hs_timing)
+{
+    uint8_t card_type = sd->ext_csd[EXT_CSD_CARD_TYPE];
+    uint8_t bus_width = sd->ext_csd[EXT_CSD_BUS_WIDTH];
+
+    /* This profile advertises only the default Type 0 driver strength. */
+    if (hs_timing >> EXT_CSD_DRV_STR_SHIFT) {
+        return false;
+    }
+
+    switch (hs_timing & EXT_CSD_TIMING_MASK) {
+    case EXT_CSD_TIMING_BC:
+        return bus_width == EXT_CSD_BUS_WIDTH_1 ||
+               bus_width == EXT_CSD_BUS_WIDTH_4 ||
+               bus_width == EXT_CSD_BUS_WIDTH_8;
+    case EXT_CSD_TIMING_HS:
+        if (!(card_type & EXT_CSD_CARD_TYPE_HS)) {
+            return false;
+        }
+        if (bus_width == EXT_CSD_BUS_WIDTH_1 ||
+            bus_width == EXT_CSD_BUS_WIDTH_4 ||
+            bus_width == EXT_CSD_BUS_WIDTH_8) {
+            return true;
+        }
+        return (bus_width == EXT_CSD_DDR_BUS_WIDTH_4 ||
+                bus_width == EXT_CSD_DDR_BUS_WIDTH_8) &&
+               (card_type & EXT_CSD_CARD_TYPE_DDR_52);
+    case EXT_CSD_TIMING_HS200:
+        return (card_type & EXT_CSD_CARD_TYPE_HS200) &&
+               (bus_width == EXT_CSD_BUS_WIDTH_4 ||
+                bus_width == EXT_CSD_BUS_WIDTH_8);
+    case EXT_CSD_TIMING_HS400:
+        return (card_type & EXT_CSD_CARD_TYPE_HS400) &&
+               (sd->ext_csd[EXT_CSD_HS_TIMING] & EXT_CSD_TIMING_MASK) ==
+               EXT_CSD_TIMING_HS &&
+               bus_width == EXT_CSD_DDR_BUS_WIDTH_8;
+    default:
+        return false;
+    }
+}
+
 static void emmc_function_switch(SDState *sd, uint32_t arg)
 {
     uint8_t access = extract32(arg, 24, 2);
@@ -1440,6 +1553,26 @@ static void emmc_function_switch(SDState *sd, uint32_t arg)
             sd->card_status |= R_CSR_SWITCH_ERROR_MASK;
             return;
         }
+    }
+
+    if (sd->emmc_5_1_hs400_1_8v &&
+        index == EXT_CSD_STROBE_SUPPORT) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "MMC switching read-only EXT_CSD[%u]\n", index);
+        sd->card_status |= R_CSR_SWITCH_ERROR_MASK;
+        return;
+    }
+
+    if (sd->emmc_5_1_hs400_1_8v &&
+        ((index == EXT_CSD_BUS_WIDTH &&
+          !emmc_bus_width_valid(sd, b)) ||
+         (index == EXT_CSD_HS_TIMING &&
+          !emmc_hs_timing_valid(sd, b)))) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "MMC switching EXT_CSD[%u] to unsupported value "
+                      "0x%02x\n", index, b);
+        sd->card_status |= R_CSR_SWITCH_ERROR_MASK;
+        return;
     }
 
     trace_sdcard_ext_csd_update(index, sd->ext_csd[index], b);
@@ -1999,6 +2132,34 @@ static sd_rsp_type_t sd_cmd_SEND_TUNING_BLOCK(SDState *sd, SDRequest req)
     return sd_cmd_to_sendingdata(sd, req, 0,
                                  sd_tuning_block_pattern4,
                                  sizeof(sd_tuning_block_pattern4));
+}
+
+/* CMD21 */
+static sd_rsp_type_t emmc_cmd_SEND_TUNING_BLOCK(SDState *sd, SDRequest req)
+{
+    const uint8_t *pattern;
+    size_t pattern_size;
+
+    if (!sd->emmc_5_1_hs400_1_8v || req.arg != 0 ||
+        (sd->ext_csd[EXT_CSD_HS_TIMING] & EXT_CSD_TIMING_MASK) !=
+        EXT_CSD_TIMING_HS200) {
+        return sd_cmd_illegal(sd, req);
+    }
+
+    switch (sd->ext_csd[EXT_CSD_BUS_WIDTH]) {
+    case EXT_CSD_BUS_WIDTH_4:
+        pattern = emmc_tuning_block_pattern4;
+        pattern_size = sizeof(emmc_tuning_block_pattern4);
+        break;
+    case EXT_CSD_BUS_WIDTH_8:
+        pattern = emmc_tuning_block_pattern8;
+        pattern_size = sizeof(emmc_tuning_block_pattern8);
+        break;
+    default:
+        return sd_cmd_illegal(sd, req);
+    }
+
+    return sd_cmd_to_sendingdata(sd, req, 0, pattern, pattern_size);
 }
 
 /* CMD23 */
@@ -2596,6 +2757,16 @@ send_response:
     default:
         g_assert_not_reached();
     }
+
+    /*
+     * A failed eMMC SWITCH reports SWITCH_ERROR in its own R1b and in the
+     * following SEND_STATUS response.  Clear it after constructing that
+     * response so a second SEND_STATUS observes a clean status.
+     */
+    if (sd->emmc_5_1_hs400_1_8v && req->cmd == 13 &&
+        (rtype == sd_r1 || rtype == sd_r1b)) {
+        sd->card_status &= ~R_CSR_SWITCH_ERROR_MASK;
+    }
     trace_sdcard_response(sd_response_name(rtype), rsplen);
 
     if (rtype != sd_illegal) {
@@ -2843,6 +3014,7 @@ static size_t sd_read_data(SDState *sd, void *buf, size_t length)
     case 13: /* ACMD13: SD_STATUS */
     case 17: /* CMD17:  READ_SINGLE_BLOCK */
     case 19: /* CMD19:  SEND_TUNING_BLOCK (SD) */
+    case 21: /* CMD21:  SEND_TUNING_BLOCK (eMMC) */
     case 22: /* ACMD22: SEND_NUM_WR_BLOCKS */
     case 30: /* CMD30:  SEND_WRITE_PROT */
     case 51: /* ACMD51: SEND_SCR */
@@ -3015,7 +3187,7 @@ static const SDProto sd_proto_sd = {
 };
 
 static const SDProto sd_proto_emmc = {
-    /* Only v4.3 is supported */
+    /* v4.41 by default; boards may opt in to the v5.1 speed profile. */
     .name = "eMMC",
     .cmd = {
         [0]  = {0,  sd_bc,   "GO_IDLE_STATE", sd_cmd_GO_IDLE_STATE},
@@ -3038,6 +3210,7 @@ static const SDProto sd_proto_emmc = {
         [17] = {2,  sd_adtc, "READ_SINGLE_BLOCK", sd_cmd_READ_SINGLE_BLOCK},
         [19] = {0,  sd_adtc, "BUSTEST_W", sd_cmd_unimplemented},
         [20] = {3,  sd_adtc, "WRITE_DAT_UNTIL_STOP", sd_cmd_unimplemented},
+        [21] = {10, sd_adtc, "SEND_TUNING_BLOCK", emmc_cmd_SEND_TUNING_BLOCK},
         [23] = {2,  sd_ac,   "SET_BLOCK_COUNT", sd_cmd_SET_BLOCK_COUNT},
         [24] = {4,  sd_adtc, "WRITE_SINGLE_BLOCK", sd_cmd_WRITE_SINGLE_BLOCK},
         [26] = {4,  sd_adtc, "PROGRAM_CID", emmc_cmd_PROGRAM_CID},
@@ -3218,6 +3391,8 @@ static const Property emmc_properties[] = {
     DEFINE_PROP_UINT8("boot-config", SDState, boot_config, 0x0),
     DEFINE_PROP_UINT64("rpmb-partition-size", SDState, rpmb_part_size, 0),
     DEFINE_PROP_STRING("auth-key", SDState, preset_auth_key),
+    DEFINE_PROP_BOOL("emmc-5.1-hs400-1.8v", SDState,
+                     emmc_5_1_hs400_1_8v, false),
 };
 
 static void sdmmc_common_class_init(ObjectClass *klass, const void *data)

@@ -596,8 +596,31 @@
 
 #define DWCMSHC_TEST_IMAGE_SIZE    (1 * MiB)
 #define DWCMSHC_BLOCK_SIZE         512
+#define DWCMSHC_EMMC_TUNING_SIZE_4BIT 64
+#define DWCMSHC_EMMC_TUNING_SIZE   128
 #define DWCMSHC_ADMA_DESC_ADDR     (TH1520_SRAM_BASE + 0x10000)
 #define DWCMSHC_ADMA_DATA_ADDR     (TH1520_SRAM_BASE + 0x20000)
+
+#define EMMC_EXT_CSD_BUS_WIDTH         183
+#define EMMC_EXT_CSD_STROBE_SUPPORT    184
+#define EMMC_EXT_CSD_HS_TIMING         185
+#define EMMC_EXT_CSD_REV               192
+#define EMMC_EXT_CSD_CARD_TYPE         196
+#define EMMC_EXT_CSD_GENERIC_CMD6_TIME 248
+
+#define EMMC_BUS_WIDTH_1               0x00
+#define EMMC_BUS_WIDTH_4               0x01
+#define EMMC_BUS_WIDTH_8               0x02
+#define EMMC_BUS_WIDTH_DDR_8           0x06
+#define EMMC_BUS_WIDTH_DDR_8_STROBE    0x86
+#define EMMC_HS_TIMING_LEGACY          0x00
+#define EMMC_HS_TIMING_HS              0x01
+#define EMMC_HS_TIMING_HS200           0x02
+#define EMMC_HS_TIMING_HS400           0x03
+#define EMMC_STATUS_SWITCH_ERROR       BIT(7)
+
+#define DWCMSHC_UHS_MODE_HS200         3
+#define DWCMSHC_UHS_MODE_HS400         5
 
 #define DMAC_ID                    0x000
 #define DMAC_COMPONENT_VERSION     0x008
@@ -7407,6 +7430,171 @@ static void dwcmshc_init_emmc(QTestState *qts, uint64_t base)
                    SDHC_SELECT_DESELECT_CARD | SDHC_CMD_RESPONSE);
 }
 
+static const uint8_t dwcmshc_emmc_tuning_pattern[] = {
+    0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00,
+    0xff, 0xff, 0xcc, 0xcc, 0xcc, 0x33, 0xcc, 0xcc,
+    0xcc, 0x33, 0x33, 0xcc, 0xcc, 0xcc, 0xff, 0xff,
+    0xff, 0xee, 0xff, 0xff, 0xff, 0xee, 0xee, 0xff,
+    0xff, 0xff, 0xdd, 0xff, 0xff, 0xff, 0xdd, 0xdd,
+    0xff, 0xff, 0xff, 0xbb, 0xff, 0xff, 0xff, 0xbb,
+    0xbb, 0xff, 0xff, 0xff, 0x77, 0xff, 0xff, 0xff,
+    0x77, 0x77, 0xff, 0x77, 0xbb, 0xdd, 0xee, 0xff,
+    0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0x00,
+    0x00, 0xff, 0xff, 0xcc, 0xcc, 0xcc, 0x33, 0xcc,
+    0xcc, 0xcc, 0x33, 0x33, 0xcc, 0xcc, 0xcc, 0xff,
+    0xff, 0xff, 0xee, 0xff, 0xff, 0xff, 0xee, 0xee,
+    0xff, 0xff, 0xff, 0xdd, 0xff, 0xff, 0xff, 0xdd,
+    0xdd, 0xff, 0xff, 0xff, 0xbb, 0xff, 0xff, 0xff,
+    0xbb, 0xbb, 0xff, 0xff, 0xff, 0x77, 0xff, 0xff,
+    0xff, 0x77, 0x77, 0xff, 0x77, 0xbb, 0xdd, 0xee,
+};
+
+QEMU_BUILD_BUG_ON(sizeof(dwcmshc_emmc_tuning_pattern) !=
+                  DWCMSHC_EMMC_TUNING_SIZE);
+
+static const uint8_t dwcmshc_emmc_tuning_pattern_4bit[] = {
+    0xff, 0x0f, 0xff, 0x00, 0xff, 0xcc, 0xc3, 0xcc,
+    0xc3, 0x3c, 0xcc, 0xff, 0xfe, 0xff, 0xfe, 0xef,
+    0xff, 0xdf, 0xff, 0xdd, 0xff, 0xfb, 0xff, 0xfb,
+    0xbf, 0xff, 0x7f, 0xff, 0x77, 0xf7, 0xbd, 0xef,
+    0xff, 0xf0, 0xff, 0xf0, 0x0f, 0xfc, 0xcc, 0x3c,
+    0xcc, 0x33, 0xcc, 0xcf, 0xff, 0xef, 0xff, 0xee,
+    0xff, 0xfd, 0xff, 0xfd, 0xdf, 0xff, 0xbf, 0xff,
+    0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde,
+};
+
+QEMU_BUILD_BUG_ON(sizeof(dwcmshc_emmc_tuning_pattern_4bit) !=
+                  DWCMSHC_EMMC_TUNING_SIZE_4BIT);
+
+static const uint8_t dwcmshc_sd_tuning_pattern[] = {
+    0xff, 0x0f, 0xff, 0x00, 0x0f, 0xfc, 0xc3, 0xcc,
+    0xc3, 0x3c, 0xcc, 0xff, 0xfe, 0xff, 0xfe, 0xef,
+    0xff, 0xdf, 0xff, 0xdd, 0xff, 0xfb, 0xff, 0xfb,
+    0xbf, 0xff, 0x7f, 0xff, 0x77, 0xf7, 0xbd, 0xef,
+    0xff, 0xf0, 0xff, 0xf0, 0x0f, 0xfc, 0xcc, 0x3c,
+    0xcc, 0x33, 0xcc, 0xcf, 0xff, 0xef, 0xff, 0xee,
+    0xff, 0xfd, 0xff, 0xfd, 0xdf, 0xff, 0xbf, 0xff,
+    0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde,
+};
+
+QEMU_BUILD_BUG_ON(sizeof(dwcmshc_sd_tuning_pattern) !=
+                  DWCMSHC_EMMC_TUNING_SIZE_4BIT);
+
+static void dwcmshc_read_fifo(QTestState *qts, uint64_t base,
+                              uint8_t *data, size_t size)
+{
+    g_assert_cmpuint(size % sizeof(uint32_t), ==, 0);
+
+    for (size_t i = 0; i < size; i += sizeof(uint32_t)) {
+        stl_le_p(&data[i], qtest_readl(qts, base + SDHC_BDATA));
+    }
+}
+
+static void dwcmshc_read_ext_csd(QTestState *qts, uint64_t base,
+                                 uint8_t ext_csd[DWCMSHC_BLOCK_SIZE])
+{
+    sdhci_cmd_regs(qts, base, DWCMSHC_BLOCK_SIZE, 1, 0,
+                   SDHC_TRNS_READ | SDHC_TRNS_BLK_CNT_EN,
+                   (8 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+    dwcmshc_read_fifo(qts, base, ext_csd, DWCMSHC_BLOCK_SIZE);
+}
+
+static uint32_t dwcmshc_emmc_switch(QTestState *qts, uint64_t base,
+                                    uint8_t index, uint8_t value)
+{
+    uint32_t argument = (3U << 24) | (index << 16) | (value << 8);
+
+    sdhci_cmd_regs(qts, base, 0, 0, argument, 0,
+                   (6 << 8) | SDHC_CMD_RESPONSE);
+    return qtest_readl(qts, base + SDHC_RSPREG0);
+}
+
+static uint32_t dwcmshc_emmc_status(QTestState *qts, uint64_t base)
+{
+    sdhci_cmd_regs(qts, base, 0, 0, 1 << 16, 0,
+                   (13 << 8) | SDHC_CMD_RESPONSE);
+    return qtest_readl(qts, base + SDHC_RSPREG0);
+}
+
+static void dwcmshc_emmc_switch_ok(QTestState *qts, uint64_t base,
+                                   uint8_t index, uint8_t value)
+{
+    g_assert_cmphex(dwcmshc_emmc_switch(qts, base, index, value) &
+                    EMMC_STATUS_SWITCH_ERROR, ==, 0);
+}
+
+static void dwcmshc_emmc_switch_rejected(QTestState *qts, uint64_t base,
+                                         uint8_t index, uint8_t value)
+{
+    uint32_t response = dwcmshc_emmc_switch(qts, base, index, value);
+
+    g_assert_cmphex(response & EMMC_STATUS_SWITCH_ERROR, ==,
+                    EMMC_STATUS_SWITCH_ERROR);
+    response = dwcmshc_emmc_status(qts, base);
+    g_assert_cmphex(response & EMMC_STATUS_SWITCH_ERROR, ==,
+                    EMMC_STATUS_SWITCH_ERROR);
+    response = dwcmshc_emmc_status(qts, base);
+    g_assert_cmphex(response & EMMC_STATUS_SWITCH_ERROR, ==, 0);
+}
+
+static void dwcmshc_assert_emmc_mode(QTestState *qts, uint64_t base,
+                                     uint8_t bus_width, uint8_t hs_timing)
+{
+    uint8_t ext_csd[DWCMSHC_BLOCK_SIZE];
+
+    dwcmshc_read_ext_csd(qts, base, ext_csd);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_BUS_WIDTH], ==, bus_width);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_HS_TIMING], ==, hs_timing);
+}
+
+static void dwcmshc_emmc_enter_hs200(QTestState *qts, uint64_t base)
+{
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_BUS_WIDTH,
+                           EMMC_BUS_WIDTH_8);
+    qtest_writeb(qts, base + SDHC_HOSTCTL,
+                 qtest_readb(qts, base + SDHC_HOSTCTL) |
+                 SDHC_CTRL_8BITBUS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS200);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_8,
+                             EMMC_HS_TIMING_HS200);
+}
+
+static void dwcmshc_issue_emmc_tuning(QTestState *qts, uint64_t base,
+                                      uint16_t size)
+{
+    sdhci_cmd_regs(qts, base, size, 0, 0, SDHC_TRNS_READ,
+                   (21 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+}
+
+static void dwcmshc_read_emmc_tuning_pattern(QTestState *qts, uint64_t base,
+                                             const uint8_t *expected,
+                                             size_t size)
+{
+    uint8_t actual[DWCMSHC_EMMC_TUNING_SIZE];
+
+    g_assert_cmpuint(size, <=, sizeof(actual));
+    dwcmshc_issue_emmc_tuning(qts, base, size);
+    dwcmshc_read_fifo(qts, base, actual, size);
+    g_assert_cmpmem(actual, size, expected, size);
+}
+
+static void dwcmshc_read_emmc_tuning(QTestState *qts, uint64_t base)
+{
+    dwcmshc_read_emmc_tuning_pattern(qts, base,
+                                     dwcmshc_emmc_tuning_pattern,
+                                     sizeof(dwcmshc_emmc_tuning_pattern));
+}
+
+static void dwcmshc_issue_sd_tuning(QTestState *qts, uint64_t base,
+                                    uint16_t size)
+{
+    sdhci_cmd_regs(qts, base, size, 0, 0, SDHC_TRNS_READ,
+                   (19 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+}
+
 static void dwcmshc_pio_read_block(QTestState *qts, uint64_t base,
                                     uint32_t argument, uint8_t *data)
 {
@@ -7459,6 +7647,239 @@ static void test_dwcmshc_emmc_pio(void)
     g_assert_cmpint(read(fd, actual, sizeof(actual)), ==, sizeof(actual));
     close(fd);
     g_assert_cmpmem(actual, sizeof(actual), replacement, sizeof(replacement));
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_dwcmshc_sd_tuning(void)
+{
+    const uint64_t base = TH1520_SDIO0_BASE;
+    const uint16_t tuning_bits = R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
+                                 R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK;
+    uint8_t actual[sizeof(dwcmshc_sd_tuning_pattern)];
+    g_autofree char *path = dwcmshc_create_image(NULL, 0);
+    QTestState *qts = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=1,file=%s,format=raw,auto-read-only=off",
+        path);
+
+    dwcmshc_init_sd(qts, base);
+    qtest_writeb(qts, base + SDHC_HOSTCTL,
+                 qtest_readb(qts, base + SDHC_HOSTCTL) |
+                 SDHC_CTRL_4BITBUS);
+
+    /* CMD19 exposes the SD-specific 64-byte pattern during normal PIO. */
+    dwcmshc_issue_sd_tuning(qts, base, sizeof(actual));
+    dwcmshc_read_fifo(qts, base, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), dwcmshc_sd_tuning_pattern,
+                    sizeof(dwcmshc_sd_tuning_pattern));
+
+    /* Execute Tuning consumes that block internally and marks it sampled. */
+    qtest_writew(qts, base + SDHC_NORINTSTS, UINT16_MAX);
+    qtest_writew(qts, base + SDHC_NORINTSTSEN, SDHC_NISEN_RBUFRDY);
+    qtest_writew(qts, base + SDHC_HOSTCTL2,
+                 R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    dwcmshc_issue_sd_tuning(qts, base, sizeof(actual));
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2) & tuning_bits, ==,
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_NORINTSTS) &
+                    (SDHC_NIS_CMDCMP | SDHC_NIS_TRSCMP |
+                     SDHC_NIS_RBUFRDY), ==, SDHC_NIS_RBUFRDY);
+    g_assert_cmphex(qtest_readl(qts, base + SDHC_PRNSTS) &
+                    (SDHC_DATA_AVAILABLE | SDHC_DATA_INHIBIT |
+                     SDHC_DAT_LINE_ACTIVE | SDHC_DOING_READ), ==, 0);
+
+    /* A short CMD19 transfer must not produce a false tuning success. */
+    qtest_system_reset(qts);
+    dwcmshc_init_sd(qts, base);
+    qtest_writew(qts, base + SDHC_NORINTSTSEN, SDHC_NISEN_RBUFRDY);
+    qtest_writew(qts, base + SDHC_HOSTCTL2,
+                 R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    dwcmshc_issue_sd_tuning(qts, base, sizeof(actual) / 2);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2) & tuning_bits, ==,
+                    R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    g_assert_true(qtest_readl(qts, base + SDHC_PRNSTS) &
+                  SDHC_DATA_AVAILABLE);
+
+    /* An ordinary data command cannot satisfy Execute Tuning either. */
+    qtest_system_reset(qts);
+    dwcmshc_init_sd(qts, base);
+    qtest_writew(qts, base + SDHC_HOSTCTL2,
+                 R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    sdhci_cmd_regs(qts, base, sizeof(actual), 0, 0, SDHC_TRNS_READ,
+                   (17 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2) & tuning_bits, ==,
+                    R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    g_assert_true(qtest_readl(qts, base + SDHC_PRNSTS) &
+                  SDHC_DATA_AVAILABLE);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void test_dwcmshc_emmc_hs400_profile(void)
+{
+    const uint64_t base = TH1520_EMMC_BASE;
+    const uint16_t tuning_bits = R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
+                                 R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK;
+    const uint32_t transfer_state = SDHC_DATA_INHIBIT |
+                                    SDHC_DAT_LINE_ACTIVE |
+                                    SDHC_DOING_READ |
+                                    SDHC_DATA_AVAILABLE;
+    uint8_t ext_csd[DWCMSHC_BLOCK_SIZE];
+    g_autofree char *path = dwcmshc_create_image(NULL, 0);
+    QTestState *qts = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off",
+        path);
+    uint16_t hostctl2;
+    uint8_t hostctl1;
+
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_EMMC_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_EMMC_IRQ, true);
+
+    dwcmshc_init_emmc(qts, base);
+    dwcmshc_read_ext_csd(qts, base, ext_csd);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_REV], ==, 8);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_CARD_TYPE], ==, 0x57);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_GENERIC_CMD6_TIME], ==, 0x32);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_STROBE_SUPPORT], ==, 0);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_BUS_WIDTH], ==,
+                    EMMC_BUS_WIDTH_1);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_HS_TIMING], ==,
+                    EMMC_HS_TIMING_LEGACY);
+
+    /* STROBE_SUPPORT is read-only and stays at the unadvertised value. */
+    dwcmshc_emmc_switch_rejected(qts, base,
+                                  EMMC_EXT_CSD_STROBE_SUPPORT, 1);
+    dwcmshc_read_ext_csd(qts, base, ext_csd);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_STROBE_SUPPORT], ==, 0);
+
+    /* DDR width and HS400 are illegal directly from legacy timing. */
+    dwcmshc_emmc_switch_rejected(qts, base, EMMC_EXT_CSD_BUS_WIDTH,
+                                  EMMC_BUS_WIDTH_DDR_8);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_1,
+                             EMMC_HS_TIMING_LEGACY);
+    dwcmshc_emmc_switch_rejected(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                                  EMMC_HS_TIMING_HS400);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_1,
+                             EMMC_HS_TIMING_LEGACY);
+
+    /* CMD21 selects the 64-byte pattern while the card is four bits wide. */
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_BUS_WIDTH,
+                           EMMC_BUS_WIDTH_4);
+    hostctl1 = qtest_readb(qts, base + SDHC_HOSTCTL);
+    hostctl1 &= ~SDHC_CTRL_8BITBUS;
+    qtest_writeb(qts, base + SDHC_HOSTCTL, hostctl1 | SDHC_CTRL_4BITBUS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS200);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_4,
+                             EMMC_HS_TIMING_HS200);
+    dwcmshc_read_emmc_tuning_pattern(qts, base,
+                                     dwcmshc_emmc_tuning_pattern_4bit,
+                                     sizeof(dwcmshc_emmc_tuning_pattern_4bit));
+
+    /* Return through HS before selecting the eight-bit HS200 mode. */
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_BUS_WIDTH,
+                           EMMC_BUS_WIDTH_8);
+    hostctl1 = qtest_readb(qts, base + SDHC_HOSTCTL);
+    hostctl1 &= ~SDHC_CTRL_4BITBUS;
+    qtest_writeb(qts, base + SDHC_HOSTCTL, hostctl1 | SDHC_CTRL_8BITBUS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS200);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_8,
+                             EMMC_HS_TIMING_HS200);
+    dwcmshc_read_emmc_tuning(qts, base);
+
+    /*
+     * During Execute Tuning, SDHCI consumes the card's fixed tuning block
+     * internally and reports only Buffer Read Ready.  No FIFO data or normal
+     * transfer state is exposed to software.
+     */
+    qtest_writew(qts, base + SDHC_NORINTSTS, UINT16_MAX);
+    qtest_writew(qts, base + SDHC_NORINTSTSEN, SDHC_NISEN_RBUFRDY);
+    qtest_writew(qts, base + SDHC_NORINTSIGEN, SDHC_NIS_RBUFRDY);
+    qtest_writew(qts, base + SDHC_HOSTCTL2,
+                  DWCMSHC_UHS_MODE_HS200 |
+                  R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    dwcmshc_issue_emmc_tuning(qts, base, DWCMSHC_EMMC_TUNING_SIZE);
+
+    hostctl2 = qtest_readw(qts, base + SDHC_HOSTCTL2);
+    g_assert_cmphex(hostctl2 & tuning_bits, ==,
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+    g_assert_cmphex(hostctl2 & R_SDHC_HOSTCTL2_UHS_MODE_SEL_MASK, ==,
+                    DWCMSHC_UHS_MODE_HS200);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_NORINTSTS) &
+                    (SDHC_NIS_CMDCMP | SDHC_NIS_TRSCMP |
+                     SDHC_NIS_RBUFRDY), ==, SDHC_NIS_RBUFRDY);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_ERRINTSTS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + SDHC_PRNSTS) & transfer_state,
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + SDHC_BDATA), ==, 0);
+    g_assert_true(c900_plic_pending(qts, TH1520_EMMC_IRQ));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_EMMC_IRQ);
+    assert_no_irq(qts);
+
+    /* A data-line reset clears the tuning IRQ, but not the tuned clock. */
+    qtest_writeb(qts, base + SDHC_SWRST, SDHC_RESET_DATA);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_NORINTSTS) &
+                    SDHC_NIS_RBUFRDY, ==, 0);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2) & tuning_bits, ==,
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_EMMC_IRQ);
+    g_assert_false(c900_plic_pending(qts, TH1520_EMMC_IRQ));
+    assert_no_irq(qts);
+
+    /* Internal tuning consumption leaves the card ready for another CMD21. */
+    dwcmshc_read_emmc_tuning(qts, base);
+
+    /* A full SDHCI reset clears both tuning-control bits. */
+    qtest_writeb(qts, base + SDHC_SWRST, SDHC_RESET_ALL);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2) & tuning_bits, ==,
+                    0);
+
+    dwcmshc_init_emmc(qts, base);
+    dwcmshc_emmc_enter_hs200(qts, base);
+
+    /* Required HS200 -> HS -> DDR8 -> HS400 transition sequence. */
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_8,
+                             EMMC_HS_TIMING_HS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_BUS_WIDTH,
+                           EMMC_BUS_WIDTH_DDR_8);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_DDR_8,
+                             EMMC_HS_TIMING_HS);
+    dwcmshc_emmc_switch_ok(qts, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS400);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_DDR_8,
+                             EMMC_HS_TIMING_HS400);
+
+    /* Enhanced strobe is not advertised by the Ahead profile. */
+    dwcmshc_emmc_switch_rejected(qts, base, EMMC_EXT_CSD_BUS_WIDTH,
+                                  EMMC_BUS_WIDTH_DDR_8_STROBE);
+    dwcmshc_assert_emmc_mode(qts, base, EMMC_BUS_WIDTH_DDR_8,
+                             EMMC_HS_TIMING_HS400);
+
+    qtest_system_reset(qts);
+    dwcmshc_init_emmc(qts, base);
+    dwcmshc_read_ext_csd(qts, base, ext_csd);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_REV], ==, 8);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_CARD_TYPE], ==, 0x57);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_GENERIC_CMD6_TIME], ==, 0x32);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_STROBE_SUPPORT], ==, 0);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_BUS_WIDTH], ==,
+                    EMMC_BUS_WIDTH_1);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_HS_TIMING], ==,
+                    EMMC_HS_TIMING_LEGACY);
+
+    qtest_quit(qts);
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
@@ -9605,6 +10026,178 @@ static void test_c900_clint_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_dwcmshc_emmc_tuning_migration(void)
+{
+    const uint64_t base = TH1520_EMMC_BASE;
+    g_autofree char *src_image = dwcmshc_create_image(NULL, 0);
+    g_autofree char *mid_image = dwcmshc_create_image(NULL, 0);
+    g_autofree char *dst_image = dwcmshc_create_image(NULL, 0);
+    g_autofree char *final_image = dwcmshc_create_image(NULL, 0);
+    g_autofree char *first_path = NULL;
+    g_autofree char *second_path = NULL;
+    g_autofree char *third_path = NULL;
+    g_autofree char *first_uri = NULL;
+    g_autofree char *second_uri = NULL;
+    g_autofree char *third_uri = NULL;
+    QTestState *src;
+    QTestState *mid;
+    QTestState *dst;
+    QTestState *final;
+    uint8_t ext_csd[DWCMSHC_BLOCK_SIZE];
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-emmc-tuning-1-XXXXXX",
+                         &first_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    fd = g_file_open_tmp("beaglev-ahead-emmc-tuning-2-XXXXXX",
+                         &second_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    fd = g_file_open_tmp("beaglev-ahead-emmc-tuning-3-XXXXXX",
+                         &third_path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    first_uri = g_strdup_printf("file:%s", first_path);
+    second_uri = g_strdup_printf("file:%s", second_path);
+    third_uri = g_strdup_printf("file:%s", third_path);
+
+    src = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off",
+        src_image);
+    mid = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off "
+        "-incoming defer",
+        mid_image);
+
+    dwcmshc_init_emmc(src, base);
+    dwcmshc_emmc_enter_hs200(src, base);
+    qtest_writew(src, base + SDHC_HOSTCTL2, DWCMSHC_UHS_MODE_HS200);
+
+    /* Migrate with one byte consumed from the controller's 128-byte FIFO. */
+    dwcmshc_issue_emmc_tuning(src, base, DWCMSHC_EMMC_TUNING_SIZE);
+    g_assert_cmphex(qtest_readb(src, base + SDHC_BDATA), ==,
+                    dwcmshc_emmc_tuning_pattern[0]);
+    g_assert_true(qtest_readl(src, base + SDHC_PRNSTS) &
+                  SDHC_DATA_AVAILABLE);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", first_uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(mid,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        first_uri);
+    wait_for_migration_complete(mid);
+
+    g_assert_cmphex(qtest_readb(mid, base + SDHC_HOSTCTL) &
+                    SDHC_CTRL_8BITBUS, ==, SDHC_CTRL_8BITBUS);
+    g_assert_cmphex(qtest_readw(mid, base + SDHC_HOSTCTL2) &
+                    R_SDHC_HOSTCTL2_UHS_MODE_SEL_MASK, ==,
+                    DWCMSHC_UHS_MODE_HS200);
+    for (size_t i = 1; i < sizeof(dwcmshc_emmc_tuning_pattern); i++) {
+        g_assert_cmphex(qtest_readb(mid, base + SDHC_BDATA + (i & 3)), ==,
+                        dwcmshc_emmc_tuning_pattern[i]);
+    }
+    g_assert_cmphex(qtest_readl(mid, base + SDHC_PRNSTS) &
+                    (SDHC_DATA_AVAILABLE | SDHC_DATA_INHIBIT |
+                     SDHC_DAT_LINE_ACTIVE | SDHC_DOING_READ), ==, 0);
+    g_assert_cmphex(qtest_readw(mid, base + SDHC_BLKCNT), ==, 0);
+
+    /* The migrated card must accept and complete a fresh fixed-size CMD21. */
+    dwcmshc_read_emmc_tuning(mid, base);
+
+    /* Migrate an armed Execute Tuning request before CMD21 is issued. */
+    qtest_writew(mid, base + SDHC_NORINTSTS, UINT16_MAX);
+    qtest_writew(mid, base + SDHC_NORINTSTSEN, SDHC_NISEN_RBUFRDY);
+    qtest_writew(mid, base + SDHC_NORINTSIGEN, SDHC_NIS_RBUFRDY);
+    qtest_writew(mid, base + SDHC_HOSTCTL2,
+                 DWCMSHC_UHS_MODE_HS200 |
+                 R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+
+    qtest_quit(src);
+    dst = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off "
+        "-incoming defer",
+        dst_image);
+
+    qtest_qmp_assert_success(mid,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", second_uri);
+    wait_for_migration_complete(mid);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        second_uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_HOSTCTL2) &
+                    (R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
+                     R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK), ==,
+                    R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK);
+    dwcmshc_issue_emmc_tuning(dst, base, DWCMSHC_EMMC_TUNING_SIZE);
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_NORINTSTS) &
+                    (SDHC_NIS_CMDCMP | SDHC_NIS_TRSCMP |
+                     SDHC_NIS_RBUFRDY), ==, SDHC_NIS_RBUFRDY);
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_HOSTCTL2) &
+                    (R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK |
+                     R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK), ==,
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+    qtest_writeb(dst, base + SDHC_SWRST, SDHC_RESET_DATA);
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_NORINTSTS) &
+                    SDHC_NIS_RBUFRDY, ==, 0);
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_HOSTCTL2) &
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK, ==,
+                    R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK);
+
+    dwcmshc_emmc_switch_ok(dst, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS);
+    dwcmshc_emmc_switch_ok(dst, base, EMMC_EXT_CSD_BUS_WIDTH,
+                           EMMC_BUS_WIDTH_DDR_8);
+    dwcmshc_emmc_switch_ok(dst, base, EMMC_EXT_CSD_HS_TIMING,
+                           EMMC_HS_TIMING_HS400);
+    qtest_writew(dst, base + SDHC_HOSTCTL2, DWCMSHC_UHS_MODE_HS400);
+    dwcmshc_assert_emmc_mode(dst, base, EMMC_BUS_WIDTH_DDR_8,
+                             EMMC_HS_TIMING_HS400);
+
+    qtest_quit(mid);
+    final = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off "
+        "-incoming defer",
+        final_image);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", third_uri);
+    wait_for_migration_complete(dst);
+    qtest_qmp_assert_success(final,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        third_uri);
+    wait_for_migration_complete(final);
+
+    g_assert_cmphex(qtest_readb(final, base + SDHC_HOSTCTL) &
+                    SDHC_CTRL_8BITBUS, ==, SDHC_CTRL_8BITBUS);
+    g_assert_cmphex(qtest_readw(final, base + SDHC_HOSTCTL2) &
+                    R_SDHC_HOSTCTL2_UHS_MODE_SEL_MASK, ==,
+                    DWCMSHC_UHS_MODE_HS400);
+    dwcmshc_read_ext_csd(final, base, ext_csd);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_BUS_WIDTH], ==,
+                    EMMC_BUS_WIDTH_DDR_8);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_HS_TIMING], ==,
+                    EMMC_HS_TIMING_HS400);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_REV], ==, 8);
+    g_assert_cmphex(ext_csd[EMMC_EXT_CSD_CARD_TYPE], ==, 0x57);
+
+    qtest_quit(final);
+    qtest_quit(dst);
+    g_assert_cmpint(g_unlink(first_path), ==, 0);
+    g_assert_cmpint(g_unlink(second_path), ==, 0);
+    g_assert_cmpint(g_unlink(third_path), ==, 0);
+    g_assert_cmpint(g_unlink(src_image), ==, 0);
+    g_assert_cmpint(g_unlink(mid_image), ==, 0);
+    g_assert_cmpint(g_unlink(dst_image), ==, 0);
+    g_assert_cmpint(g_unlink(final_image), ==, 0);
+}
+
 static void test_dwcmshc_migration(void)
 {
     const uint64_t base = TH1520_EMMC_BASE;
@@ -10357,6 +10950,12 @@ int main(int argc, char **argv)
         }
         qtest_add_func("/beaglev-ahead/dwcmshc/emmc-pio",
                        test_dwcmshc_emmc_pio);
+        qtest_add_func("/beaglev-ahead/dwcmshc/sd-cmd19-tuning",
+                       test_dwcmshc_sd_tuning);
+        qtest_add_func("/beaglev-ahead/dwcmshc/emmc-hs400-profile",
+                       test_dwcmshc_emmc_hs400_profile);
+        qtest_add_func("/beaglev-ahead/dwcmshc/emmc-tuning-migration",
+                       test_dwcmshc_emmc_tuning_migration);
         qtest_add_func("/beaglev-ahead/dwcmshc/v4-64bit-adma",
                        test_dwcmshc_v4_adma);
         qtest_add_func("/beaglev-ahead/dwcmshc/migration",

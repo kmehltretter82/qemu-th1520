@@ -460,23 +460,30 @@ static void sdhci_end_transfer(SDHCIState *s)
 static void sdhci_read_block_from_card(SDHCIState *s)
 {
     const uint16_t blk_size = s->blksize & BLOCK_SIZE_MASK;
+    const unsigned cmd = s->cmdreg >> 8;
+    const bool execute_tuning =
+        FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING);
+    const bool tuning = execute_tuning &&
+        ((cmd == 19 && blk_size == 64) ||
+         (cmd == 21 && blk_size ==
+          ((s->hostctl1 & SDHC_CTRL_8BITBUS) ? 128 : 64)));
 
     if ((s->trnmod & SDHC_TRNS_MULTI) &&
             (s->trnmod & SDHC_TRNS_BLK_CNT_EN) && (s->blkcnt == 0)) {
         return;
     }
 
-    if (!FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
-        /* Device is not in tuning */
-        sdbus_read_data(&s->sdbus, s->fifo_buffer, blk_size);
-    }
+    sdbus_read_data(&s->sdbus, s->fifo_buffer, blk_size);
 
-    if (FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
-        /* Device is in tuning */
+    if (tuning) {
+        /* The controller consumes the tuning block internally. */
         s->hostctl2 &= ~R_SDHC_HOSTCTL2_EXECUTE_TUNING_MASK;
         s->hostctl2 |= R_SDHC_HOSTCTL2_SAMPLING_CLKSEL_MASK;
         s->prnsts &= ~(SDHC_DAT_LINE_ACTIVE | SDHC_DOING_READ |
-                       SDHC_DATA_INHIBIT);
+                       SDHC_DATA_INHIBIT | SDHC_DATA_AVAILABLE);
+        if (s->norintstsen & SDHC_NISEN_RBUFRDY) {
+            s->norintsts |= SDHC_NIS_RBUFRDY;
+        }
         goto read_done;
     }
 
@@ -1332,6 +1339,7 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     case SDHC_CLKCON:
         if (!(mask & 0xFF000000)) {
             sdhci_reset_write(s, value >> 24);
+            sdhci_update_irq(s);
         }
         MASKED_WRITE(s->clkcon, mask, value);
         MASKED_WRITE(s->timeoutcon, mask >> 16, value >> 16);

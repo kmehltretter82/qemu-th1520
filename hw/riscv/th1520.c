@@ -1915,6 +1915,9 @@ static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
         }
 
         card = qdev_new(i == 0 ? TYPE_EMMC : TYPE_SD_CARD);
+        if (i == 0) {
+            qdev_prop_set_bit(card, "emmc-5.1-hs400-1.8v", true);
+        }
         qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
                                 &error_fatal);
         qdev_realize_and_unref(card, s->soc.mshc[i].bus, &error_fatal);

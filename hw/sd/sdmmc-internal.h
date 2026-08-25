@@ -111,6 +111,40 @@ DECLARE_OBJ_CHECKERS(SDState, SDCardClass, SDMMC_COMMON, TYPE_SDMMC_COMMON)
 #define EXT_CSD_HPI_FEATURES            503
 #define EXT_CSD_S_CMD_SET               504
 
+#define EXT_CSD_REV_4_41                       5
+#define EXT_CSD_REV_5_1                        8
+
+#define EXT_CSD_CARD_TYPE_HS_26                (1 << 0)
+#define EXT_CSD_CARD_TYPE_HS_52                (1 << 1)
+#define EXT_CSD_CARD_TYPE_HS                   \
+    (EXT_CSD_CARD_TYPE_HS_26 | EXT_CSD_CARD_TYPE_HS_52)
+#define EXT_CSD_CARD_TYPE_DDR_1_8V             (1 << 2)
+#define EXT_CSD_CARD_TYPE_DDR_1_2V             (1 << 3)
+#define EXT_CSD_CARD_TYPE_DDR_52                \
+    (EXT_CSD_CARD_TYPE_DDR_1_8V | EXT_CSD_CARD_TYPE_DDR_1_2V)
+#define EXT_CSD_CARD_TYPE_HS200_1_8V           (1 << 4)
+#define EXT_CSD_CARD_TYPE_HS200_1_2V           (1 << 5)
+#define EXT_CSD_CARD_TYPE_HS200                 \
+    (EXT_CSD_CARD_TYPE_HS200_1_8V | EXT_CSD_CARD_TYPE_HS200_1_2V)
+#define EXT_CSD_CARD_TYPE_HS400_1_8V           (1 << 6)
+#define EXT_CSD_CARD_TYPE_HS400_1_2V           (1 << 7)
+#define EXT_CSD_CARD_TYPE_HS400                 \
+    (EXT_CSD_CARD_TYPE_HS400_1_8V | EXT_CSD_CARD_TYPE_HS400_1_2V)
+
+#define EXT_CSD_BUS_WIDTH_1                     0
+#define EXT_CSD_BUS_WIDTH_4                     1
+#define EXT_CSD_BUS_WIDTH_8                     2
+#define EXT_CSD_DDR_BUS_WIDTH_4                 5
+#define EXT_CSD_DDR_BUS_WIDTH_8                 6
+#define EXT_CSD_BUS_WIDTH_STROBE                (1 << 7)
+
+#define EXT_CSD_TIMING_BC                       0
+#define EXT_CSD_TIMING_HS                       1
+#define EXT_CSD_TIMING_HS200                    2
+#define EXT_CSD_TIMING_HS400                    3
+#define EXT_CSD_TIMING_MASK                     0xf
+#define EXT_CSD_DRV_STR_SHIFT                   4
+
 #define EXT_CSD_WR_REL_PARAM_EN                 (1 << 2)
 #define EXT_CSD_WR_REL_PARAM_EN_RPMB_REL_WR     (1 << 4)
 
