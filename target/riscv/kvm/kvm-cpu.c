@@ -2044,6 +2044,14 @@ static bool kvm_cpu_realize(CPUState *cs, Error **errp)
     RISCVCPU *cpu = RISCV_CPU(cs);
     int ret;
 
+    if (!riscv_cpu_accelerator_compatible(cpu)) {
+        g_autofree char *name = riscv_cpu_get_name(cpu);
+
+        error_setg(errp, "'%s' CPU is not compatible with KVM acceleration",
+                   name);
+        return false;
+    }
+
     if (riscv_has_ext(&cpu->env, RVV)) {
         ret = prctl(PR_RISCV_V_SET_CONTROL, PR_RISCV_V_VSTATE_CTRL_ON);
         if (ret) {

@@ -103,7 +103,16 @@ typedef enum {
 *----------------------------------------------------------------------------*/
 static inline void float_raise(FloatExceptionFlags flags, float_status *status)
 {
+    FloatExceptionFlags events =
+        flags & (float_flag_invalid | float_flag_divbyzero |
+                 float_flag_overflow | float_flag_underflow |
+                 float_flag_inexact);
+
     status->float_exception_flags |= flags;
+    if (status->track_float_exception_events && events) {
+        status->float_exception_flags_raised |= events;
+        status->track_float_exception_events = false;
+    }
 }
 
 /*----------------------------------------------------------------------------

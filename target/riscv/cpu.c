@@ -1464,6 +1464,11 @@ static void riscv_cpu_unrealize(DeviceState *dev)
 
 bool riscv_cpu_accelerator_compatible(RISCVCPU *cpu)
 {
+    if (kvm_enabled() &&
+        object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910)) {
+        return false;
+    }
+
     if (tcg_enabled()) {
         return riscv_cpu_tcg_compatible(cpu);
     }

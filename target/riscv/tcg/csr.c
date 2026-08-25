@@ -81,7 +81,7 @@ RISCVException smstateen_acc_ok(CPURISCVState *env, int index, uint64_t bit)
 }
 #endif
 
-static RISCVException fs(CPURISCVState *env, int csrno)
+RISCVException riscv_csr_predicate_fs(CPURISCVState *env, int csrno)
 {
 #if !defined(CONFIG_USER_ONLY)
     if (!env->debugger && !riscv_cpu_fp_enabled(env) &&
@@ -6004,7 +6004,7 @@ bool riscv_csr_is_fpu(int csrno)
         return false;
     }
 
-    return csr_ops[csrno].predicate == fs;
+    return csr_ops[csrno].predicate == riscv_csr_predicate_fs;
 }
 
 bool riscv_csr_is_vpu(int csrno)
@@ -6022,9 +6022,12 @@ bool riscv_csr_is_vpu(int csrno)
  */
 riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
     /* User Floating-Point CSRs */
-    [CSR_FFLAGS]   = { "fflags",   fs,     read_fflags,  write_fflags },
-    [CSR_FRM]      = { "frm",      fs,     read_frm,     write_frm    },
-    [CSR_FCSR]     = { "fcsr",     fs,     read_fcsr,    write_fcsr   },
+    [CSR_FFLAGS]   = { "fflags",   riscv_csr_predicate_fs,
+                      read_fflags, write_fflags },
+    [CSR_FRM]      = { "frm",      riscv_csr_predicate_fs,
+                      read_frm, write_frm },
+    [CSR_FCSR]     = { "fcsr",     riscv_csr_predicate_fs,
+                      read_fcsr, write_fcsr },
     /* Vector CSRs */
     [CSR_VSTART]   = { "vstart",   vs,     read_vstart,  write_vstart },
     [CSR_VXSAT]    = { "vxsat",    vs,     read_vxsat,   write_vxsat  },

@@ -403,6 +403,12 @@ typedef enum __attribute__((__packed__)) {
 
 typedef struct float_status {
     FloatExceptionFlags float_exception_flags : 16;
+    /*
+     * Exceptions raised by operations since the target last consumed them.
+     * Unlike float_exception_flags, direct architectural flag writes do not
+     * alter this accumulator.
+     */
+    FloatExceptionFlags float_exception_flags_raised:16;
 
     /*
      * Floating point status controls.
@@ -417,6 +423,8 @@ typedef struct float_status {
     bool flush_inputs_to_zero : 1;
     /* should default nans be produced instead of propagating an input nan? */
     bool default_nan_mode : 1;
+    /* force event-sensitive exception evaluation until an event is raised */
+    bool track_float_exception_events:1;
     /* should overflowed results subtract re_bias to its exponent? */
     bool rebias_overflow : 1;
     /* should underflowed results add re_bias to its exponent? */

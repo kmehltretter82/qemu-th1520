@@ -382,6 +382,9 @@ struct CPUArchState {
     uint32_t th_mcounterinten;
     uint32_t th_mcounterof;
     uint8_t th_cpuid_index;
+    uint8_t th_fxcr_dqnan;
+    uint8_t th_fxcr_fe;
+    uint8_t th_fxcr_fflags;
 
     uint64_t mctrctl;
     uint32_t sctrdepth;

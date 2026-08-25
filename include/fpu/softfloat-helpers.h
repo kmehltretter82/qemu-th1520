@@ -70,6 +70,12 @@ set_float_exception_flags(FloatExceptionFlags val, float_status *status)
     status->float_exception_flags = val;
 }
 
+static inline void
+clear_float_exception_flags_raised(float_status *status)
+{
+    status->float_exception_flags_raised = 0;
+}
+
 static inline void set_floatx80_rounding_precision(FloatX80RoundPrec val,
                                                    float_status *status)
 {
@@ -126,6 +132,12 @@ static inline void set_default_nan_mode(bool val, float_status *status)
     status->default_nan_mode = val;
 }
 
+static inline void set_float_exception_event_tracking(bool val,
+                                                      float_status *status)
+{
+    status->track_float_exception_events = val;
+}
+
 static inline void set_snan_rule(FloatSNaNRule val, float_status *status)
 {
     status->float_snan_rule = val;
@@ -155,6 +167,12 @@ static inline FloatExceptionFlags
 get_float_exception_flags(const float_status *status)
 {
     return status->float_exception_flags;
+}
+
+static inline FloatExceptionFlags
+get_float_exception_flags_raised(const float_status *status)
+{
+    return status->float_exception_flags_raised;
 }
 
 static inline FloatX80RoundPrec
@@ -200,6 +218,12 @@ static inline bool get_flush_inputs_to_zero(const float_status *status)
 static inline bool get_default_nan_mode(const float_status *status)
 {
     return status->default_nan_mode;
+}
+
+static inline bool
+get_float_exception_event_tracking(const float_status *status)
+{
+    return status->track_float_exception_events;
 }
 
 static inline FloatSNaNRule get_snan_rule(float_status *status)

@@ -149,7 +149,7 @@ THEAD_C910_MM_MARCH = \
 CLEANFILES += test-thead-c910-mxstatus-mm test-thead-c910-mm-priority \
 	test-thead-c910-maee test-thead-c910-physical-pma \
 	test-thead-c910-scalar-legality test-thead-c910-xba-off \
-	test-thead-c910-sync test-thead-c910-sync.ir
+	test-thead-c910-sync test-thead-c910-sync.ir test-thead-c910-fxcr
 
 test-thead-c910-mxstatus-mm: test-thead-c910-mxstatus-mm.S $(LINK_SCRIPT)
 	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
@@ -166,6 +166,15 @@ test-thead-c910-mm-priority: test-thead-c910-mm-priority.S $(LINK_SCRIPT)
 
 EXTRA_RUNS += run-test-thead-c910-mm-priority
 run-test-thead-c910-mm-priority: test-thead-c910-mm-priority
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
+test-thead-c910-fxcr: test-thead-c910-fxcr.S $(LINK_SCRIPT)
+	$(CC) $(CFLAGS) $(THEAD_C910_MM_MARCH) $< -Wa,--noexecstack -c -o $@.o
+	$(LD) $(LDFLAGS) $@.o -o $@
+
+EXTRA_RUNS += run-test-thead-c910-fxcr
+run-test-thead-c910-fxcr: test-thead-c910-fxcr
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 

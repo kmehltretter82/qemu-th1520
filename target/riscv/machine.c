@@ -25,6 +25,7 @@
 #include "exec/icount.h"
 #include "target/riscv/tcg/debug.h"
 #ifdef CONFIG_TCG
+#include "target/riscv/tcg/csr.h"
 #include "target/riscv/tcg/pmu.h"
 #endif
 #include "hw/riscv/machines-qom.h"
@@ -86,8 +87,18 @@ static bool thead_c910_csr_needed(void *opaque)
 {
     RISCVCPU *cpu = opaque;
 
-    /* This is CPU model state, independent of the active accelerator. */
+    /* The C910 model is TCG-only; qtest uses the same migration layout. */
     return object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
+}
+
+static int thead_c910_csr_pre_save(void *opaque)
+{
+#ifdef CONFIG_TCG
+    RISCVCPU *cpu = opaque;
+
+    riscv_thead_c910_csr_pre_save(&cpu->env);
+#endif
+    return 0;
 }
 
 static int thead_c910_csr_post_load(void *opaque, int version_id)
@@ -96,6 +107,9 @@ static int thead_c910_csr_post_load(void *opaque, int version_id)
     CPURISCVState *env = &cpu->env;
     bool pending = env->th_mcounterinten & env->th_mcounterof;
 
+#ifdef CONFIG_TCG
+    riscv_thead_c910_csr_post_load(env, version_id);
+#endif
     riscv_cpu_update_mip(env, MIP_THEAD_C9XX_PMU_OVF,
                          BOOL_TO_MASK(pending));
     return 0;
@@ -103,9 +117,10 @@ static int thead_c910_csr_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_thead_c910_csr = {
     .name = "cpu/thead-c910-csr",
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 1,
     .needed = thead_c910_csr_needed,
+    .pre_save = thead_c910_csr_pre_save,
     .post_load = thead_c910_csr_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64(env.th_mxstatus, RISCVCPU),
@@ -118,6 +133,9 @@ static const VMStateDescription vmstate_thead_c910_csr = {
         VMSTATE_UINT32_V(env.th_mcounterinten, RISCVCPU, 2),
         VMSTATE_UINT32_V(env.th_mcounterof, RISCVCPU, 2),
         VMSTATE_UINT8(env.th_cpuid_index, RISCVCPU),
+        VMSTATE_UINT8_V(env.th_fxcr_dqnan, RISCVCPU, 3),
+        VMSTATE_UINT8_V(env.th_fxcr_fe, RISCVCPU, 3),
+        VMSTATE_UINT8_V(env.th_fxcr_fflags, RISCVCPU, 3),
         VMSTATE_END_OF_LIST()
     }
 };

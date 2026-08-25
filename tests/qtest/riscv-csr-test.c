@@ -27,6 +27,9 @@
 #define CSR_MVENDORID       0xf11
 #define CSR_MARCHID         0xf12
 #define CSR_MIMPID          0xf13
+#define CSR_FFLAGS          0x001
+#define CSR_FRM             0x002
+#define CSR_FCSR            0x003
 #define CSR_MISELECT        0x350
 #define CSR_MSTATUS         0x300
 #define CSR_MISA            0x301
@@ -57,7 +60,11 @@
 #define CSR_TH_MHINT3       0x7cd
 #define CSR_TH_SCOUNTERINTEN 0x5c4
 #define CSR_TH_SCOUNTEROF   0x5c5
+#define CSR_TH_FXCR         0x800
 #define CSR_TH_CPUID        0xfc0
+
+#define MSTATUS_FS_INITIAL  (UINT64_C(1) << 13)
+#define MSTATUS_FS_MASK     (UINT64_C(3) << 13)
 
 #define PMU_TEST_ARM_OFFSET  8
 #define PMU_TEST_GO_OFFSET   16
@@ -259,6 +266,20 @@ static void run_test_thead_c910_csrs(void)
     g_assert_cmphex(get_csr(qts, CSR_TH_MHINT2), ==, 0);
     g_assert_cmphex(get_csr(qts, CSR_TH_MHINT3), ==, 0x10404040);
     g_assert_cmphex(get_csr(qts, CSR_TH_MRVBR), ==, 0xffffd00000ULL);
+    set_csr(qts, CSR_MSTATUS,
+            get_csr(qts, CSR_MSTATUS) | MSTATUS_FS_INITIAL);
+    g_assert_cmphex(get_csr(qts, CSR_TH_FXCR), ==, 0);
+
+    /* FXCR aliases frm/fflags and owns DQNaN plus aggregate FE. */
+    set_csr(qts, CSR_TH_FXCR, UINT64_MAX);
+    g_assert_cmphex(get_csr(qts, CSR_TH_FXCR), ==, 0x0780003f);
+    g_assert_cmphex(get_csr(qts, CSR_FRM), ==, 7);
+    g_assert_cmphex(get_csr(qts, CSR_FFLAGS), ==, 0x1f);
+    g_assert_cmphex(get_csr(qts, CSR_FCSR), ==, 0xff);
+    set_csr(qts, CSR_FCSR, 0x45);
+    g_assert_cmphex(get_csr(qts, CSR_TH_FXCR), ==, 0x02800025);
+    set_csr(qts, CSR_TH_FXCR, 0);
+    g_assert_cmphex(get_csr(qts, CSR_FCSR), ==, 0);
 
     set_csr(qts, CSR_TH_MXSTATUS, UINT64_MAX);
     g_assert_cmphex(get_csr(qts, CSR_TH_MXSTATUS), ==,
@@ -326,6 +347,13 @@ static void run_test_thead_c910_csrs(void)
     g_assert_cmphex(get_csr(qts, CSR_VXRM), ==, 2);
     set_csr(qts, CSR_VXSAT, 1);
     g_assert_cmphex(get_csr(qts, CSR_VXSAT), ==, 1);
+
+    set_csr(qts, CSR_TH_FXCR, UINT64_MAX);
+    qtest_system_reset(qts);
+    g_assert_cmphex(get_csr(qts, CSR_MSTATUS) & MSTATUS_FS_MASK, ==, 0);
+    set_csr(qts, CSR_MSTATUS,
+            get_csr(qts, CSR_MSTATUS) | MSTATUS_FS_INITIAL);
+    g_assert_cmphex(get_csr(qts, CSR_TH_FXCR), ==, 0);
 
     qtest_quit(qts);
 }

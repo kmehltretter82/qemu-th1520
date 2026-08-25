@@ -54,7 +54,8 @@ void riscv_cpu_set_fflags(CPURISCVState *env, uint8_t hard)
 void riscv_cpu_check_fflags(CPURISCVState *env,
                             FloatExceptionFlags pre_fflag)
 {
-    if (get_float_exception_flags(&env->fp_status) & ~pre_fflag) {
+    if ((get_float_exception_flags(&env->fp_status) & ~pre_fflag) ||
+        get_float_exception_flags_raised(&env->fp_status)) {
         env->mstatus |= MSTATUS_FS;
         if (env->virt_enabled) {
             env->mstatus_hs |= MSTATUS_FS;

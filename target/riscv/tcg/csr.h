@@ -77,6 +77,7 @@ extern riscv_csr_operations csr_ops[CSR_TABLE_SIZE];
 
 bool riscv_csr_is_fpu(int csrno);
 bool riscv_csr_is_vpu(int csrno);
+RISCVException riscv_csr_predicate_fs(CPURISCVState *env, int csrno);
 
 void riscv_get_csr_ops(int csrno, riscv_csr_operations *ops);
 void riscv_set_csr_ops(int csrno, const riscv_csr_operations *ops);
@@ -85,6 +86,8 @@ void riscv_set_csr_ops(int csrno, const riscv_csr_operations *ops);
 extern const RISCVCSR th_csr_list[];
 extern const RISCVCSR th_c910_csr_list[];
 void riscv_thead_c910_csr_reset(CPURISCVState *env);
+void riscv_thead_c910_csr_pre_save(CPURISCVState *env);
+void riscv_thead_c910_csr_post_load(CPURISCVState *env, int version_id);
 
 /* Implemented in mips_csr.c */
 extern const RISCVCSR mips_csr_list[];

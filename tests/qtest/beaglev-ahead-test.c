@@ -315,9 +315,12 @@
 #define TH1520_PWM_FPOUT            BIT(8)
 
 #define CSR_TIME                   0xc01
+#define CSR_FCSR                   0x003
+#define CSR_MSTATUS                0x300
 #define CSR_MSCRATCH               0x340
 #define CSR_TH_MCOR                0x7c2
 #define CSR_TH_MCOUNTERWEN         0x7c9
+#define CSR_TH_FXCR                0x800
 #define CSR_TH_CPUID               0xfc0
 
 #define C910_HARTS                 4
@@ -1533,6 +1536,7 @@ static void assert_dwcmshc_fdt(const void *fdt,
         g_strdup_printf("/soc/mmc@%" PRIx64, controller->base);
     const fdt32_t *cells;
     const char *text;
+    char alias[8];
     int node;
     int len;
 
@@ -1584,6 +1588,10 @@ static void assert_dwcmshc_fdt(const void *fdt,
                     controller->base != TH1520_SDIO0_BASE);
     assert_fdt_bool(fdt, node, "keep-power-in-suspend",
                     controller->base == TH1520_SDIO1_BASE);
+
+    snprintf(alias, sizeof(alias), "mmc%u",
+             (unsigned)(controller - dwcmshc_controllers));
+    g_assert_cmpstr(fdt_get_alias(fdt, alias), ==, path);
 }
 
 static void assert_dmac_fdt(const void *fdt, uint32_t clock_phandle)
@@ -10725,6 +10733,11 @@ static void test_whole_machine_migration(void)
 
     set_csr(src, 0, CSR_MSCRATCH, 0x1122334455667788ULL);
     set_csr(src, 1, CSR_TH_MCOR, 3);
+    set_csr(src, 1, CSR_MSTATUS,
+            get_csr(src, 1, CSR_MSTATUS) | BIT_ULL(13));
+    set_csr(src, 1, CSR_TH_FXCR, UINT64_MAX);
+    set_csr(src, 1, CSR_FCSR, 0x45);
+    g_assert_cmphex(get_csr(src, 1, CSR_TH_FXCR), ==, 0x02800025);
     set_csr(src, 2, CSR_TH_MCOUNTERWEN, BIT(3));
     g_assert_cmphex(get_csr(src, 2, CSR_TH_CPUID), ==, 0x090c090d);
     g_assert_cmphex(get_csr(src, 2, CSR_TH_CPUID), ==, 0x110c9000);
@@ -10783,6 +10796,7 @@ static void test_whole_machine_migration(void)
     g_assert_cmphex(get_csr(dst, 0, CSR_MSCRATCH), ==,
                     0x1122334455667788ULL);
     g_assert_cmphex(get_csr(dst, 1, CSR_TH_MCOR), ==, 3);
+    g_assert_cmphex(get_csr(dst, 1, CSR_TH_FXCR), ==, 0x02800025);
     g_assert_cmphex(get_csr(dst, 2, CSR_TH_MCOUNTERWEN), ==, BIT(3));
     g_assert_cmphex(get_csr(dst, 2, CSR_TH_CPUID), ==, 0x260c0001);
     g_assert_cmphex(get_csr(dst, 3, CSR_MSCRATCH), ==,

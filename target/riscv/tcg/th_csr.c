@@ -23,6 +23,7 @@
 #include "cpu.h"
 #include "cpu_vendorid.h"
 #include "exec/cputlb.h"
+#include "fpu/softfloat-helpers.h"
 #include "target/riscv/tcg/csr.h"
 #include "target/riscv/tcg/pmu.h"
 
@@ -182,14 +183,34 @@ static RISCVException read_th_sxstatus(CPURISCVState *env, int csrno,
 #define TH_C910_MHINT3_RESET     0x10404040
 #define TH_C910_MCOUNTERWEN_WRITABLE \
     (BIT(0) | MAKE_64BIT_MASK(2, 30))
+#define TH_C910_FXCR_FRM_SHIFT 24
+#define TH_C910_FXCR_DQNAN     BIT(23)
+#define TH_C910_FXCR_FE        BIT(5)
+#define TH_C910_FXCR_FFLAGS    MAKE_64BIT_MASK(0, 5)
+#define TH_C910_SOFTFLOAT_EXCEPTIONS \
+    (float_flag_invalid | float_flag_divbyzero | float_flag_overflow | \
+     float_flag_underflow | float_flag_inexact)
 
 static const uint32_t th1520_c910_cpuid[] = {
     0x090c090d, 0x110c9000, 0x260c0001, 0x30530077,
     0x42080407, 0x50000003, 0x60000a53,
 };
 
+static void c910_fxcr_configure_nan(CPURISCVState *env)
+{
+    set_default_nan_mode(!env->th_fxcr_dqnan, &env->fp_status);
+    set_float_2nan_prop_rule(float_2nan_prop_s_ab, &env->fp_status);
+    set_float_3nan_prop_rule(float_3nan_prop_s_abc, &env->fp_status);
+    set_float_infzeronan_rule(float_infzeronan_dnan_never,
+                              &env->fp_status);
+}
+
 void riscv_thead_c910_csr_reset(CPURISCVState *env)
 {
+#if !defined(CONFIG_USER_ONLY)
+    env->mstatus &= ~MSTATUS_FS;
+    env->mstatus_hs &= ~MSTATUS_FS;
+#endif
     env->th_mxstatus = TH_C910_MXSTATUS_RESET;
     env->th_mhcr = TH_C910_MHCR_FIXED;
     env->th_mcor = 0;
@@ -200,11 +221,91 @@ void riscv_thead_c910_csr_reset(CPURISCVState *env)
     env->th_mcounterinten = 0;
     env->th_mcounterof = 0;
     env->th_cpuid_index = 0;
+    env->frm = 0;
+    env->th_fxcr_dqnan = 0;
+    env->th_fxcr_fe = 0;
+    env->th_fxcr_fflags = 0;
+    riscv_cpu_set_fflags(env, 0);
+    clear_float_exception_flags_raised(&env->fp_status);
+    set_float_exception_event_tracking(true, &env->fp_status);
+    c910_fxcr_configure_nan(env);
 }
 
 static bool test_thead_c910(RISCVCPU *cpu)
 {
     return object_dynamic_cast(OBJECT(cpu), TYPE_RISCV_CPU_THEAD_C910);
+}
+
+static RISCVException c910_fxcr_predicate(CPURISCVState *env, int csrno)
+{
+    /*
+     * Preserve the standard FS access checks without making the vendor CSR
+     * look like FFLAGS/FRM/FCSR to riscv_csr_is_fpu().  The latter uses
+     * predicate identity and would otherwise omit FXCR from CPU state dumps.
+     */
+    return riscv_csr_predicate_fs(env, csrno);
+}
+
+static void c910_fxcr_sync_fe(CPURISCVState *env)
+{
+    FloatExceptionFlags raised =
+        get_float_exception_flags_raised(&env->fp_status);
+
+    if (raised & TH_C910_SOFTFLOAT_EXCEPTIONS) {
+        env->th_fxcr_fe = 1;
+    }
+    clear_float_exception_flags_raised(&env->fp_status);
+    set_float_exception_event_tracking(!env->th_fxcr_fe, &env->fp_status);
+}
+
+void riscv_thead_c910_csr_pre_save(CPURISCVState *env)
+{
+    c910_fxcr_sync_fe(env);
+    env->th_fxcr_fflags = riscv_cpu_get_fflags(env);
+}
+
+void riscv_thead_c910_csr_post_load(CPURISCVState *env, int version_id)
+{
+    if (version_id < 3) {
+        env->th_fxcr_dqnan = 0;
+        env->th_fxcr_fe = 0;
+        env->th_fxcr_fflags = 0;
+    }
+
+    riscv_cpu_set_fflags(env, env->th_fxcr_fflags);
+    clear_float_exception_flags_raised(&env->fp_status);
+    set_float_exception_event_tracking(!env->th_fxcr_fe, &env->fp_status);
+    c910_fxcr_configure_nan(env);
+}
+
+static RISCVException read_c910_fxcr(CPURISCVState *env, int csrno,
+                                     target_ulong *val)
+{
+    c910_fxcr_sync_fe(env);
+    *val = ((target_ulong)env->frm << TH_C910_FXCR_FRM_SHIFT) |
+           (env->th_fxcr_dqnan ? TH_C910_FXCR_DQNAN : 0) |
+           (env->th_fxcr_fe ? TH_C910_FXCR_FE : 0) |
+           riscv_cpu_get_fflags(env);
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_c910_fxcr(CPURISCVState *env, int csrno,
+                                      target_ulong val, uintptr_t ra)
+{
+    env->frm = extract64(val, TH_C910_FXCR_FRM_SHIFT, 3);
+    env->th_fxcr_dqnan = !!(val & TH_C910_FXCR_DQNAN);
+    env->th_fxcr_fe = !!(val & TH_C910_FXCR_FE);
+    riscv_cpu_set_fflags(env, val & TH_C910_FXCR_FFLAGS);
+    clear_float_exception_flags_raised(&env->fp_status);
+    set_float_exception_event_tracking(!env->th_fxcr_fe, &env->fp_status);
+    c910_fxcr_configure_nan(env);
+#if !defined(CONFIG_USER_ONLY)
+    env->mstatus |= MSTATUS_FS;
+    if (env->virt_enabled) {
+        env->mstatus_hs |= MSTATUS_FS;
+    }
+#endif
+    return RISCV_EXCP_NONE;
 }
 
 static RISCVException read_c910_mxstatus(CPURISCVState *env, int csrno,
@@ -878,7 +979,9 @@ const RISCVCSR th_c910_csr_list[] = {
     {
         .csrno = CSR_TH_FXCR,
         .insertion_test = test_thead_c910,
-        .csr_ops = { "th.c910.fxcr", any, read_unimp_th_csr }
+        .csr_ops = { "th.c910.fxcr", c910_fxcr_predicate,
+                     read_c910_fxcr,
+                     write_c910_fxcr }
     },
     { }
 };

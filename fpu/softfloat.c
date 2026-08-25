@@ -230,7 +230,8 @@ GEN_INPUT_FLUSH3(float64_input_flush3, float64)
 
 static inline bool can_use_fpu(const float_status *s)
 {
-    if (QEMU_NO_HARDFLOAT) {
+    if (QEMU_NO_HARDFLOAT ||
+        unlikely(get_float_exception_event_tracking(s))) {
         return false;
     }
     return likely(s->float_exception_flags & float_flag_inexact &&

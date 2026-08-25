@@ -22,6 +22,8 @@
 #include "system/blockdev.h"
 #include "system/system.h"
 #include "system/memory.h"
+#include "system/qtest.h"
+#include "system/tcg.h"
 #include "target/riscv/cpu.h"
 #include "target/riscv/cpu_bits.h"
 #include "hw/char/dw_apb_uart.h"
@@ -1787,6 +1789,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         const MemMapEntry *map = &th1520_memmap[th1520_mshc_memmap[i]];
         g_autofree char *name =
             g_strdup_printf("/soc/mmc@%" HWADDR_PRIx, map->base);
+        char alias[8];
 
         qemu_fdt_add_subnode(ms->fdt, name);
         qemu_fdt_setprop_string(ms->fdt, name, "compatible",
@@ -1818,6 +1821,9 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop_cell(ms->fdt, name, "pinctrl-0",
                                   wifi_pins_phandle);
         }
+
+        snprintf(alias, sizeof(alias), "mmc%d", i);
+        qemu_fdt_setprop_string(ms->fdt, "/aliases", alias, name);
     }
 
     stmmac_axi_phandle = phandle++;
@@ -2068,6 +2074,11 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(ms);
     int fdt_size;
+
+    if (!tcg_enabled() && !qtest_enabled()) {
+        error_report("BeagleV Ahead requires TCG acceleration");
+        exit(EXIT_FAILURE);
+    }
 
     beaglev_ahead_validate_boot_options(s);
 
