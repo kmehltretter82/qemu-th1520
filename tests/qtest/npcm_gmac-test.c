@@ -344,6 +344,9 @@ static void test_init(gconstpointer test_data)
 #define GMAC_TEST_TIMEOUT_S 5
 
 #define DWMAC_MAC_CONFIG_IPC BIT(10)
+#define DWMAC_TX_DESC_IHE BIT(16)
+#define DWMAC_TX_DESC_ES BIT(15)
+#define DWMAC_TX_DESC_PCE BIT(12)
 #define DWMAC_RX_DESC_ES BIT(15)
 #define DWMAC_RX_DESC_FT BIT(5)
 #define DWMAC_RX_DESC_ESA BIT(0)
@@ -519,6 +522,87 @@ static void test_normal_descriptors(gconstpointer test_data)
     close(sockets[0]);
 }
 
+static void test_tx_checksum_insertion(gconstpointer test_data)
+{
+    const TestData *td = test_data;
+    const GMACModule *mod = td->module;
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00,
+        0x45, 0x00, 0x00, 0x32, 0x12, 0x34, 0x40, 0x00,
+        0x40, 0x11, 0x00, 0x00, 0xc0, 0x00, 0x02, 0x01,
+        0xc6, 0x33, 0x64, 0x02,
+        0x04, 0xd2, 0x16, 0x2e, 0x00, 0x1e, 0x00, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    };
+    static const uint8_t expected_packet[sizeof(packet)] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00,
+        0x45, 0x00, 0x00, 0x32, 0x12, 0x34, 0x40, 0x00,
+        0x40, 0x11, 0x3c, 0x50, 0xc0, 0x00, 0x02, 0x01,
+        0xc6, 0x33, 0x64, 0x02,
+        0x04, 0xd2, 0x16, 0x2e, 0x00, 0x1e, 0x7e, 0xf6,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    };
+    const GMACDesc initial = {
+        .des0 = BIT(31) | DWMAC_TX_DESC_IHE | DWMAC_TX_DESC_PCE |
+                DWMAC_TX_DESC_ES,
+        /* IC, LS, FS, and full checksum insertion (CIC = 3). */
+        .des1 = BIT(31) | BIT(30) | BIT(29) | (3U << 27) |
+                sizeof(packet),
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    GMACDesc desc = initial;
+    QTestState *qts;
+    int sockets[2];
+    uint32_t wire_len;
+    uint8_t received[sizeof(packet)];
+    uint8_t guest_packet[sizeof(packet)];
+
+    qts = gmac_packet_test_init(sockets);
+
+    qtest_memwrite(qts, GMAC_TEST_DATA_ADDR, packet, sizeof(packet));
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + sizeof(desc), &desc);
+
+    gmac_write(qts, mod, NPCM_DMA_TX_BASE_ADDR, GMAC_TEST_DESC_ADDR);
+    gmac_write(qts, mod, NPCM_DMA_INTR_ENA, BIT(16) | BIT(0));
+    gmac_write(qts, mod, NPCM_GMAC_MAC_CONFIG, BIT(3));
+    gmac_write(qts, mod, NPCM_DMA_CONTROL, BIT(21) | BIT(13));
+
+    g_assert_true(gmac_wait_socket_readable(sockets[0]));
+    g_assert_cmpint(recv(sockets[0], &wire_len, sizeof(wire_len), MSG_WAITALL),
+                    ==, sizeof(wire_len));
+    g_assert_cmpuint(ntohl(wire_len), ==, sizeof(expected_packet));
+    g_assert_cmpint(recv(sockets[0], received, sizeof(received), MSG_WAITALL),
+                    ==, sizeof(received));
+    g_assert_cmpmem(received, sizeof(received),
+                    expected_packet, sizeof(expected_packet));
+
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, guest_packet,
+                  sizeof(guest_packet));
+    g_assert_cmpmem(guest_packet, sizeof(guest_packet), packet, sizeof(packet));
+
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0, ==, 0);
+    g_assert_cmphex(desc.des1, ==, initial.des1);
+    g_assert_cmphex(desc.des2, ==, initial.des2);
+    g_assert_cmphex(desc.des3, ==, initial.des3);
+    g_assert_true(gmac_wait_status(qts, mod, BIT(0)));
+    g_assert_cmphex(gmac_read(qts, mod, NPCM_DMA_HOST_TX_DESC), ==,
+                    GMAC_TEST_DESC_ADDR + sizeof(desc));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
 static void test_type2_checksum_default_off(gconstpointer test_data)
 {
     const TestData *td = test_data;
@@ -620,6 +704,8 @@ int main(int argc, char **argv)
 #ifndef _WIN32
     gmac_add_test("normal-descriptors", &test_data_list[0],
                   test_normal_descriptors);
+    gmac_add_test("tx-checksum-insertion", &test_data_list[0],
+                  test_tx_checksum_insertion);
     gmac_add_test("rx-type2-default-off", &test_data_list[0],
                   test_type2_checksum_default_off);
 #endif

@@ -147,6 +147,10 @@ struct DWGMACTxDesc {
 #define TX_DESC_TDES1_FIRST_SEG_MASK BIT(29)
 /* Checksum Insertion Control */
 #define TX_DESC_TDES1_CHKSM_INS_CTRL_MASK(word) extract32(word, 27, 2)
+#define TX_DESC_CIC_BYPASS 0
+#define TX_DESC_CIC_IP_HEADER 1
+#define TX_DESC_CIC_PAYLOAD_PARTIAL 2
+#define TX_DESC_CIC_PAYLOAD_FULL 3
 /* Disable Cyclic Redundancy Check */
 #define TX_DESC_TDES1_DIS_CDC_MASK BIT(26)
 /* Transmit End of Ring */
@@ -321,6 +325,8 @@ typedef DWGMACState NPCMGMACState;
 
 /* Flushing Disabled */
 #define DWMAC_DMA_CONTROL_FLUSH_MASK BIT(24)
+/* Transmit store and forward */
+#define DWMAC_DMA_CONTROL_TX_STORE_FORWARD BIT(21)
 /* Start/stop Transmit */
 #define DWMAC_DMA_CONTROL_START_STOP_TX BIT(13)
 /* Start/stop Receive */

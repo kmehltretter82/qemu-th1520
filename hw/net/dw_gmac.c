@@ -92,6 +92,7 @@ REG32(DW_GMAC_PTP_TTSR, 0x71c)
 
 #define DWMAC_DMA_BUS_MODE_SWR               BIT(0)
 #define DWMAC_DMA_BUS_MODE_ATDS              BIT(7)
+#define DWMAC_DMA_HW_FEATURE_TX_COE           BIT(16)
 #define DWMAC_DMA_HW_FEATURE_RX_COE_TYPE2     BIT(18)
 #define DWMAC_DMA_HW_FEATURE_ENH_DESC         BIT(24)
 
@@ -481,9 +482,9 @@ static bool gmac_rx_is_type_frame(const uint8_t *buf, size_t len)
            lduw_be_p(buf + offsetof(struct eth_header, h_proto)) >= 0x600;
 }
 
-static bool gmac_rx_l3_protocol(const DWGMACState *gmac,
-                                const uint8_t *buf, size_t len,
-                                uint16_t *protocol, size_t *offset)
+static bool gmac_l3_protocol(const DWGMACState *gmac,
+                             const uint8_t *buf, size_t len,
+                             uint16_t *protocol, size_t *offset)
 {
     if (len < sizeof(struct eth_header)) {
         return false;
@@ -513,9 +514,8 @@ static bool gmac_rx_checksum_valid(uint32_t initial, const uint8_t *buf,
                                net_checksum_add(len, (uint8_t *)buf)) == 0;
 }
 
-static bool gmac_rx_ip4_l4_checksum_valid(const uint8_t *ip,
-                                          const uint8_t *l4,
-                                          size_t l4_len, uint8_t protocol)
+static uint32_t gmac_ip4_pseudo_checksum(const uint8_t *ip, size_t l4_len,
+                                         uint8_t protocol)
 {
     uint8_t pseudo_tail[4] = {
         0, protocol, l4_len >> 8, l4_len,
@@ -523,12 +523,11 @@ static bool gmac_rx_ip4_l4_checksum_valid(const uint8_t *ip,
     uint32_t sum = net_checksum_add(8, (uint8_t *)ip + 12);
 
     sum += net_checksum_add(sizeof(pseudo_tail), pseudo_tail);
-    return gmac_rx_checksum_valid(sum, l4, l4_len);
+    return sum;
 }
 
-static bool gmac_rx_ip6_l4_checksum_valid(const uint8_t *ip,
-                                          const uint8_t *l4,
-                                          size_t l4_len, uint8_t protocol)
+static uint32_t gmac_ip6_pseudo_checksum(const uint8_t *ip, size_t l4_len,
+                                         uint8_t protocol)
 {
     uint8_t pseudo_tail[8] = { 0 };
     uint32_t sum = net_checksum_add(32, (uint8_t *)ip + 8);
@@ -536,7 +535,23 @@ static bool gmac_rx_ip6_l4_checksum_valid(const uint8_t *ip,
     stl_be_p(pseudo_tail, l4_len);
     pseudo_tail[7] = protocol;
     sum += net_checksum_add(sizeof(pseudo_tail), pseudo_tail);
-    return gmac_rx_checksum_valid(sum, l4, l4_len);
+    return sum;
+}
+
+static bool gmac_rx_ip4_l4_checksum_valid(const uint8_t *ip,
+                                          const uint8_t *l4,
+                                          size_t l4_len, uint8_t protocol)
+{
+    return gmac_rx_checksum_valid(
+        gmac_ip4_pseudo_checksum(ip, l4_len, protocol), l4, l4_len);
+}
+
+static bool gmac_rx_ip6_l4_checksum_valid(const uint8_t *ip,
+                                          const uint8_t *l4,
+                                          size_t l4_len, uint8_t protocol)
+{
+    return gmac_rx_checksum_valid(
+        gmac_ip6_pseudo_checksum(ip, l4_len, protocol), l4, l4_len);
 }
 
 static uint32_t gmac_rx_coe_l4_status(const uint8_t *ip, bool ipv6,
@@ -715,7 +730,7 @@ static DWGMACRxCOEStatus gmac_rx_coe_status(const DWGMACState *gmac,
     if (!result.available) {
         return result;
     }
-    if (!gmac_rx_l3_protocol(gmac, buf, len, &protocol, &offset)) {
+    if (!gmac_l3_protocol(gmac, buf, len, &protocol, &offset)) {
         result.rdes4 = RX_DESC_RDES4_IP_CSUM_BYPASSED;
     } else if (protocol == ETH_P_IP) {
         result.rdes4 = gmac_rx_coe_ip4_status(buf, len, offset);
@@ -1253,20 +1268,232 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
     return len;
 }
 
-static int gmac_tx_get_csum(DWGMACState *gmac,
-                            const struct DWGMACTxDesc *desc)
+static uint32_t gmac_tx_coe_error(const DWGMACState *gmac, uint32_t status)
 {
-    unsigned mask = gmac_tx_checksum_control(gmac, desc);
-    int csum = 0;
-
-    if (likely(mask > 0)) {
-        csum |= CSUM_IP;
+    if (gmac_uses_enhanced_desc(gmac)) {
+        status |= TX_DESC_TDES0_ERR_SUMM_MASK;
     }
-    if (likely(mask > 1)) {
-        csum |= CSUM_TCP | CSUM_UDP;
+    return status;
+}
+
+static uint32_t gmac_tx_coe_insert_l4(uint8_t *ip, bool ipv6,
+                                      uint8_t *l4, size_t available,
+                                      size_t declared, uint8_t protocol,
+                                      unsigned int cic)
+{
+    size_t checksum_offset;
+    size_t minimum;
+    size_t checksum_len;
+    uint32_t status = 0;
+    uint32_t sum;
+    uint16_t checksum;
+
+    switch (protocol) {
+    case IP_PROTO_TCP:
+        minimum = sizeof(tcp_header);
+        checksum_offset = offsetof(tcp_header, th_sum);
+        break;
+    case IP_PROTO_UDP:
+        minimum = sizeof(udp_header);
+        checksum_offset = offsetof(udp_header, uh_sum);
+        break;
+    case DW_GMAC_IP_PROTO_ICMP:
+        if (ipv6) {
+            return 0;
+        }
+        minimum = 4;
+        checksum_offset = 2;
+        break;
+    case DW_GMAC_IP_PROTO_ICMPV6:
+        if (!ipv6) {
+            return 0;
+        }
+        minimum = 4;
+        checksum_offset = 2;
+        break;
+    default:
+        return 0;
     }
 
-    return csum;
+    if (available < declared) {
+        status |= TX_DESC_TDES0_PYLD_CHKSM_ERR_MASK;
+    }
+    if (declared < minimum || available < minimum) {
+        return status | TX_DESC_TDES0_PYLD_CHKSM_ERR_MASK;
+    }
+    checksum_len = MIN(available, declared);
+    if (cic == TX_DESC_CIC_PAYLOAD_FULL) {
+        stw_be_p(l4 + checksum_offset, 0);
+        if (ipv6) {
+            sum = gmac_ip6_pseudo_checksum(ip, declared, protocol);
+        } else if (protocol == DW_GMAC_IP_PROTO_ICMP) {
+            sum = 0;
+        } else {
+            sum = gmac_ip4_pseudo_checksum(ip, declared, protocol);
+        }
+    } else {
+        /* CIC2 includes the pseudo-header seed supplied in this field. */
+        sum = 0;
+    }
+    sum += net_checksum_add(checksum_len, l4);
+    checksum = net_checksum_finish(sum);
+    if (protocol == IP_PROTO_UDP && checksum == 0) {
+        checksum = UINT16_MAX;
+    }
+    stw_be_p(l4 + checksum_offset, checksum);
+    return status;
+}
+
+static uint32_t gmac_tx_coe_insert_ip4(uint8_t *buf, size_t len,
+                                       size_t offset, unsigned int cic)
+{
+    uint8_t *ip = buf + offset;
+    size_t available = len - offset;
+    size_t header_len;
+    size_t total_len;
+    uint32_t status = 0;
+
+    if (available < sizeof(struct ip_header) ||
+        IP_HEADER_VERSION((struct ip_header *)ip) != IP_HEADER_VERSION_4) {
+        return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+    }
+
+    header_len = IP_HDR_GET_LEN(ip);
+    if (header_len < sizeof(struct ip_header) || header_len > available) {
+        return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+    }
+
+    /* The IPv4 header field is ignored and replaced for every nonzero CIC. */
+    eth_fix_ip4_checksum(ip, header_len);
+    total_len = lduw_be_p(ip + offsetof(struct ip_header, ip_len));
+    if (total_len < header_len) {
+        status |= TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+    }
+    if (cic < TX_DESC_CIC_PAYLOAD_PARTIAL ||
+        status ||
+        (lduw_be_p(ip + offsetof(struct ip_header, ip_off)) &
+         (IP_OFFMASK | IP_MF))) {
+        return status;
+    }
+
+    status |= gmac_tx_coe_insert_l4(
+        ip, false, ip + header_len, available - header_len,
+        total_len - header_len,
+        ip[offsetof(struct ip_header, ip_p)], cic);
+    return status;
+}
+
+static uint32_t gmac_tx_coe_insert_ip6(uint8_t *buf, size_t len,
+                                       size_t offset, unsigned int cic)
+{
+    uint8_t *ip = buf + offset;
+    size_t available = len - offset;
+    size_t declared_end;
+    size_t actual_end;
+    size_t cursor;
+    uint8_t protocol;
+
+    if (available < sizeof(struct ip6_header) || (ip[0] >> 4) != 6) {
+        return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+    }
+    if (cic == TX_DESC_CIC_IP_HEADER) {
+        return 0;
+    }
+
+    declared_end = sizeof(struct ip6_header) + lduw_be_p(ip + 4);
+    actual_end = MIN(available, declared_end);
+    cursor = sizeof(struct ip6_header);
+    protocol = ip[6];
+
+    for (;;) {
+        size_t extension_len;
+
+        switch (protocol) {
+        case IP6_HOP_BY_HOP:
+        case IP6_DESTINATON:
+            if (declared_end - cursor < sizeof(struct ip6_ext_hdr) ||
+                actual_end - cursor < sizeof(struct ip6_ext_hdr)) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            extension_len = ((size_t)ip[cursor + 1] + 1) *
+                            IP6_EXT_GRANULARITY;
+            if (extension_len > declared_end - cursor ||
+                extension_len > actual_end - cursor) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            protocol = ip[cursor];
+            cursor += extension_len;
+            break;
+        case IP6_ROUTING:
+        case IP6_MOBILITY:
+            if (declared_end - cursor < sizeof(struct ip6_ext_hdr) ||
+                actual_end - cursor < sizeof(struct ip6_ext_hdr)) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            extension_len = ((size_t)ip[cursor + 1] + 1) *
+                            IP6_EXT_GRANULARITY;
+            if (extension_len > declared_end - cursor ||
+                extension_len > actual_end - cursor) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            return 0;
+        case IP6_FRAGMENT:
+            if (declared_end - cursor < IP6_EXT_GRANULARITY ||
+                actual_end - cursor < IP6_EXT_GRANULARITY) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            return 0;
+        case IP6_AUTHENTICATION:
+            if (declared_end - cursor < sizeof(struct ip6_ext_hdr) ||
+                actual_end - cursor < sizeof(struct ip6_ext_hdr)) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            extension_len = ((size_t)ip[cursor + 1] + 2) * 4;
+            if (extension_len > declared_end - cursor ||
+                extension_len > actual_end - cursor) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            return 0;
+        case IP6_ESP:
+            if (declared_end - cursor < IP6_EXT_GRANULARITY ||
+                actual_end - cursor < IP6_EXT_GRANULARITY) {
+                return TX_DESC_TDES0_IP_HEAD_ERR_MASK;
+            }
+            return 0;
+        case IP6_NONE:
+            return 0;
+        default:
+            return gmac_tx_coe_insert_l4(
+                ip, true, ip + cursor, actual_end - cursor,
+                declared_end - cursor, protocol, cic);
+        }
+    }
+}
+
+static uint32_t gmac_tx_coe_insert(DWGMACState *gmac, uint8_t *buf,
+                                   size_t len, unsigned int cic)
+{
+    uint16_t protocol;
+    size_t offset;
+    uint32_t status;
+
+    if (cic == TX_DESC_CIC_BYPASS ||
+        !(gmac->hw_feature & DWMAC_DMA_HW_FEATURE_TX_COE) ||
+        !(gmac->regs[R_DWMAC_DMA_CONTROL] &
+          DWMAC_DMA_CONTROL_TX_STORE_FORWARD) ||
+        !gmac_l3_protocol(gmac, buf, len, &protocol, &offset)) {
+        return 0;
+    }
+
+    if (protocol == ETH_P_IP) {
+        status = gmac_tx_coe_insert_ip4(buf, len, offset, cic);
+    } else if (protocol == ETH_P_IPV6) {
+        status = gmac_tx_coe_insert_ip6(buf, len, offset, cic);
+    } else {
+        return 0;
+    }
+
+    return status ? gmac_tx_coe_error(gmac, status) : 0;
 }
 
 static void gmac_try_send_next_packet(DWGMACState *gmac)
@@ -1278,7 +1505,7 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
     uint32_t tx_buf_addr, tx_buf_len;
     uint32_t prev_buf_size = 0;
     uint32_t descriptors = 0;
-    int csum = 0;
+    unsigned int cic = TX_DESC_CIC_BYPASS;
 
     if (!(gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_TX_EN) ||
         !(gmac->regs[R_DWMAC_DMA_CONTROL] &
@@ -1339,7 +1566,7 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
             DWMAC_DMA_STATUS_TX_RUNNING_READ_STATE);
         next_desc_addr = gmac_tx_next_desc(gmac, desc_addr, &tx_desc);
         if (gmac_tx_is_first(gmac, &tx_desc)) {
-            csum = gmac_tx_get_csum(gmac, &tx_desc);
+            cic = gmac_tx_checksum_control(gmac, &tx_desc);
         }
         /* step 4 */
         tx_buf_addr = tx_desc.tdes2;
@@ -1404,13 +1631,18 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
             }
             prev_buf_size += tx_buf_len;
         }
+        tx_desc.tdes0 &= ~(TX_DESC_TDES0_IP_HEAD_ERR_MASK |
+                           TX_DESC_TDES0_PYLD_CHKSM_ERR_MASK |
+                           TX_DESC_TDES0_ERR_SUMM_MASK);
         if (gmac_tx_is_last(gmac, &tx_desc)) {
             uint16_t length = prev_buf_size;
 
-            net_checksum_calculate(tx_send_buffer, length, csum);
+            tx_desc.tdes0 |= gmac_tx_coe_insert(gmac, tx_send_buffer,
+                                                length, cic);
             qemu_send_packet(qemu_get_queue(gmac->nic), tx_send_buffer, length);
             trace_dw_gmac_packet_sent(DEVICE(gmac)->canonical_path, length);
             prev_buf_size = 0;
+            cic = TX_DESC_CIC_BYPASS;
         }
 
         /* step 6 */

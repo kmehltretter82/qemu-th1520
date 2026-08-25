@@ -508,6 +508,21 @@
 
 #define DWMAC_MAC_CONFIG_IPC       BIT(10)
 
+#define DWMAC_DMA_CONTROL_TSF      BIT(21)
+#define DWMAC_DMA_CONTROL_ST       BIT(13)
+
+#define DWMAC_TX_DESC_OWN          BIT(31)
+#define DWMAC_TX_DESC_IC           BIT(30)
+#define DWMAC_TX_DESC_LS           BIT(29)
+#define DWMAC_TX_DESC_FS           BIT(28)
+#define DWMAC_TX_DESC_CIC_SHIFT    22
+#define DWMAC_TX_DESC_CIC_MASK     (3U << DWMAC_TX_DESC_CIC_SHIFT)
+#define DWMAC_TX_DESC_IHE          BIT(16)
+#define DWMAC_TX_DESC_ES           BIT(15)
+#define DWMAC_TX_DESC_IPE          BIT(12)
+#define DWMAC_TX_DESC_COE_STATUS   \
+    (DWMAC_TX_DESC_IHE | DWMAC_TX_DESC_ES | DWMAC_TX_DESC_IPE)
+
 #define DWMAC_RX_DESC_ES           BIT(15)
 #define DWMAC_RX_DESC_FT           BIT(5)
 #define DWMAC_RX_DESC_ESA          BIT(0)
@@ -3521,6 +3536,34 @@ static uint32_t gmac_test_crc32(const uint8_t *buf, size_t len)
     return ~crc;
 }
 
+/* Independent test oracle; do not use the checksum helper under test. */
+static uint32_t gmac_test_checksum_add(uint32_t sum, const uint8_t *buf,
+                                       size_t len)
+{
+    while (len >= 2) {
+        sum += ((uint16_t)buf[0] << 8) | buf[1];
+        buf += 2;
+        len -= 2;
+    }
+    if (len) {
+        sum += (uint16_t)buf[0] << 8;
+    }
+    return sum;
+}
+
+static uint16_t gmac_test_checksum_fold(uint32_t sum)
+{
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    return sum;
+}
+
+static uint16_t gmac_test_checksum_finish(uint32_t sum)
+{
+    return ~gmac_test_checksum_fold(sum);
+}
+
 static QTestState *gmac_packet_test_init(int sockets[2])
 {
     QTestState *qts;
@@ -4345,6 +4388,552 @@ static void test_gmac_rx_checksum_type2_split(void)
 
     qtest_quit(qts);
     close(sockets[0]);
+}
+
+typedef enum GMACTxChecksumL4 {
+    GMAC_TX_CHECKSUM_UDP,
+    GMAC_TX_CHECKSUM_UDP_ZERO_RESULT,
+    GMAC_TX_CHECKSUM_TCP,
+    GMAC_TX_CHECKSUM_ICMP,
+} GMACTxChecksumL4;
+
+typedef enum GMACTxChecksumVLAN {
+    GMAC_TX_CHECKSUM_NO_VLAN,
+    GMAC_TX_CHECKSUM_C_VLAN,
+    GMAC_TX_CHECKSUM_S_VLAN,
+} GMACTxChecksumVLAN;
+
+typedef enum GMACTxChecksumError {
+    GMAC_TX_CHECKSUM_VALID,
+    GMAC_TX_CHECKSUM_BAD_IP_HEADER,
+    GMAC_TX_CHECKSUM_BAD_IPV6_HEADER,
+    GMAC_TX_CHECKSUM_BAD_PAYLOAD_LENGTH,
+    GMAC_TX_CHECKSUM_TRAILING_STUFF,
+    GMAC_TX_CHECKSUM_UDP_LENGTH_MISMATCH,
+} GMACTxChecksumError;
+
+typedef struct GMACTxChecksumCase {
+    const char *name;
+    unsigned cic;
+    bool ipv6;
+    GMACTxChecksumVLAN vlan;
+    /* IPv4 options or a single IPv6 hop-by-hop extension header. */
+    bool extended_header;
+    GMACTxChecksumL4 l4;
+    GMACTxChecksumError error;
+    bool split;
+    bool tsf;
+    uint32_t status;
+} GMACTxChecksumCase;
+
+typedef struct GMACTxChecksumPacket {
+    bool ipv6;
+    GMACTxChecksumL4 l4;
+    uint8_t protocol;
+    size_t ip_offset;
+    size_t ip_header_len;
+    size_t l4_offset;
+    size_t l4_len;
+    size_t l4_checksum_offset;
+} GMACTxChecksumPacket;
+
+static uint8_t gmac_tx_checksum_protocol(GMACTxChecksumL4 l4, bool ipv6)
+{
+    switch (l4) {
+    case GMAC_TX_CHECKSUM_UDP:
+    case GMAC_TX_CHECKSUM_UDP_ZERO_RESULT:
+        return 17;
+    case GMAC_TX_CHECKSUM_TCP:
+        return 6;
+    case GMAC_TX_CHECKSUM_ICMP:
+        return ipv6 ? 58 : 1;
+    }
+    g_assert_not_reached();
+}
+
+static uint32_t gmac_tx_checksum_pseudo_sum(
+    const uint8_t *packet, const GMACTxChecksumPacket *info,
+    size_t pseudo_l4_len)
+{
+    const uint8_t *ip = packet + info->ip_offset;
+    uint32_t sum = 0;
+
+    if (info->l4 == GMAC_TX_CHECKSUM_ICMP && !info->ipv6) {
+        return 0;
+    }
+    if (info->ipv6) {
+        sum = gmac_test_checksum_add(sum, ip + 8, 32);
+        sum += (pseudo_l4_len >> 16) & 0xffff;
+        sum += pseudo_l4_len & 0xffff;
+    } else {
+        sum = gmac_test_checksum_add(sum, ip + 12, 8);
+        sum += pseudo_l4_len;
+    }
+    sum += info->protocol;
+    return sum;
+}
+
+static size_t gmac_make_tx_checksum_packet(const GMACTxChecksumCase *test,
+                                           uint8_t *packet,
+                                           GMACTxChecksumPacket *info)
+{
+    static const uint8_t ethernet_addresses[12] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+    };
+    static const uint8_t ipv6_source[16] = {
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1,
+    };
+    static const uint8_t ipv6_destination[16] = {
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 2,
+    };
+    const size_t payload_len = 7;
+    size_t l2_len = test->vlan != GMAC_TX_CHECKSUM_NO_VLAN ? 18 : 14;
+    size_t l4_header_len;
+    uint16_t ethertype = test->ipv6 ? 0x86dd : 0x0800;
+    uint8_t *ip;
+    uint8_t *l4;
+
+    memset(packet, 0, 160);
+    memcpy(packet, ethernet_addresses, sizeof(ethernet_addresses));
+    if (test->vlan != GMAC_TX_CHECKSUM_NO_VLAN) {
+        stw_be_p(packet + 12,
+                 test->vlan == GMAC_TX_CHECKSUM_S_VLAN ? 0x88a8 : 0x8100);
+        stw_be_p(packet + 14, 0x0123);
+        stw_be_p(packet + 16, ethertype);
+    } else {
+        stw_be_p(packet + 12, ethertype);
+    }
+
+    switch (test->l4) {
+    case GMAC_TX_CHECKSUM_UDP:
+    case GMAC_TX_CHECKSUM_UDP_ZERO_RESULT:
+    case GMAC_TX_CHECKSUM_ICMP:
+        l4_header_len = 8;
+        break;
+    case GMAC_TX_CHECKSUM_TCP:
+        l4_header_len = 20;
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    *info = (GMACTxChecksumPacket) {
+        .ipv6 = test->ipv6,
+        .l4 = test->l4,
+        .protocol = gmac_tx_checksum_protocol(test->l4, test->ipv6),
+        .ip_offset = l2_len,
+        .ip_header_len = test->ipv6 ?
+                         40 + (test->extended_header ? 8 : 0) :
+                         (test->extended_header ? 24 : 20),
+        .l4_len = l4_header_len + payload_len,
+    };
+    info->l4_offset = info->ip_offset + info->ip_header_len;
+    ip = packet + info->ip_offset;
+    l4 = packet + info->l4_offset;
+
+    if (test->ipv6) {
+        ip[0] = 0x60;
+        stw_be_p(ip + 4, info->l4_len +
+                         (test->extended_header ? 8 : 0));
+        ip[6] = test->extended_header ? 0 : info->protocol;
+        ip[7] = 64;
+        memcpy(ip + 8, ipv6_source, sizeof(ipv6_source));
+        memcpy(ip + 24, ipv6_destination, sizeof(ipv6_destination));
+        if (test->extended_header) {
+            ip[40] = info->protocol;
+            ip[41] = 0;
+        }
+        if (test->error == GMAC_TX_CHECKSUM_BAD_IPV6_HEADER) {
+            ip[0] = 0x50;
+        }
+    } else {
+        uint16_t total_len = info->ip_header_len + info->l4_len;
+
+        ip[0] = 0x40 | (info->ip_header_len / 4);
+        stw_be_p(ip + 2, total_len);
+        stw_be_p(ip + 4, 0x1234);
+        stw_be_p(ip + 6, 0x4000);
+        ip[8] = 64;
+        ip[9] = info->protocol;
+        stw_be_p(ip + 10, test->cic ? 0 : 0x1357);
+        ip[12] = 192;
+        ip[13] = 0;
+        ip[14] = 2;
+        ip[15] = 1;
+        ip[16] = 198;
+        ip[17] = 51;
+        ip[18] = 100;
+        ip[19] = 2;
+        if (test->extended_header) {
+            ip[20] = 1;
+            ip[21] = 1;
+            ip[22] = 0;
+            ip[23] = 0;
+        }
+        if (test->error == GMAC_TX_CHECKSUM_BAD_IP_HEADER) {
+            ip[0] = 0x44;
+        } else if (test->error == GMAC_TX_CHECKSUM_BAD_PAYLOAD_LENGTH) {
+            stw_be_p(ip + 2, total_len + 1);
+        }
+    }
+
+    switch (test->l4) {
+    case GMAC_TX_CHECKSUM_UDP:
+    case GMAC_TX_CHECKSUM_UDP_ZERO_RESULT:
+        stw_be_p(l4, 1234);
+        stw_be_p(l4 + 2, 5678);
+        stw_be_p(l4 + 4,
+                 info->l4_len +
+                 (test->error == GMAC_TX_CHECKSUM_BAD_PAYLOAD_LENGTH) -
+                 (test->error == GMAC_TX_CHECKSUM_UDP_LENGTH_MISMATCH));
+        info->l4_checksum_offset = info->l4_offset + 6;
+        break;
+    case GMAC_TX_CHECKSUM_TCP:
+        stw_be_p(l4, 1234);
+        stw_be_p(l4 + 2, 5678);
+        stl_be_p(l4 + 4, 0x01020304);
+        stl_be_p(l4 + 8, 0x05060708);
+        l4[12] = 0x50;
+        l4[13] = 0x18;
+        stw_be_p(l4 + 14, 0x4000);
+        info->l4_checksum_offset = info->l4_offset + 16;
+        break;
+    case GMAC_TX_CHECKSUM_ICMP:
+        l4[0] = test->ipv6 ? 128 : 8;
+        l4[1] = 0;
+        stw_be_p(l4 + 4, 0x1234);
+        stw_be_p(l4 + 6, 1);
+        info->l4_checksum_offset = info->l4_offset + 2;
+        break;
+    default:
+        g_assert_not_reached();
+    }
+    for (size_t i = 0; i < payload_len; i++) {
+        l4[l4_header_len + i] = i + 1;
+    }
+    if (test->l4 == GMAC_TX_CHECKSUM_UDP_ZERO_RESULT) {
+        /* Fixed word chosen so the IPv4/UDP pseudo-header sum is 0xffff. */
+        l4[l4_header_len] = 0xe9;
+        l4[l4_header_len + 1] = 0x8e;
+    }
+
+    if (test->cic == 2) {
+        uint16_t seed = gmac_test_checksum_fold(
+            gmac_tx_checksum_pseudo_sum(packet, info, info->l4_len));
+
+        stw_be_p(packet + info->l4_checksum_offset, seed);
+    } else if (test->cic < 2) {
+        stw_be_p(packet + info->l4_checksum_offset, 0x2468);
+    }
+
+    if (test->error == GMAC_TX_CHECKSUM_TRAILING_STUFF) {
+        static const uint8_t stuff[] = { 0xa5, 0x5a, 0xde, 0xad, 0x7e };
+        size_t packet_len = info->l4_offset + info->l4_len;
+
+        memcpy(packet + packet_len, stuff, sizeof(stuff));
+        return packet_len + sizeof(stuff);
+    }
+    return info->l4_offset + info->l4_len;
+}
+
+static void gmac_make_tx_checksum_expected(
+    uint8_t *packet, unsigned cic, const GMACTxChecksumPacket *info,
+    size_t pseudo_l4_len)
+{
+    uint16_t checksum;
+    uint32_t sum;
+
+    if (cic && !info->ipv6) {
+        stw_be_p(packet + info->ip_offset + 10, 0);
+        sum = gmac_test_checksum_add(0, packet + info->ip_offset,
+                                     info->ip_header_len);
+        stw_be_p(packet + info->ip_offset + 10,
+                 gmac_test_checksum_finish(sum));
+    }
+    if (cic < 2) {
+        return;
+    }
+
+    if (cic == 3) {
+        stw_be_p(packet + info->l4_checksum_offset, 0);
+        sum = gmac_tx_checksum_pseudo_sum(packet, info, pseudo_l4_len);
+    } else {
+        sum = 0;
+    }
+    sum = gmac_test_checksum_add(sum, packet + info->l4_offset,
+                                 info->l4_len);
+    checksum = gmac_test_checksum_finish(sum);
+    if ((info->l4 == GMAC_TX_CHECKSUM_UDP ||
+         info->l4 == GMAC_TX_CHECKSUM_UDP_ZERO_RESULT) && !checksum) {
+        checksum = 0xffff;
+    }
+    stw_be_p(packet + info->l4_checksum_offset, checksum);
+}
+
+static void gmac_receive_tx_packet(int fd, uint8_t *packet,
+                                   size_t packet_len)
+{
+    uint32_t wire_len;
+
+    g_assert_true(gmac_wait_socket_readable(fd));
+    g_assert_cmpint(recv(fd, &wire_len, sizeof(wire_len), MSG_WAITALL), ==,
+                    sizeof(wire_len));
+    g_assert_cmpuint(ntohl(wire_len), ==, packet_len);
+    g_assert_cmpint(recv(fd, packet, packet_len, MSG_WAITALL), ==,
+                    packet_len);
+}
+
+static void gmac_assert_tx_extension(QTestState *qts, uint32_t desc_addr,
+                                     const uint32_t expected[4])
+{
+    uint32_t actual[4];
+
+    gmac_read_rx_extension(qts, desc_addr, actual);
+    g_assert_cmpmem(actual, sizeof(actual), expected, 4 * sizeof(*expected));
+}
+
+static void gmac_assert_tx_desc(const GMACDesc *actual,
+                                const GMACDesc *initial,
+                                uint32_t status)
+{
+    g_assert_cmphex(actual->des0, ==,
+                    (initial->des0 & ~(DWMAC_TX_DESC_OWN |
+                                       DWMAC_TX_DESC_COE_STATUS)) | status);
+    g_assert_cmphex(actual->des1, ==, initial->des1);
+    g_assert_cmphex(actual->des2, ==, initial->des2);
+    g_assert_cmphex(actual->des3, ==, initial->des3);
+}
+
+static void gmac_run_tx_checksum_case(const GMACTxChecksumCase *test)
+{
+    static const uint32_t first_extension[4] = {
+        0x10213243, 0x54657687, 0x98a9bacb, 0xdcedfe0f,
+    };
+    static const uint32_t last_extension[4] = {
+        0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00,
+    };
+    static const uint32_t buffer_addresses[4] = {
+        GMAC_TEST_DATA_ADDR, GMAC_TEST_DATA_ADDR + 0x100,
+        GMAC_TEST_DATA2_ADDR, GMAC_TEST_DATA2_ADDR + 0x100,
+    };
+    uint8_t original[160];
+    uint8_t expected[sizeof(original)];
+    uint8_t received[sizeof(original)];
+    uint8_t guest_buffer[sizeof(original)];
+    GMACTxChecksumPacket packet_info;
+    GMACDesc initial[2] = { 0 };
+    GMACDesc actual;
+    size_t buffer_sizes[4] = { 0 };
+    size_t packet_len;
+    size_t offset = 0;
+    unsigned desc_count = test->split ? 2 : 1;
+    QTestState *qts;
+    int sockets[2];
+
+    g_test_message("GMAC TX checksum case: %s", test->name);
+    packet_len = gmac_make_tx_checksum_packet(test, original, &packet_info);
+    memcpy(expected, original, packet_len);
+    if ((test->error == GMAC_TX_CHECKSUM_VALID ||
+         test->error == GMAC_TX_CHECKSUM_TRAILING_STUFF ||
+         test->error == GMAC_TX_CHECKSUM_UDP_LENGTH_MISMATCH) && test->tsf) {
+        gmac_make_tx_checksum_expected(expected, test->cic, &packet_info,
+                                       packet_info.l4_len);
+    } else if (test->error == GMAC_TX_CHECKSUM_BAD_PAYLOAD_LENGTH) {
+        /*
+         * The bounded model uses the declared pseudo length, but only the
+         * transport bytes actually supplied by the descriptor chain.
+         */
+        gmac_make_tx_checksum_expected(expected, test->cic, &packet_info,
+                                       packet_info.l4_len + 1);
+    }
+    if (test->cic == 2) {
+        g_assert_cmphex(lduw_be_p(original +
+                                  packet_info.l4_checksum_offset), !=, 0);
+        g_assert_cmphex(lduw_be_p(original +
+                                  packet_info.l4_checksum_offset), !=,
+                        lduw_be_p(expected +
+                                  packet_info.l4_checksum_offset));
+    }
+    if (test->l4 == GMAC_TX_CHECKSUM_UDP_ZERO_RESULT) {
+        uint32_t sum = gmac_tx_checksum_pseudo_sum(original, &packet_info,
+                                                   packet_info.l4_len);
+
+        sum = gmac_test_checksum_add(sum, original + packet_info.l4_offset,
+                                     packet_info.l4_len);
+        g_assert_cmphex(gmac_test_checksum_finish(sum), ==, 0);
+        g_assert_cmphex(lduw_be_p(expected +
+                                  packet_info.l4_checksum_offset), ==,
+                        0xffff);
+    }
+
+    qts = gmac_packet_test_init(sockets);
+    if (test->split) {
+        buffer_sizes[0] = 7;
+        buffer_sizes[1] = 9;
+        buffer_sizes[2] = (packet_len - 16) / 2;
+        buffer_sizes[3] = packet_len - 16 - buffer_sizes[2];
+        for (size_t i = 0; i < ARRAY_SIZE(buffer_sizes); i++) {
+            qtest_memwrite(qts, buffer_addresses[i], original + offset,
+                           buffer_sizes[i]);
+            offset += buffer_sizes[i];
+        }
+        initial[0] = (GMACDesc) {
+            .des0 = DWMAC_TX_DESC_OWN | DWMAC_TX_DESC_FS |
+                    DWMAC_TX_DESC_COE_STATUS |
+                    (test->cic << DWMAC_TX_DESC_CIC_SHIFT),
+            .des1 = buffer_sizes[0] | (buffer_sizes[1] << 16),
+            .des2 = buffer_addresses[0],
+            .des3 = buffer_addresses[1],
+        };
+        initial[1] = (GMACDesc) {
+            /* A non-FS CIC value must not replace the frame's control. */
+            .des0 = DWMAC_TX_DESC_OWN | DWMAC_TX_DESC_IC |
+                    DWMAC_TX_DESC_LS | DWMAC_TX_DESC_COE_STATUS |
+                    (1U << DWMAC_TX_DESC_CIC_SHIFT),
+            .des1 = buffer_sizes[2] | (buffer_sizes[3] << 16),
+            .des2 = buffer_addresses[2],
+            .des3 = buffer_addresses[3],
+        };
+        gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &initial[0]);
+        gmac_write_rx_extension(qts, GMAC_TEST_DESC_ADDR, first_extension);
+        gmac_write_desc(qts,
+                        GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                        &initial[1]);
+        gmac_write_rx_extension(qts,
+                                GMAC_TEST_DESC_ADDR +
+                                GMAC_ENHANCED_DESC_STRIDE,
+                                last_extension);
+    } else {
+        buffer_sizes[0] = packet_len;
+        qtest_memwrite(qts, buffer_addresses[0], original, packet_len);
+        initial[0] = (GMACDesc) {
+            .des0 = DWMAC_TX_DESC_OWN | DWMAC_TX_DESC_IC |
+                    DWMAC_TX_DESC_LS | DWMAC_TX_DESC_FS |
+                    DWMAC_TX_DESC_COE_STATUS |
+                    (test->cic << DWMAC_TX_DESC_CIC_SHIFT),
+            .des1 = packet_len,
+            .des2 = buffer_addresses[0],
+        };
+        gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &initial[0]);
+        gmac_write_rx_extension(qts, GMAC_TEST_DESC_ADDR, last_extension);
+    }
+    actual = (GMACDesc) { 0 };
+    gmac_write_desc(qts,
+                    GMAC_TEST_DESC_ADDR +
+                    desc_count * GMAC_ENHANCED_DESC_STRIDE,
+                    &actual);
+
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_TX_BASE_ADDR,
+                  GMAC_TEST_DESC_ADDR);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(0));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_VLAN_TAG,
+                  test->vlan == GMAC_TX_CHECKSUM_S_VLAN ?
+                  DWMAC_VLAN_TAG_ESVL : 0);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(3));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL,
+                  (test->tsf ? DWMAC_DMA_CONTROL_TSF : 0) |
+                  DWMAC_DMA_CONTROL_ST);
+
+    gmac_receive_tx_packet(sockets[0], received, packet_len);
+    g_assert_true(gmac_wait_status(qts, BIT(0)));
+    g_assert_cmpmem(received, packet_len, expected, packet_len);
+
+    for (unsigned i = 0; i < desc_count; i++) {
+        uint32_t desc_addr = GMAC_TEST_DESC_ADDR +
+                             i * GMAC_ENHANCED_DESC_STRIDE;
+
+        gmac_read_desc(qts, desc_addr, &actual);
+        gmac_assert_tx_desc(&actual, &initial[i],
+                            i + 1 == desc_count ? test->status : 0);
+        gmac_assert_tx_extension(qts, desc_addr,
+                                 i + 1 == desc_count ? last_extension :
+                                                       first_extension);
+    }
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_HOST_TX_DESC),
+                    ==, GMAC_TEST_DESC_ADDR +
+                        desc_count * GMAC_ENHANCED_DESC_STRIDE);
+
+    offset = 0;
+    for (size_t i = 0; i < (test->split ? 4 : 1); i++) {
+        qtest_memread(qts, buffer_addresses[i], guest_buffer,
+                      buffer_sizes[i]);
+        g_assert_cmpmem(guest_buffer, buffer_sizes[i], original + offset,
+                        buffer_sizes[i]);
+        offset += buffer_sizes[i];
+    }
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+static void test_gmac_tx_checksum(void)
+{
+    static const GMACTxChecksumCase cases[] = {
+        { "cic0-ipv4-udp", 0, false, GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic1-ipv4-options-udp-odd", 1, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, true,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic1-ipv6-udp-bypass", 1, true,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic2-ipv4-tcp-seed", 2, false, GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_TCP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-vlan-ipv4-udp-split", 3, false,
+          GMAC_TX_CHECKSUM_C_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, true, true, 0 },
+        { "cic3-svlan-ipv4-udp", 3, false, GMAC_TX_CHECKSUM_S_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-ipv4-udp-zero-result", 3, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP_ZERO_RESULT, GMAC_TX_CHECKSUM_VALID,
+          false, true, 0 },
+        { "cic3-ipv4-udp-trailing-stuff", 3, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_TRAILING_STUFF,
+          false, true, 0 },
+        { "cic3-ipv4-udp-length-mismatch", 3, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_UDP_LENGTH_MISMATCH,
+          false, true, 0 },
+        { "cic3-ipv4-icmp", 3, false, GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_ICMP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-ipv6-udp", 3, true, GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-ipv6-tcp", 3, true, GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_TCP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-ipv6-hbh-tcp", 3, true, GMAC_TX_CHECKSUM_NO_VLAN, true,
+          GMAC_TX_CHECKSUM_TCP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-ipv6-icmp", 3, true, GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_ICMP, GMAC_TX_CHECKSUM_VALID, false, true, 0 },
+        { "cic3-ipv4-udp-tsf-clear", 3, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_VALID, false, false, 0 },
+        { "cic3-bad-ipv4-header-split", 3, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_BAD_IP_HEADER, true, true,
+          DWMAC_TX_DESC_IHE | DWMAC_TX_DESC_ES },
+        { "cic3-bad-ipv6-header-split", 3, true,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_BAD_IPV6_HEADER, true, true,
+          DWMAC_TX_DESC_IHE | DWMAC_TX_DESC_ES },
+        { "cic3-bad-payload-length-split", 3, false,
+          GMAC_TX_CHECKSUM_NO_VLAN, false,
+          GMAC_TX_CHECKSUM_UDP, GMAC_TX_CHECKSUM_BAD_PAYLOAD_LENGTH,
+          true, true,
+          DWMAC_TX_DESC_IPE | DWMAC_TX_DESC_ES },
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+        gmac_run_tx_checksum_case(&cases[i]);
+    }
 }
 
 static void test_gmac_enhanced_descriptors(void)
@@ -9468,6 +10057,8 @@ int main(int argc, char **argv)
                        test_gmac_rx_checksum_type2);
         qtest_add_func("/beaglev-ahead/gmac/rx-checksum-type2-split",
                        test_gmac_rx_checksum_type2_split);
+        qtest_add_func("/beaglev-ahead/gmac/tx-checksum",
+                       test_gmac_tx_checksum);
         qtest_add_func("/beaglev-ahead/gmac/enhanced-descriptors",
                        test_gmac_enhanced_descriptors);
 #endif
