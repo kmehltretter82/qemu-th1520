@@ -203,6 +203,27 @@ writing it.  With an established recovery path, test each bit's polarity,
 scope, pulse versus level effect and retention one at a time; do not infer
 audio-domain behavior merely from the SPL configuration write.
 
+### RST-003 — TEE DSP-system reset word
+
+Public vendor SPL writes all ones to ``DSPSYS_SW_RST_TEE`` at
+``0xffff041028``.  The system manual defines the exact documented writable
+active-low reset bits and reset value ``0x7d11000f``.  QEMU maps only that
+four-byte word, with its documented writable mask, reset and VMState.  It
+does not expose a DSP system-register aperture or model DSP cores, clocks,
+IOPMP/reset effects, address aliasing, retention or the owner's hardware
+reset state.
+
+The next public SPL list entries write GPU reset values ``0x2`` and ``0x3``
+at the REE VOSYS base ``0xffef528000``, then write DPU reset value ``0x7`` to
+the TEE VOSYS address ``0xffff529004``.  These must be treated as separate
+REE/TEE register contracts; do not infer a fullmask aperture or GPU/DPU
+behavior from that short configuration sequence.
+
+On hardware, preserve a pre-write register dump and use a recovery-aware DSP
+or display reset procedure before toggling any bit.  Determine isolation,
+ordering, pulse/level semantics, IOPMP interactions and domain retention
+without loading unreviewed DSP or display firmware.
+
 ### DT-002 — vendor/AP clock binding
 
 State: OPEN-DOC.  Upstream ``thead,th1520-clk-ap`` has one 24 MHz parent and

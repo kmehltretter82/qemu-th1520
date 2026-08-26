@@ -22,6 +22,7 @@
 #include "hw/misc/th1520_mbox.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_pinctrl.h"
+#include "hw/misc/th1520_tee_dsp_reset.h"
 #include "hw/misc/th1520_tee_miscsys_clock.h"
 #include "hw/misc/th1520_video_sysreg.h"
 #include "hw/net/dw_gmac.h"
@@ -66,6 +67,7 @@ struct TH1520SoCState {
     TH1520MiscSysState miscsys;
     MemoryRegion tee_miscsys_usb_clock_alias;
     TH1520TEEMiscSysClockState tee_miscsys_clock;
+    TH1520TEEDSPResetState tee_dsp_reset;
     TH1520VideoSysRegState visys;
     TH1520VideoSysRegState vosys;
     TH1520ISO7816ConfigState iso7816_config;
@@ -118,6 +120,7 @@ enum {
     TH1520_DEV_AON_AUDIO_RESET,
     TH1520_DEV_MISCSYS,
     TH1520_DEV_TEE_MISCSYS_CLOCK,
+    TH1520_DEV_TEE_DSP_RESET,
     TH1520_DEV_VISYS,
     TH1520_DEV_VOSYS,
     TH1520_DEV_ISO7816_CONFIG,

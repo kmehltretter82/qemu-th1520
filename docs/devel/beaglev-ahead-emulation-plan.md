@@ -1421,10 +1421,20 @@ only the exact four-byte vendor address as a shared-state compatibility alias;
 focused bidirectional/reset and migration qtests pass.  It does not map a
 fullmask reset aperture, create a DT node or connect an NPU reset output.
 
-The bounded trace now advances to the following source-labelled DSP sysreg
-write at ``0xffff041028``.  That is the next compatibility question, not
-proof that the staged firmware reaches serial output, loads U-Boot
-successfully or matches physical hardware reset effects.
+The following source-labelled write is ``DSPSYS_SW_RST_TEE`` at
+``0xffff041028``.  The public manual gives its documented non-contiguous
+active-low reset mask and reset value ``0x7d11000f``; vendor SPL writes all
+ones.  QEMU now maps only that four-byte state with the documented mask,
+reset and migration.  It does not model DSP cores, reset effects, clocks,
+IOPMP behavior or a DSP system-register aperture.  Focused qtests and
+whole-machine migration pass.
+
+The trace now reaches the source-labelled VOSYS GPU reset word at
+``0xffef528000`` (writes ``0x2`` then ``0x3``), which is already a mapped but
+currently unimplemented VOSYS register, and then its final listed TEE DPU
+reset word at ``0xffff529004`` (write ``0x7``).  Those are distinct bounded
+reset questions, not proof that the staged firmware reaches serial output,
+loads U-Boot successfully or matches physical hardware reset effects.
 
 ### Independent Alpine userspace lane
 

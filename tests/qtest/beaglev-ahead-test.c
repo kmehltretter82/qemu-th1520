@@ -15,6 +15,7 @@
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
 #include "hw/misc/th1520_miscsys.h"
+#include "hw/misc/th1520_tee_dsp_reset.h"
 #include "hw/misc/th1520_tee_miscsys_clock.h"
 #include "hw/misc/th1520_video_sysreg.h"
 #include "hw/net/mii.h"
@@ -36,6 +37,7 @@
 #define TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE 0xffff0151b0ULL
 #define TH1520_VENDOR_UBOOT_USB_CLOCK_BASE 0xfffc02d104ULL
 #define TH1520_TEE_MISCSYS_CLOCK_BASE 0xfffc02d120ULL
+#define TH1520_TEE_DSP_RESET_BASE    0xffff041028ULL
 #define TH1520_AON_AUDIO_RESET_BASE  0xfffff4403cULL
 #define TH1520_AP_RESET_BASE       0xffef014000ULL
 #define TH1520_MISCSYS_BASE        0xffec02c000ULL
@@ -3783,6 +3785,63 @@ static void test_th1520_tee_miscsys_clock_migration(void)
                     0x5a5);
     qtest_system_reset(dst);
     assert_th1520_tee_miscsys_clock_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void assert_th1520_tee_dsp_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readl(qts, TH1520_TEE_DSP_RESET_BASE), ==,
+                    TH1520_TEE_DSP_RESET_SW_RST_RESET);
+}
+
+static void test_th1520_tee_dsp_reset_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_tee_dsp_reset_state(qts);
+    qtest_writel(qts, TH1520_TEE_DSP_RESET_BASE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_TEE_DSP_RESET_BASE), ==,
+                    TH1520_TEE_DSP_RESET_SW_RST_MASK);
+    qtest_writel(qts, TH1520_TEE_DSP_RESET_BASE,
+                 TH1520_TEE_DSP_RESET_SW_RST_RESET & ~BIT(30));
+    g_assert_cmphex(qtest_readl(qts, TH1520_TEE_DSP_RESET_BASE), ==,
+                    TH1520_TEE_DSP_RESET_SW_RST_RESET & ~BIT(30));
+    qtest_system_reset(qts);
+    assert_th1520_tee_dsp_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_tee_dsp_reset_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-tee-dsp-reset-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_writel(src, TH1520_TEE_DSP_RESET_BASE, UINT32_MAX);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_TEE_DSP_RESET_BASE), ==,
+                    TH1520_TEE_DSP_RESET_SW_RST_MASK);
+    qtest_system_reset(dst);
+    assert_th1520_tee_dsp_reset_state(dst);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -13108,6 +13167,10 @@ int main(int argc, char **argv)
                        test_th1520_tee_miscsys_clock_registers);
         qtest_add_func("/beaglev-ahead/th1520-tee-miscsys-clock/migration",
                        test_th1520_tee_miscsys_clock_migration);
+        qtest_add_func("/beaglev-ahead/th1520-tee-dsp-reset/registers",
+                       test_th1520_tee_dsp_reset_registers);
+        qtest_add_func("/beaglev-ahead/th1520-tee-dsp-reset/migration",
+                       test_th1520_tee_dsp_reset_migration);
         qtest_add_func("/beaglev-ahead/th1520-aon-audio-reset/registers",
                        test_th1520_aon_audio_reset_registers);
         qtest_add_func("/beaglev-ahead/th1520-aon-audio-reset/migration",
