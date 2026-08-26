@@ -1346,18 +1346,31 @@ static uint32_t assert_padctrl_fdt(const void *fdt,
                                    uint32_t ap_clock_phandle,
                                    uint32_t aonsys_clock_phandle)
 {
+    static const char *const compatibles[][2] = {
+        {
+            "thead,th1520-group1-pinctrl",
+            "xuantie,th1520-group1-pinctrl",
+        }, {
+            "thead,th1520-group2-pinctrl",
+            "xuantie,th1520-group2-pinctrl",
+        }, {
+            "thead,th1520-group3-pinctrl",
+            "xuantie,th1520-group3-pinctrl",
+        },
+    };
     g_autofree char *path =
         g_strdup_printf("/soc/pinctrl@%" PRIx64, controller->base);
     const fdt32_t *cells;
-    const char *text;
     uint32_t phandle;
     int node = fdt_path_offset(fdt, path);
     int len;
 
     g_assert_cmpint(node, >=, 0);
-    text = fdt_getprop(fdt, node, "compatible", &len);
-    g_assert_nonnull(text);
-    g_assert_cmpstr(text, ==, "thead,th1520-pinctrl");
+    g_assert_cmpuint(controller->group, >=, 1);
+    g_assert_cmpuint(controller->group, <=, ARRAY_SIZE(compatibles));
+    assert_fdt_stringlist(fdt, node, "compatible",
+                          compatibles[controller->group - 1],
+                          ARRAY_SIZE(compatibles[0]));
     assert_fdt_mmio(fdt, node, controller->base, controller->size);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "thead,pad-group"), ==,
                     controller->group);

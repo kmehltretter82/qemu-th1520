@@ -1594,13 +1594,24 @@ the Tuxboot/ext2 ``test_emmc_root`` control passed.  Keep these as the required
 pair for direct-Linux changes rather than substituting another similar Linux
 image for either one.
 
+The same cross-pair exposed a generated-DT compatibility issue: QEMU had used
+the generic ``thead,th1520-pinctrl`` string, whereas the pinned RevyOS driver
+matches only its older group-specific ``xuantie,th1520-groupN-pinctrl`` names.
+QEMU now emits the documented group-specific ``thead`` name followed by that
+vendor fallback for each of its three pad controllers.  The direct-DT qtest
+asserts both strings.  The resulting RevyOS/Alpine rerun recorded all four
+markers in
+``validation-artifacts/beaglev-ahead-alpine-revyos-pinctrl-20260826.log`` and
+no longer contains the previous AO GPIO/GPIO4 ``failed to register gpiochip``
+diagnostics.  This is a guest-driver compatibility result only; it does not
+establish physical pad, pull, voltage or signal-routing behavior.
+
 It is still not a stock RevyOS image or normal Alpine boot: the test launches
-``/bin/sh`` directly and retains known GPIO registration and missing
-``regulatory.db`` warnings.  A Debian/glibc or another independent distro is
-a sensible later ABI lane, but is not a prerequisite for this matrix and will
-not replace either existing row.  It should be added only with a pinned image
-and a distinct question, such as normal service startup or generic userspace
-ABI coverage.
+``/bin/sh`` directly and retains the expected missing ``regulatory.db``
+warning.  A Debian/glibc or another independent distro is a sensible later ABI
+lane, but is not a prerequisite for this matrix and will not replace either
+existing row.  It should be added only with a pinned image and a distinct
+question, such as normal service startup or generic userspace ABI coverage.
 
 A separate portable Linux 6.11.9 functional test wraps the pinned ext2 rootfs
 at MBR partition sector 2048 with disk signature ``0x1520a110`` and uses
