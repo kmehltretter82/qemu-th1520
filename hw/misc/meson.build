@@ -177,6 +177,7 @@ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
 
 system_ss.add(when: 'CONFIG_AXIADO_CLK', if_true: files('axiado_clk.c'))
 system_ss.add(when: 'CONFIG_TH1520_CPR', if_true: files('th1520_cpr.c'))
+system_ss.add(when: 'CONFIG_TH1520_DDR_PLL', if_true: files('th1520_ddr_pll.c'))
 system_ss.add(when: 'CONFIG_TH1520_MBOX', if_true: files('th1520_mbox.c'))
 system_ss.add(when: 'CONFIG_TH1520_IOPMP', if_true: files('th1520_iopmp.c'))
 system_ss.add(when: 'CONFIG_TH1520_VIDEO_SYSREG', if_true: files('th1520_video_sysreg.c'))

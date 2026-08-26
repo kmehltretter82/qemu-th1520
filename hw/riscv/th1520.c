@@ -86,6 +86,12 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
+    [TH1520_DEV_DDR_PLL_CFG0] = { 0xffff005008,
+                                   TH1520_DDR_PLL_MMIO_SIZE },
+    [TH1520_DEV_DDR_PLL_CFG1] = { 0xffff00500c,
+                                   TH1520_DDR_PLL_MMIO_SIZE },
+    [TH1520_DEV_DDR_PLL_STS] = { 0xffff005018,
+                                  TH1520_DDR_PLL_MMIO_SIZE },
     [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
     [TH1520_DEV_AON_AUDIO_RESET] = {
         0xfffff4403c, TH1520_AON_RESET_MMIO_SIZE },
@@ -554,6 +560,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "ap-clock", &s->ap_clock,
                             TYPE_TH1520_AP_CLOCK);
+    object_initialize_child(obj, "ddr-pll", &s->ddr_pll,
+                            TYPE_TH1520_DDR_PLL);
     object_initialize_child(obj, "ap-reset", &s->ap_reset,
                             TYPE_TH1520_AP_RESET);
     object_initialize_child(obj, "aon-reset", &s->aon_reset,
@@ -793,6 +801,21 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(system_memory,
                                 TH1520_VENDOR_UBOOT_AP_CLOCK_BASE,
                                 &s->ap_clock_vendor_alias);
+
+    /*
+     * The public vendor SPL accesses only these DDR SYSREG words while it
+     * configures the PLL.  They deliberately have no DT node and no modeled
+     * DDR clock or training side effect.
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_pll), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_pll), 0,
+                    th1520_memmap[TH1520_DEV_DDR_PLL_CFG0].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_pll), 1,
+                    th1520_memmap[TH1520_DEV_DDR_PLL_CFG1].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_pll), 2,
+                    th1520_memmap[TH1520_DEV_DDR_PLL_STS].base);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ap_reset), errp)) {
         return;

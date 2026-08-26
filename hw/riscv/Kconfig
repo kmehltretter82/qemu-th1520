@@ -28,6 +28,7 @@ config BEAGLEV_AHEAD
     select LED
     select TH1520_GMAC
     select TH1520_CPR
+    select TH1520_DDR_PLL
     select TH1520_MBOX
     select TH1520_IOPMP
     select TH1520_VIDEO_SYSREG

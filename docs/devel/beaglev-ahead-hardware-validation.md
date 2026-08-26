@@ -76,6 +76,41 @@ NACK/error behavior, PMIC_INT routing, rail defaults/voltages/timing and cold,
 warm and power-loss retention.  Do not connect modeled PMIC state to voltage
 rails or widen the controller rule until those observations are available.
 
+## DDR PLL and LPDDR training open item (DDR-001)
+
+Public vendor U-Boot commit ``bbf3994802d4ce64a22ccf795bc6dfe4bb9205da``
+defines DDR SYSREG at ``0xffff005000``.  Its generated LPDDR4 headers name
+``DDR_PLL_CFG0``/``DDR_PLL_CFG1`` at offsets ``0x8``/``0xc`` and
+``DDR_PLL_STS`` at ``0x18``, with source defaults ``0x01408501`` and
+``0x03000000`` for the two configuration words.  The selected 3733 path
+asserts and releases CFG1 bit 30, polls status bit 0, and writes status bit
+16 (commented as core-clock gating by that source).  This is public-firmware
+source evidence, not an observation of the owner's unpowered board.
+
+QEMU maps only those three four-byte words.  It uses the generated reset
+values and field widths as software-visible state, and treats release of the
+CFG1 reset bit as an immediate virtual lock transition so the public polling
+loop can progress.  Register/reset and migration qtests cover that contract.
+The convention does not establish a physical reset value, PLL frequency or
+lock delay, clock output, clock gating, or any DDR functional effect.
+
+An unchanged public SPL reaches its LPDDR banner under QEMU.  A debugger-only
+guest-memory change replacing U-Boot's diagnostic trap ``ebreak`` with a
+no-op exposed the next exception: a store/AMO access fault at
+``0xffff005000`` from its generic write helper.  QEMU deliberately leaves
+that base control word and the rest of the DDR SYSREG aperture unmapped.  The
+public source subsequently uses base control to stage power-good, PHY reset
+and APB reset release; it is not safe to infer controller/PHY/DFI/training
+completion from that sequence alone.
+
+Before expanding this model, capture a recoverable stock-firmware boot on the
+owner's board and record the exact accesses, reset class, readback values,
+lock timing and clock rates.  Establish the DDR controller/PHY reset polarity,
+DFI/training status, DRAM part topology/rank/width, rails and voltage timing,
+retention and warm-reset behavior.  Do not map a broad DDR aperture, connect
+the virtual PMIC to rails, or claim DRAM initialization/OS handoff until those
+facts are independently supported.
+
 ## Safe hardware workflow
 
 The first hardware session is read-only and non-destructive:

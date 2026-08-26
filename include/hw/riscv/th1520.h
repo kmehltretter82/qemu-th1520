@@ -17,6 +17,7 @@
 #include "hw/misc/th1520_aon_reset.h"
 #include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_ddr_pll.h"
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
 #include "hw/misc/th1520_mbox.h"
@@ -62,6 +63,7 @@ struct TH1520SoCState {
     THeadC900PLICState plic;
     TH1520APClockState ap_clock;
     MemoryRegion ap_clock_vendor_alias;
+    TH1520DDRPLLState ddr_pll;
     TH1520APResetState ap_reset;
     MemoryRegion ap_reset_vendor_npu_alias;
     TH1520AONResetState aon_reset;
@@ -119,6 +121,9 @@ enum {
     TH1520_DEV_CLINT,
     TH1520_DEV_SRAM,
     TH1520_DEV_AP_CLOCK,
+    TH1520_DEV_DDR_PLL_CFG0,
+    TH1520_DEV_DDR_PLL_CFG1,
+    TH1520_DEV_DDR_PLL_STS,
     TH1520_DEV_AP_RESET,
     TH1520_DEV_AON_AUDIO_RESET,
     TH1520_DEV_MISCSYS,
