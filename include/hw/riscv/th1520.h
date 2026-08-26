@@ -19,6 +19,7 @@
 #include "hw/misc/th1520_mbox.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_pinctrl.h"
+#include "hw/misc/th1520_video_sysreg.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
 #include "hw/riscv/riscv_hart.h"
@@ -54,8 +55,11 @@ struct TH1520SoCState {
     THeadC900CLINTState clint;
     THeadC900PLICState plic;
     TH1520APClockState ap_clock;
+    MemoryRegion ap_clock_vendor_alias;
     TH1520APResetState ap_reset;
     TH1520MiscSysState miscsys;
+    TH1520VideoSysRegState visys;
+    TH1520VideoSysRegState vosys;
     TH1520USBState usb;
     TH1520MboxState mbox;
     TH1520IOPMPState iopmp[TH1520_IOPMP_COUNT];
@@ -101,6 +105,8 @@ enum {
     TH1520_DEV_AP_CLOCK,
     TH1520_DEV_AP_RESET,
     TH1520_DEV_MISCSYS,
+    TH1520_DEV_VISYS,
+    TH1520_DEV_VOSYS,
     TH1520_DEV_USB_DRD,
     TH1520_DEV_USB_CORE,
     TH1520_DEV_UART0,

@@ -269,6 +269,9 @@ config TH1520_MBOX
 config TH1520_IOPMP
     bool
 
+config TH1520_VIDEO_SYSREG
+    bool
+
 config TH1520_PINCTRL
     bool
 

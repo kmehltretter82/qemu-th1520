@@ -1322,12 +1322,29 @@ filtering, address translation, fault/interrupt delivery, a DT binding, TEE,
 secure boot, or physical reset values.
 
 A direct run of that U-Boot now passes the former store fault at
-``0xfffc0280c0`` and emits its banner.  The next first fault is a 32-bit load
-at ``0xffff011100``.  That is U-Boot's ``clock_config.c`` AP-clock base plus
-``0x100``, and is distinct from QEMU's existing REE AP clock controller at
-``0xffef010000``.  It is therefore recorded as a separate clock-window gap,
-not silently aliased.  The exact reset contents, ownership and relationship of
-the two windows require a physical or better public-source comparison.
+``0xfffc0280c0`` and emits its banner.  Its ``clock_config.c`` uses the
+fullmask AP clock aperture at ``0xffff011000``, whereas the RevyOS DT exposes
+the same layout at ``0xffef010000``.  QEMU maps the former as an explicit,
+shared-state compatibility alias with no generated DT node; a focused qtest
+proves reads and writes are shared.  This does not establish whether the
+physical addresses are fabric aliases or a firmware convention.
+
+The same public source names four VISYS divider controls at
+``0xffe4040024/28/2c/30`` and three VOSYS controls at
+``0xffef528050/54/64``.  QEMU now maps exactly those source-backed 32-bit
+registers, with the documented writable fields, zero as a provisional QEMU
+reset convention, and migration.  It deliberately supplies no video clock
+outputs, display/ISP/HDMI/DSI behavior or generated DT nodes.  Focused reset,
+mask and migration qtests pass.
+
+The direct U-Boot run consequently gets past the former VISYS load at
+``0xffe4040030`` and prints all of its pre-video clock rates.  A short interrupt
+trace's first fault then moves to the load at ``0xfffc02d104``.  The public
+source labels the containing 4 KiB base ``MISCSYS_TEE_REG_BASE`` but does not
+name offset ``0x104`` in the paths examined here.  It remains an explicitly
+unmodeled next gap, rather than a reason to map an anonymous register bank.
+The exact reset contents, ownership, aliases and functional effects of all
+these windows require hardware or stronger public-source evidence.
 
 ### Independent Alpine userspace lane
 
@@ -1353,9 +1370,37 @@ This is deliberately a userspace-diversity check, not a new independent
 kernel result: the separate RevyOS vendor-kernel lane above remains the kernel
 axis.  It invokes a controlled Alpine shell rather than OpenRC, so it does not
 prove normal distro initialization, package installation, networking, an
-official BeagleBoard image or physical hardware behavior.  The gate accepts a
-separately built vendor Image as an input, but no additional
-RevyOS-plus-Alpine result is claimed here.
+official BeagleBoard image or physical hardware behavior.
+
+### Chosen OS/kernel validation matrix
+
+The primary validation policy is deliberately a cross-pair rather than a
+single vendor image or a succession of equivalent Linux root filesystems:
+
+| Lane | Kernel | Userspace/root | Role |
+| --- | --- | --- | --- |
+| Vendor-kernel cross-pair | RevyOS ``th1520-lts`` commit ``a092d55649279e1c9bcda2769b8f6b4370fa2c94``, ``th1520_defconfig`` | Alpine 3.24.1 RISC-V minirootfs (musl) | Primary hardware-driver and independent-userspace check |
+| Portable control | Tuxboot Linux 6.11.9 | Deterministic small ext2 root | Narrow regression and storage control |
+| Vendor firmware checkpoint | Public vendor U-Boot | No OS handoff claimed yet | Firmware configuration progress only |
+
+The first row now passes.  A fresh local build of the vendor configuration
+reported Linux ``6.6.141-ga092d5564927`` and Image SHA-256
+``62393b7b372f354945e20ed9f98fa07b7a4a3953c9b12d137b53c23378ba676e``.
+It booted the pinned Alpine archive through the generated DT, enumerated the
+HS400 eMMC card, mounted its ext4 root, ran Alpine's musl ``apk`` binary,
+wrote and synced a file, and remounted root read-only.  The gate recorded all
+four ``ALPINE_*_PASS`` markers in
+``validation-artifacts/beaglev-ahead-alpine-revyos.log``.  That cross-pair is
+now the preferred validation lane: it exercises vendor TH1520 drivers without
+letting a vendor userspace hide a matching assumption.
+
+It is still not a stock RevyOS image or normal Alpine boot: the test launches
+``/bin/sh`` directly and retains known GPIO registration and missing
+``regulatory.db`` warnings.  A Debian/glibc or another independent distro is
+a sensible later ABI lane, but is not a prerequisite for this matrix and will
+not replace either existing row.  It should be added only with a pinned image
+and a distinct question, such as normal service startup or generic userspace
+ABI coverage.
 
 A separate portable Linux 6.11.9 functional test wraps the pinned ext2 rootfs
 at MBR partition sector 2048 with disk signature ``0x1520a110`` and uses

@@ -47,6 +47,15 @@
 
 #define TH1520_GMAC_RIWT_CLOCK_HZ 500000000
 
+/*
+ * Vendor U-Boot accesses the AP clock register layout through this fullmask
+ * address, whereas the RevyOS DT exposes the same layout at
+ * 0xffef010000.  Keep it as an explicit compatibility aperture, with shared
+ * state, until hardware establishes whether this is a fabric alias or a
+ * firmware-only address convention.  It deliberately has no DT node.
+ */
+#define TH1520_VENDOR_UBOOT_AP_CLOCK_BASE 0xffff011000ULL
+
 static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_DRAM]  = { 0x0000000000, 0x100000000 },
     [TH1520_DEV_PLIC]  = { 0xffd8000000, 0x01000000 },
@@ -55,6 +64,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
     [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
     [TH1520_DEV_MISCSYS] = { 0xffec02c000, 0x00001000 },
+    [TH1520_DEV_VISYS] = { 0xffe4040000, 0x00001000 },
+    [TH1520_DEV_VOSYS] = { 0xffef528000, 0x00001000 },
     [TH1520_DEV_USB_DRD] = { 0xffec03f000, 0x00001000 },
     [TH1520_DEV_USB_CORE] = { 0xffe7040000, 0x00010000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
@@ -572,6 +583,11 @@ static void th1520_soc_init(Object *obj)
         object_initialize_child(obj, th1520_iopmp_info[i].name,
                                 &s->iopmp[i], TYPE_TH1520_IOPMP);
     }
+    object_initialize_child(obj, "visys", &s->visys,
+                            TYPE_TH1520_VIDEO_SYSREG);
+    object_initialize_child(obj, "vosys", &s->vosys,
+                            TYPE_TH1520_VIDEO_SYSREG);
+    qdev_prop_set_bit(DEVICE(&s->vosys), "vosys", true);
     object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "ts-count", TH1520_PVT_TS_COUNT);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "pd-count", TH1520_PVT_PD_COUNT);
@@ -707,6 +723,14 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_clock), 0,
                     th1520_memmap[TH1520_DEV_AP_CLOCK].base);
+    memory_region_init_alias(&s->ap_clock_vendor_alias, OBJECT(dev),
+                             "th1520.ap-clock-vendor-alias",
+                             sysbus_mmio_get_region(
+                                 SYS_BUS_DEVICE(&s->ap_clock), 0),
+                             0, TH1520_AP_CLOCK_MMIO_SIZE);
+    memory_region_add_subregion(system_memory,
+                                TH1520_VENDOR_UBOOT_AP_CLOCK_BASE,
+                                &s->ap_clock_vendor_alias);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ap_reset), errp)) {
         return;
@@ -719,6 +743,18 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->miscsys), 0,
                     th1520_memmap[TH1520_DEV_MISCSYS].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->visys), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->visys), 0,
+                    th1520_memmap[TH1520_DEV_VISYS].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->vosys), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->vosys), 0,
+                    th1520_memmap[TH1520_DEV_VOSYS].base);
 
     object_property_set_link(OBJECT(&s->usb), "dma", OBJECT(system_memory),
                              &error_abort);
