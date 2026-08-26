@@ -319,10 +319,13 @@ the DQNaN propagation control plus sticky exception-event flag FE.  QEMU
 models the pinned openC910 mask, FS access rules, NaN/event behavior, zero
 state after QEMU system reset, same-version migration, and exposes it as
 ``th.c910.fxcr`` in ``info registers -a``.  Migration tests currently prove
-the stored fields; guest FP execution after load and genuine older-version
-streams remain open.  The physical TH1520 reset value and exact CPU stepping
-are also unmeasured, so this is a QEMU/openC910 contract rather than silicon
-evidence.
+the stored fields and resume a guest without an intervening FXCR read: it
+proves DQNaN payload propagation and that a new already-sticky exception event
+sets FE.  The retained-RAM reset phase then proves FS Off and the first
+exception-producing FP operation after QEMU system reset.  An actual
+older-version FXCR-bearing stream remains open.  The physical TH1520 reset
+value and exact CPU stepping are also unmeasured, so this is a QEMU/openC910
+contract rather than silicon evidence.
 
 Peripheral limitations
 ----------------------

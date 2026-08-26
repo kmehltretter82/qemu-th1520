@@ -354,17 +354,21 @@ NaNs, every IEEE exception class, and direct architectural-flag writes.  It
 also checks a new occurrence of already-sticky NX and an integer-result,
 quiet-NaN ``flt.s`` whose already-sticky invalid event changes only FE but must
 change FS from Clean to Dirty.  The CSR qtest verifies aliases and that
-emulated warm/system reset clears FXCR and FS.  Whole-machine migration reads
-back the exact stored FXCR/FRM/FFLAGS fields, but does not yet execute an FP
-operation after load.
+emulated warm/system reset clears FXCR and FS.  Its dedicated current-stream
+migration guest stops the source with ``DQNaN|NX``, resumes the destination
+without first reading FXCR, proves quiet-NaN payload propagation and requires
+a new already-sticky NX event to set FE.  Retained RAM then selects a
+post-system-reset phase which proves FS Off, executes the first
+exception-producing ``flt.s`` and requires FS Dirty before its first FXCR
+read.  Normal, dependency-minimal and ASan/UBSan builds pass that execution
+gate.
 
 The stage-45 fast-path mutant and independent stage-46 raised-event mutation
 are recorded in the focused audit evidence above.  The SoftFloat quick suite
-passes 17/17 and the slow mulAdd/FMA test passes.  Post-load FP execution, an
-actual pre-version-3 migration stream, first exception-producing execution
-after emulated reset and physical capture remain open.  ``CPU-016`` keeps the
-owner's unidentified TH1520 stepping separate from this pinned-RTL QEMU
-contract.
+passes 17/17 and the slow mulAdd/FMA test passes.  An actual pre-version-3
+FXCR-bearing migration stream and physical capture remain open.  ``CPU-016``
+keeps the owner's unidentified TH1520 stepping separate from this pinned-RTL
+QEMU contract.
 
 ## Open local fidelity gaps (not confirmed bugs)
 
@@ -384,9 +388,8 @@ change must add a reproducer and a regression before changing any of them.
   reproducer or hardware fact.
 * `CPU-016`: the focused FXCR gate is complete in normal, dependency-minimal
   and ASan/UBSan builds, but is grounded in pinned openC910 RTL, not the
-  owner's unidentified TH1520 stepping.  Preserve that distinction until
-  post-load execution, an old-version migration stream and the physical-hart
-  matrix are complete.
+  owner's unidentified TH1520 stepping.  Preserve that distinction until an
+  old-version FXCR-bearing stream and the physical-hart matrix are complete.
 * Runtime UART0 remains deferred for an unresolved reason in the portable
   Linux 6.11.9/generated-DT combination; pinctrl/fw-devlink involvement is
   suspected but not established.  Earlycon works, and other pinned-kernel and
