@@ -412,6 +412,20 @@ combinations, RV32, big-endian behavior or physical C910 silicon.  Repeat the
 exact result, trap cause, ``vstart`` and destination-state checks on every
 owner-board hart and stepping before closing ``CPU-006``.
 
+## AXI-DMAC width and fixed-address checkpoint
+
+Checkpoint ``f92e2e624c`` adds a focused TH1520 general-DMAC qtest using the
+increment/no-change encodings used by the pinned Linux DW AXI DMAC driver.  It
+checks an e16-source/e8-destination direct transfer, a fixed source which
+repeats one byte, and a fixed destination which retains the final source byte.
+Each case checks the copied bytes and final SAR/DAR values.  The test passes in
+normal, dependency-minimal and ASan/UBSan builds.
+
+This is a QEMU memory-to-memory-model result, not an assertion about a TH1520
+peripheral endpoint or physical DMA timing.  Peripheral request routing,
+handshakes, packing, flow control, suspend/abort timing, noncoherent cache
+effects and physical controller synthesis remain open.
+
 ## GMAC-001 Type-2 receive-status checkpoint
 
 Local checkpoint ``46df230d5d`` enables Type-2 receive status only for the
