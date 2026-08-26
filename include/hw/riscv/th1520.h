@@ -14,6 +14,7 @@
 #include "hw/i2c/designware_i2c.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
+#include "hw/misc/th1520_aon_reset.h"
 #include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_iopmp.h"
@@ -60,6 +61,7 @@ struct TH1520SoCState {
     TH1520APClockState ap_clock;
     MemoryRegion ap_clock_vendor_alias;
     TH1520APResetState ap_reset;
+    TH1520AONResetState aon_reset;
     TH1520MiscSysState miscsys;
     MemoryRegion tee_miscsys_usb_clock_alias;
     TH1520TEEMiscSysClockState tee_miscsys_clock;
@@ -112,6 +114,7 @@ enum {
     TH1520_DEV_SRAM,
     TH1520_DEV_AP_CLOCK,
     TH1520_DEV_AP_RESET,
+    TH1520_DEV_AON_AUDIO_RESET,
     TH1520_DEV_MISCSYS,
     TH1520_DEV_TEE_MISCSYS_CLOCK,
     TH1520_DEV_VISYS,

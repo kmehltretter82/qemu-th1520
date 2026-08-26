@@ -33,6 +33,7 @@ config BEAGLEV_AHEAD
     select TH1520_ISO7816_CONFIG
     select TH1520_BOOTSEL
     select TH1520_TEE_MISCSYS_CLOCK
+    select TH1520_AON_RESET
     select TH1520_PINCTRL
     select TH1520_MISCSYS
     select TH1520_USB

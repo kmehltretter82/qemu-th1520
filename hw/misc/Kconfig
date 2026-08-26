@@ -281,6 +281,9 @@ config TH1520_BOOTSEL
 config TH1520_TEE_MISCSYS_CLOCK
     bool
 
+config TH1520_AON_RESET
+    bool
+
 config TH1520_PINCTRL
     bool
 

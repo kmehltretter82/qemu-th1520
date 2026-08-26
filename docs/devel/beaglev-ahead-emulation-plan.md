@@ -1401,6 +1401,25 @@ separately modeled TEE USB compatibility address.  This removes one precise
 firmware MMIO gap; it does not show that vendor U-Boot reaches a kernel or
 that the modeled reset or side effects match the owner's hardware.
 
+### Vendor SPL AON audio-reset checkpoint
+
+A reproducible two-stage run of the public ``light_beagle_defconfig`` places
+its SPL at ``0xffe0000000`` and its payload at ``0xffe002f000`` in the
+existing SRAM, then starts CPU0 with QEMU's generic loader.  Its bounded trace
+first reaches ``light_pre_reset_config()`` and writes ``0x37`` to
+``0xfffff4403c`` before serial initialisation.  Vendor SPL labels this as the
+AON audio-system reset word, and the public system manual describes its six
+low bits as active-low read/write controls with a zero reset value.  QEMU
+therefore maps only that exact four-byte word, retains those six bits, resets
+them to zero and migrates them; it creates no complete AON aperture or reset
+outputs.  Focused mask/reset and migration qtests pass.
+
+With the word present, the same trace reaches ``light_post_reset_config()``
+and next writes ``0xffff0151b0``, a source-labelled AP reset-generator entry.
+That is a new bounded compatibility question, not proof that the staged
+firmware reaches serial output, loads U-Boot successfully or matches physical
+hardware reset effects.
+
 ### Independent Alpine userspace lane
 
 To avoid treating the small portable rootfs as the only userspace contract,

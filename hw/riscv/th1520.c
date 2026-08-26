@@ -72,6 +72,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
     [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
+    [TH1520_DEV_AON_AUDIO_RESET] = {
+        0xfffff4403c, TH1520_AON_RESET_MMIO_SIZE },
     [TH1520_DEV_MISCSYS] = { 0xffec02c000, 0x00001000 },
     [TH1520_DEV_TEE_MISCSYS_CLOCK] = { 0xfffc02d120,
                                         TH1520_TEE_MISCSYS_CLOCK_MMIO_SIZE },
@@ -506,6 +508,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_TH1520_AP_CLOCK);
     object_initialize_child(obj, "ap-reset", &s->ap_reset,
                             TYPE_TH1520_AP_RESET);
+    object_initialize_child(obj, "aon-reset", &s->aon_reset,
+                            TYPE_TH1520_AON_RESET);
     object_initialize_child(obj, "miscsys", &s->miscsys,
                             TYPE_TH1520_MISCSYS);
     object_initialize_child(obj, "tee-miscsys-clock", &s->tee_miscsys_clock,
@@ -757,6 +761,12 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_reset), 0,
                     th1520_memmap[TH1520_DEV_AP_RESET].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->aon_reset), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->aon_reset), 0,
+                    th1520_memmap[TH1520_DEV_AON_AUDIO_RESET].base);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->miscsys), errp)) {
         return;
