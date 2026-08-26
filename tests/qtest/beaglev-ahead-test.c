@@ -659,6 +659,11 @@
 #define DMAC_CFG_INTERRUPT_ENABLE  BIT(1)
 #define DMAC_CH_ENABLE(channel)    BIT(channel)
 #define DMAC_CH_ENABLE_WE(channel) BIT((channel) + 8)
+#define DMAC_CTL_SRC_INCREMENT_SHIFT    4
+#define DMAC_CTL_DST_INCREMENT_SHIFT    6
+#define DMAC_CTL_SRC_WIDTH_SHIFT        8
+#define DMAC_CTL_INCREMENT_NO_CHANGE    1
+#define DMAC_CTL_WIDTH_16               1
 #define DMAC_CTL_LLI_LAST          BIT(30)
 #define DMAC_CTL_LLI_VALID         BIT(31)
 #define DMAC_IRQ_BLOCK_TRANSFER    BIT(0)
@@ -3583,6 +3588,133 @@ static void test_dmac_direct_transfer(void)
     qtest_writel(qts, C900_PLIC_CLAIM(1), TH1520_DMAC0_IRQ);
     g_assert_false(c900_plic_pending(qts, TH1520_DMAC0_IRQ));
     assert_no_irq(qts);
+
+    qtest_quit(qts);
+}
+
+static void test_dmac_width_and_fixed_address(void)
+{
+    enum {
+        WIDE_TRANSFERS = 8,
+        FIXED_SOURCE_TRANSFERS = 9,
+        FIXED_DESTINATION_TRANSFERS = 7,
+    };
+    static const uint8_t wide_source[WIDE_TRANSFERS * 2] = {
+        0x9e, 0x37, 0x42, 0xa1, 0x5c, 0xe8, 0x13, 0x76,
+        0x2d, 0xb4, 0x68, 0xf0, 0x09, 0xcd, 0x54, 0x8b,
+    };
+    static const uint8_t fixed_source[] = {
+        0x5a, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+    };
+    static const uint8_t fixed_destination_source[] = {
+        0x81, 0x22, 0xe4, 0x35, 0x76, 0x48, 0x9b,
+    };
+    const uint64_t wide_source_addr = DMAC_TEST_SOURCE_ADDR + 0x200;
+    const uint64_t wide_destination_addr = DMAC_TEST_DEST_ADDR + 0x200;
+    const uint64_t fixed_source_addr = DMAC_TEST_SOURCE_ADDR + 0x300;
+    const uint64_t fixed_source_destination_addr =
+        DMAC_TEST_DEST_ADDR + 0x300;
+    const uint64_t fixed_destination_source_addr =
+        DMAC_TEST_SOURCE_ADDR + 0x400;
+    const uint64_t fixed_destination_addr = DMAC_TEST_DEST_ADDR + 0x400;
+    uint8_t destination[WIDE_TRANSFERS * 2];
+    uint8_t expected[WIDE_TRANSFERS * 2];
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    /*
+     * The Linux DW AXI DMAC driver defines increment as zero and no-change
+     * as one.
+     */
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CFG, DMAC_CFG_ENABLE);
+
+    /* Source e16, destination e8: BLOCK_TS counts source transfers. */
+    memset(destination, 0, sizeof(destination));
+    qtest_memwrite(qts, wide_source_addr, wide_source, sizeof(wide_source));
+    qtest_memwrite(qts, wide_destination_addr, destination,
+                   sizeof(destination));
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(0),
+                  wide_source_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(0),
+                  wide_destination_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(0),
+                  WIDE_TRANSFERS - 1);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(0),
+                  (uint64_t)DMAC_CTL_WIDTH_16 <<
+                  DMAC_CTL_SRC_WIDTH_SHIFT);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(0) | DMAC_CH_ENABLE_WE(0));
+    qtest_memread(qts, wide_destination_addr, destination,
+                  sizeof(destination));
+    g_assert_cmpmem(destination, sizeof(destination), wide_source,
+                    sizeof(wide_source));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(0)), ==,
+                    wide_source_addr + sizeof(wide_source));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(0)), ==,
+                    wide_destination_addr + sizeof(destination));
+
+    /* A fixed source repeats the first byte while its SAR remains stable. */
+    memset(destination, 0, FIXED_SOURCE_TRANSFERS);
+    memset(expected, fixed_source[0], FIXED_SOURCE_TRANSFERS);
+    qtest_memwrite(qts, fixed_source_addr, fixed_source,
+                   sizeof(fixed_source));
+    qtest_memwrite(qts, fixed_source_destination_addr, destination,
+                   FIXED_SOURCE_TRANSFERS);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(1),
+                  fixed_source_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(1),
+                  fixed_source_destination_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(1),
+                  FIXED_SOURCE_TRANSFERS - 1);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(1),
+                  (uint64_t)DMAC_CTL_INCREMENT_NO_CHANGE <<
+                  DMAC_CTL_SRC_INCREMENT_SHIFT);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(1) | DMAC_CH_ENABLE_WE(1));
+    qtest_memread(qts, fixed_source_destination_addr, destination,
+                  FIXED_SOURCE_TRANSFERS);
+    g_assert_cmpmem(destination, FIXED_SOURCE_TRANSFERS, expected,
+                    FIXED_SOURCE_TRANSFERS);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(1)), ==, fixed_source_addr);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(1)), ==,
+                    fixed_source_destination_addr + FIXED_SOURCE_TRANSFERS);
+
+    /*
+     * A fixed destination consumes all source bytes and retains only the
+     * last.
+     */
+    memset(destination, 0xa5, FIXED_DESTINATION_TRANSFERS);
+    memcpy(expected, destination, FIXED_DESTINATION_TRANSFERS);
+    expected[0] = fixed_destination_source[FIXED_DESTINATION_TRANSFERS - 1];
+    qtest_memwrite(qts, fixed_destination_source_addr,
+                   fixed_destination_source,
+                   sizeof(fixed_destination_source));
+    qtest_memwrite(qts, fixed_destination_addr, destination,
+                   FIXED_DESTINATION_TRANSFERS);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(2),
+                  fixed_destination_source_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(2),
+                  fixed_destination_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(2),
+                  FIXED_DESTINATION_TRANSFERS - 1);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(2),
+                  (uint64_t)DMAC_CTL_INCREMENT_NO_CHANGE <<
+                  DMAC_CTL_DST_INCREMENT_SHIFT);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(2) | DMAC_CH_ENABLE_WE(2));
+    qtest_memread(qts, fixed_destination_addr, destination,
+                  FIXED_DESTINATION_TRANSFERS);
+    g_assert_cmpmem(destination, FIXED_DESTINATION_TRANSFERS, expected,
+                    FIXED_DESTINATION_TRANSFERS);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(2)), ==,
+                    fixed_destination_source_addr +
+                    FIXED_DESTINATION_TRANSFERS);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(2)), ==, fixed_destination_addr);
 
     qtest_quit(qts);
 }
@@ -11948,6 +12080,8 @@ int main(int argc, char **argv)
                        test_dmac_registers);
         qtest_add_func("/beaglev-ahead/dmac/direct-transfer",
                        test_dmac_direct_transfer);
+        qtest_add_func("/beaglev-ahead/dmac/width-fixed-address",
+                       test_dmac_width_and_fixed_address);
         qtest_add_func("/beaglev-ahead/dmac/linked-list",
                        test_dmac_linked_list);
         qtest_add_func("/beaglev-ahead/dmac/migration",
