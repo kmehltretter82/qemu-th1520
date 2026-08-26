@@ -211,6 +211,20 @@ backing files and other external endpoints are not migrated.  Storage writes,
 errors, aborts, SDMA and additional transfer phases remain open, as do GMAC
 and USB transfers in flight across migration.
 
+### xHCI command/event migration implementation update
+
+The local USB-host qtest migrates a pending xHCI No-Op command completion and
+its event-ring/PLIC interrupt.  After load it consumes that event and submits
+the next command, which must complete at the next event-ring slot.  Omitting
+xHCI's serialized command-ring cursor makes the second completion fail.
+Focused normal, dependency-minimal and ASan/UBSan runs pass, followed by the
+120/120 normal whole-board qtest gate.
+
+This confirms QEMU controller command/event ownership only.  No USB endpoint
+transfer is active, and no attached physical or host-backed USB device is
+claimed to migrate.  It therefore does not answer TH1520 USB timing, endpoint,
+PHY, role or external-device behavior.
+
 ## Historical C910 migration checkpoint
 
 The re-runnable evidence is stored on disk, outside the QEMU source tree, at

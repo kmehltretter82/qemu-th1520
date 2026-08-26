@@ -410,7 +410,11 @@ change must add a reproducer and a regression before changing any of them.
   one nanosecond later; removing the timer from SDHCI VMState makes the
   regression fail.  It uses separately initialized identical backing images,
   so it validates controller/timer ownership rather than migration of card
-  media or a backend.  GMAC and USB migration during in-flight DMA or an
+  media or a backend.  A separate USB-host qtest migrates a pending xHCI
+  No-Op completion, consumes it, then completes the next command at the next
+  event-ring slot; omitting xHCI's command-ring VMState makes it fail.  That
+  proves controller ring and IRQ continuity, not an attached USB device or
+  endpoint transfer.  GMAC and USB migration during in-flight DMA or an
   attached transfer still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load

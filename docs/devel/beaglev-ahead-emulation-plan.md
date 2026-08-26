@@ -966,6 +966,15 @@ ASan/UBSan focused runs pass; the subsequent normal whole-board qtest gate
 passes 119/119.  It uses separate identical raw images, so it
 does not claim migration of backing media or a physical TH1520 timing result.
 
+The ``usb/pending-irq-migration`` qtest begins with an xHCI No-Op completion
+still pending in the event ring, consumes it after load, then completes the
+next command at the next event-ring slot and rebuilds the PLIC interrupt.
+Removing xHCI's serialized command-ring cursor makes the second completion
+fail; normal, dependency-minimal and ASan/UBSan focused runs pass, as does the
+subsequent 120/120 normal whole-board qtest gate.  This is a controller
+command/event-ring checkpoint, not evidence for attached USB device migration
+or an endpoint transfer in flight.
+
 The current generic RISC-V CSR/migration binary passes fourteen subtests,
 including
 fixed-only, active, inhibited and pending PMU migration plus Sscofpmf
