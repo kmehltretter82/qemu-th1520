@@ -455,7 +455,12 @@ standard, transmit-only, receive-only and EEPROM-read transfers, interrupt
 thresholds and sticky overrun/underrun status, serial-loopback mode, reset and
 migration.  A board model may attach an SSI peripheral to its ``spi`` bus and
 native active-low ``cs`` outputs; the BeagleV Ahead machine deliberately does
-not attach one.
+not attach one.  Vendor U-Boot's ``light-beagle.dts`` describes a ``jedec,spi-nor``
+child on SPI0 CS GPIO2_15 and a separate ``spi-nand`` child on ``qspi1``, but
+the V1 board BOM contains neither NOR nor NAND.  The design data records the
+corresponding boot selections but does not establish a fitted device or its
+routing.  QEMU therefore does not turn either firmware description into a
+default peripheral; the conflict is retained in the validation ledger.
 
 The generic model defaults to a 16-frame FIFO and one native chip select and
 reports zero component ID/version, because the TH1520 synthesis values have
