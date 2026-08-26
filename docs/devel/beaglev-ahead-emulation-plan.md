@@ -1412,6 +1412,31 @@ separately modeled TEE USB compatibility address.  This removes one precise
 firmware MMIO gap; it does not show that vendor U-Boot reaches a kernel or
 that the modeled reset or side effects match the owner's hardware.
 
+### Vendor U-Boot boot-path boundary
+
+The public ``CONFIG_TARGET_LIGHT_FM_C910_BEAGLE`` U-Boot build at commit
+``bbf3994802d4ce64a22ccf795bc6dfe4bb9205da`` is an SMP M-mode build with its
+environment in MMC.  Its default environment selects the vendor ``bootA`` or
+``bootB`` partition, loads ``light_aon_fpga.bin``, ``light_c906_audio.bin``
+and ``fw_dynamic.bin``, then invokes ``bootslave`` before its distro boot
+search.  ``bootslave`` programs E902 and C906 reset/entry controls; QEMU does
+not instantiate either auxiliary core or claim that their firmware executes.
+
+A bounded raw-``-bios`` run reaches the U-Boot banner, console setup and
+``Net:`` initialization.  Because QEMU currently releases all four C910 harts
+and this U-Boot uses an SMP hart lottery, a nonzero hart can become its primary
+hart.  That is an expected consequence of the current emulator convention,
+not evidence for the board's reset sequence.  The synthetic eMMC test image
+does not contain the vendor partition layout or auxiliary firmware, so its
+failure to progress from this route is not a new missing-MMIO conclusion.
+
+Bundled generic OpenSBI is not a substitute for this raw firmware path: it
+hands its next stage to S-mode, while this U-Boot build expects M-mode.  Keep
+the public U-Boot run as a firmware configuration checkpoint only.  A real
+vendor-firmware-to-OS claim requires a source-backed primary/secondary reset
+contract, BootROM/media contract and pinned vendor boot assets; ``BOOT-001``,
+``BOOT-003`` and ``DOC-002`` remain open.
+
 ### Vendor SPL AON audio-reset checkpoint
 
 A reproducible two-stage run of the public ``light_beagle_defconfig`` places
