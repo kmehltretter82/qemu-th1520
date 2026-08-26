@@ -1389,6 +1389,18 @@ bounded direct U-Boot run no longer encounters the prior ``BOOT_SEL`` access
 fault, but still does not hand off to an OS; that is a stopping boundary, not
 evidence of the next missing device.
 
+The next source-backed access in vendor U-Boot's ``board_late_init()`` is an
+unconditional read/modify/write of ``MISCSYS_TEE_CLK_CTRL_TEE`` at
+``0xfffc02d120``.  It clears the TEE DMA clock-gate bit.  The public system
+manual describes the exact word as eleven read/write gate bits with reset
+value ``0x7ff``.  QEMU now maps only this four-byte word, preserves those
+eleven bits, resets them to ``0x7ff`` and migrates them.  Focused register and
+migration qtests pass.  It deliberately has no TEE DT node, aperture, DMA
+device, clock output or functional gate effect, and it is not an alias of the
+separately modeled TEE USB compatibility address.  This removes one precise
+firmware MMIO gap; it does not show that vendor U-Boot reaches a kernel or
+that the modeled reset or side effects match the owner's hardware.
+
 ### Independent Alpine userspace lane
 
 To avoid treating the small portable rootfs as the only userspace contract,

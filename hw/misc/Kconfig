@@ -278,6 +278,9 @@ config TH1520_ISO7816_CONFIG
 config TH1520_BOOTSEL
     bool
 
+config TH1520_TEE_MISCSYS_CLOCK
+    bool
+
 config TH1520_PINCTRL
     bool
 

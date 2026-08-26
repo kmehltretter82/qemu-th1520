@@ -14,6 +14,7 @@
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
 #include "hw/misc/th1520_miscsys.h"
+#include "hw/misc/th1520_tee_miscsys_clock.h"
 #include "hw/misc/th1520_video_sysreg.h"
 #include "hw/net/mii.h"
 #include "hw/sd/sdhci.h"
@@ -32,6 +33,7 @@
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
 #define TH1520_VENDOR_UBOOT_AP_CLOCK_BASE 0xffff011000ULL
 #define TH1520_VENDOR_UBOOT_USB_CLOCK_BASE 0xfffc02d104ULL
+#define TH1520_TEE_MISCSYS_CLOCK_BASE 0xfffc02d120ULL
 #define TH1520_AP_RESET_BASE       0xffef014000ULL
 #define TH1520_MISCSYS_BASE        0xffec02c000ULL
 #define TH1520_VISYS_BASE          0xffe4040000ULL
@@ -3709,6 +3711,64 @@ static void test_th1520_bootsel_migration(void)
     assert_th1520_bootsel_state(dst, 5);
     qtest_system_reset(dst);
     assert_th1520_bootsel_state(dst, 5);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void assert_th1520_tee_miscsys_clock_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readl(qts, TH1520_TEE_MISCSYS_CLOCK_BASE), ==,
+                    TH1520_TEE_MISCSYS_CLOCK_RESET);
+}
+
+static void test_th1520_tee_miscsys_clock_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_tee_miscsys_clock_reset_state(qts);
+    qtest_writel(qts, TH1520_TEE_MISCSYS_CLOCK_BASE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_TEE_MISCSYS_CLOCK_BASE), ==,
+                    TH1520_TEE_MISCSYS_CLOCK_ENABLE_MASK);
+    qtest_writel(qts, TH1520_TEE_MISCSYS_CLOCK_BASE,
+                 TH1520_TEE_MISCSYS_CLOCK_RESET & ~BIT(6));
+    g_assert_cmphex(qtest_readl(qts, TH1520_TEE_MISCSYS_CLOCK_BASE), ==,
+                    TH1520_TEE_MISCSYS_CLOCK_RESET & ~BIT(6));
+    qtest_system_reset(qts);
+    assert_th1520_tee_miscsys_clock_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_tee_miscsys_clock_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-tee-miscsys-clock-XXXXXX", &path,
+                         NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_writel(src, TH1520_TEE_MISCSYS_CLOCK_BASE, 0x5a5);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_TEE_MISCSYS_CLOCK_BASE), ==,
+                    0x5a5);
+    qtest_system_reset(dst);
+    assert_th1520_tee_miscsys_clock_reset_state(dst);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -12971,6 +13031,10 @@ int main(int argc, char **argv)
                        test_th1520_bootsel_registers);
         qtest_add_func("/beaglev-ahead/th1520-bootsel/migration",
                        test_th1520_bootsel_migration);
+        qtest_add_func("/beaglev-ahead/th1520-tee-miscsys-clock/registers",
+                       test_th1520_tee_miscsys_clock_registers);
+        qtest_add_func("/beaglev-ahead/th1520-tee-miscsys-clock/migration",
+                       test_th1520_tee_miscsys_clock_migration);
         qtest_add_func("/beaglev-ahead/mr75203/registers",
                        test_mr75203_registers);
         qtest_add_func("/beaglev-ahead/mr75203/migration",

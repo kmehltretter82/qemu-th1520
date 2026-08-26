@@ -73,6 +73,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
     [TH1520_DEV_AP_RESET] = { 0xffef014000, 0x00001000 },
     [TH1520_DEV_MISCSYS] = { 0xffec02c000, 0x00001000 },
+    [TH1520_DEV_TEE_MISCSYS_CLOCK] = { 0xfffc02d120,
+                                        TH1520_TEE_MISCSYS_CLOCK_MMIO_SIZE },
     [TH1520_DEV_VISYS] = { 0xffe4040000, 0x00001000 },
     [TH1520_DEV_VOSYS] = { 0xffef528000, 0x00001000 },
     [TH1520_DEV_ISO7816_CONFIG] = { 0xfff7f30010,
@@ -506,6 +508,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_TH1520_AP_RESET);
     object_initialize_child(obj, "miscsys", &s->miscsys,
                             TYPE_TH1520_MISCSYS);
+    object_initialize_child(obj, "tee-miscsys-clock", &s->tee_miscsys_clock,
+                            TYPE_TH1520_TEE_MISCSYS_CLOCK);
     object_initialize_child(obj, "usb", &s->usb, TYPE_TH1520_USB);
     for (int i = 0; i < TH1520_UART_COUNT; i++) {
         object_initialize_child(obj, uart_names[i], &s->uart[i],
@@ -768,6 +772,12 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(system_memory,
                                 TH1520_VENDOR_UBOOT_USB_CLOCK_BASE,
                                 &s->tee_miscsys_usb_clock_alias);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->tee_miscsys_clock), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->tee_miscsys_clock), 0,
+                    th1520_memmap[TH1520_DEV_TEE_MISCSYS_CLOCK].base);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->visys), errp)) {
         return;
