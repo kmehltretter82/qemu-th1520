@@ -472,6 +472,7 @@ static uint64_t dw_ic_enable_reg_pre_write(RegisterInfo *reg, uint64_t value)
 {
     DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
 
+    value &= s->enable_mask;
     if (value & R_DW_IC_ENABLE_ENABLE_MASK &&
             !(s->regs[R_DW_IC_CON] & R_DW_IC_CON_SLAVE_DISABLE_MASK)) {
         qemu_log_mask(LOG_UNIMP,
@@ -843,6 +844,10 @@ static const Property designware_i2c_properties[] = {
                        intr_mask_reset, 0x000008ff),
     DEFINE_PROP_UINT32("intr-mask-valid", DesignWareI2CState,
                        intr_mask_valid, 0x00007fff),
+    DEFINE_PROP_UINT32("enable-mask", DesignWareI2CState, enable_mask,
+                       R_DW_IC_ENABLE_ENABLE_MASK |
+                       R_DW_IC_ENABLE_ABORT_MASK |
+                       R_DW_IC_ENABLE_TX_CMD_BLOCK_MASK),
     DEFINE_PROP_UINT32("fs-spklen-reset", DesignWareI2CState,
                        fs_spklen_reset, 2),
     DEFINE_PROP_UINT32("hs-spklen-reset", DesignWareI2CState,

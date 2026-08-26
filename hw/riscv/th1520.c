@@ -76,6 +76,9 @@
  */
 #define TH1520_VENDOR_UBOOT_USB_CLOCK_BASE 0xfffc02d104ULL
 
+/* Vendor AON-I2C firmware exposes only IC_ENABLE.ENABLE. */
+#define TH1520_AON_I2C_ENABLE_MASK 0x1
+
 static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_DRAM]  = { 0x0000000000, 0x100000000 },
     [TH1520_DEV_PLIC]  = { 0xffd8000000, 0x01000000 },
@@ -116,6 +119,7 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_PADCTRL_AOSYS] = { 0xfffff4a000, 0x00002000 },
     [TH1520_DEV_PADCTRL1_APSYS] = { 0xffe7f3c000, 0x00001000 },
     [TH1520_DEV_PADCTRL0_APSYS] = { 0xffec007000, 0x00001000 },
+    [TH1520_DEV_AON_I2C] = { 0xfffff4c000, 0x00001000 },
     [TH1520_DEV_I2C0]  = { 0xffe7f20000, 0x00004000 },
     [TH1520_DEV_I2C1]  = { 0xffe7f24000, 0x00004000 },
     [TH1520_DEV_I2C2]  = { 0xffec00c000, 0x00004000 },
@@ -246,6 +250,31 @@ static const TH1520I2CInfo th1520_i2c_info[TH1520_I2C_COUNT] = {
     { "i2c4", TH1520_DEV_I2C4, TH1520_I2C4_IRQ, TH1520_CLK_I2C4 },
     { "i2c5", TH1520_DEV_I2C5, TH1520_I2C5_IRQ, TH1520_CLK_I2C5 },
 };
+
+static void th1520_i2c_configure(DeviceState *i2c)
+{
+    qdev_prop_set_uint32(i2c, "component-parameters",
+                         TH1520_I2C_COMPONENT_PARAMETERS);
+    qdev_prop_set_uint32(i2c, "component-version",
+                         TH1520_I2C_COMPONENT_VERSION);
+    qdev_prop_set_uint32(i2c, "component-type",
+                         TH1520_I2C_COMPONENT_TYPE);
+    qdev_prop_set_uint32(i2c, "intr-mask-reset",
+                         TH1520_I2C_INTR_MASK_RESET);
+    qdev_prop_set_uint32(i2c, "intr-mask-valid",
+                         TH1520_I2C_INTR_MASK_VALID);
+    qdev_prop_set_uint32(i2c, "fs-spklen-reset", 1);
+    qdev_prop_set_uint32(i2c, "hs-spklen-reset", 1);
+    qdev_prop_set_uint32(i2c, "scl-stuck-timeout-reset", UINT32_MAX);
+    qdev_prop_set_uint32(i2c, "sda-stuck-timeout-reset", UINT32_MAX);
+    qdev_prop_set_uint32(i2c, "ack-general-call-reset", 1);
+}
+
+static void th1520_aon_i2c_configure(DeviceState *i2c)
+{
+    th1520_i2c_configure(i2c);
+    qdev_prop_set_uint32(i2c, "enable-mask", TH1520_AON_I2C_ENABLE_MASK);
+}
 
 typedef struct TH1520TimerInfo {
     const char *name;
@@ -557,27 +586,13 @@ static void th1520_soc_init(Object *obj)
         qdev_prop_set_uint8(DEVICE(&s->padctrl[i]), "pad-group",
                             th1520_padctrl_info[i].group);
     }
+    object_initialize_child(obj, "aon-i2c", &s->aon_i2c,
+                            TYPE_DESIGNWARE_I2C);
+    th1520_aon_i2c_configure(DEVICE(&s->aon_i2c));
     for (int i = 0; i < TH1520_I2C_COUNT; i++) {
-        DeviceState *i2c;
-
         object_initialize_child(obj, th1520_i2c_info[i].name, &s->i2c[i],
                                 TYPE_DESIGNWARE_I2C);
-        i2c = DEVICE(&s->i2c[i]);
-        qdev_prop_set_uint32(i2c, "component-parameters",
-                             TH1520_I2C_COMPONENT_PARAMETERS);
-        qdev_prop_set_uint32(i2c, "component-version",
-                             TH1520_I2C_COMPONENT_VERSION);
-        qdev_prop_set_uint32(i2c, "component-type",
-                             TH1520_I2C_COMPONENT_TYPE);
-        qdev_prop_set_uint32(i2c, "intr-mask-reset",
-                             TH1520_I2C_INTR_MASK_RESET);
-        qdev_prop_set_uint32(i2c, "intr-mask-valid",
-                             TH1520_I2C_INTR_MASK_VALID);
-        qdev_prop_set_uint32(i2c, "fs-spklen-reset", 1);
-        qdev_prop_set_uint32(i2c, "hs-spklen-reset", 1);
-        qdev_prop_set_uint32(i2c, "scl-stuck-timeout-reset", UINT32_MAX);
-        qdev_prop_set_uint32(i2c, "sda-stuck-timeout-reset", UINT32_MAX);
-        qdev_prop_set_uint32(i2c, "ack-general-call-reset", 1);
+        th1520_i2c_configure(DEVICE(&s->i2c[i]));
     }
     for (int i = 0; i < TH1520_SPI_COUNT; i++) {
         object_initialize_child(obj, th1520_spi_info[i].name, &s->spi[i],
@@ -941,6 +956,20 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
             th1520_soc_connect_ap_reset(s, TH1520_AP_RESET_PADCTRL0);
         }
     }
+
+    /*
+     * Vendor SPL uses this AON controller for PMIC setup before Linux.  It is
+     * intentionally not part of the AP I2C list: no generated DT node, AP
+     * clock/reset connection, or fabricated I2C slave is implied.
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->aon_i2c), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->aon_i2c), 0,
+                    th1520_memmap[TH1520_DEV_AON_I2C].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->aon_i2c), 0,
+                       qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
+                                              TH1520_AON_I2C_IRQ));
 
     for (int i = 0; i < TH1520_I2C_COUNT; i++) {
         const TH1520I2CInfo *info = &th1520_i2c_info[i];

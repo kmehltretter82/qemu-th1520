@@ -1441,6 +1441,28 @@ after the complete public post-reset list and emits the U-Boot SPL banner.  It
 is not proof of subsequent U-Boot payload loading, OS handoff or physical
 hardware behavior.
 
+### Vendor SPL AON I2C checkpoint
+
+After the banner, public vendor SPL initializes its PMIC path.  Its source
+names an AON DesignWare I2C controller at ``0xfffff4c000`` with PLIC source
+79, alongside the Linux-visible AP controller at ``0xffe7f20000``.  QEMU now
+maps only the AON controller's generic 4 KiB register block and routes source
+79.  It creates no generated DT node, AP reset/clock connection, pad effect,
+PMIC, I2C slave or voltage-rail model.
+
+The vendor controller header defines only ``IC_ENABLE`` bit 0, while its
+disable helper writes ``~1``.  An AON-only writable mask therefore retains
+that bit and prevents QEMU's generic abort command bits from changing the
+next transfer.  Linux-visible AP controllers retain the generic mask.  The
+focused qtests cover the source's exact disable write, NACK delivery through
+PLIC source 79, reset and migration.
+
+The bounded staged trace no longer faults on the AON address and reaches
+``board_init_f set apcpu voltage failed``.  Its retained generic QEMU
+post-abort diagnostic cannot establish a PMIC response or topology.  This is
+a firmware-register checkpoint only, not a reason to invent a PMIC model or
+a claim of payload/OS handoff or physical behavior.
+
 ### Independent Alpine userspace lane
 
 To avoid treating the small portable rootfs as the only userspace contract,

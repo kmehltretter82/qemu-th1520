@@ -37,6 +37,24 @@ Resolution requires:
 
 Never close an item merely because Linux boots or a driver does not complain.
 
+## AON I2C open item (I2C-002)
+
+Public vendor U-Boot names an AON controller at ``0xfffff4c000`` with PLIC
+source 79 and defines only bit 0 of ``IC_ENABLE``; its disable helper writes
+``~1``.  QEMU maps a generic 4 KiB controller, routes source 79 and accepts
+only that enable bit for this AON instance.  It emits no DT node and supplies
+no PMIC/slave, pads, clock/reset link, rail effect or AON synthesis claim.
+Focused qtests cover the exact disable write, NACK/PLIC route, reset and
+migration.  A bounded SPL trace reaches the PMIC-voltage failure path without
+an AON-address fault, but its post-abort diagnostic does not identify the real
+PMIC response.
+
+On hardware, identify the PMIC and bus topology before writes; capture safe
+reset/read-only controller state, PLIC routing and stock-firmware
+transactions.  With a recovery plan, determine enable/reserved bits,
+timing/FIFO behavior, clock/reset/pad ownership and NACK/error behavior.  Do
+not model a PMIC or voltage rails until those observations are available.
+
 ## Safe hardware workflow
 
 The first hardware session is read-only and non-destructive:

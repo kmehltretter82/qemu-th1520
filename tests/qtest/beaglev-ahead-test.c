@@ -64,6 +64,7 @@
 #define TH1520_PADCTRL_AOSYS_BASE  0xfffff4a000ULL
 #define TH1520_PADCTRL1_APSYS_BASE 0xffe7f3c000ULL
 #define TH1520_PADCTRL0_APSYS_BASE 0xffec007000ULL
+#define TH1520_AON_I2C_BASE        0xfffff4c000ULL
 #define TH1520_I2C0_BASE           0xffe7f20000ULL
 #define TH1520_I2C1_BASE           0xffe7f24000ULL
 #define TH1520_I2C2_BASE           0xffec00c000ULL
@@ -373,6 +374,7 @@
 #define TH1520_GPIO3_IRQ           59
 #define TH1520_GPIO4_IRQ           55
 #define TH1520_AOGPIO_IRQ          76
+#define TH1520_AON_I2C_IRQ         79
 #define TH1520_I2C0_IRQ            44
 #define TH1520_I2C1_IRQ            45
 #define TH1520_I2C2_IRQ            46
@@ -7794,43 +7796,68 @@ static void assert_dw_i2c_reset_state(QTestState *qts, uint64_t base)
                     TH1520_I2C_COMP_TYPE);
 }
 
+static void test_dw_i2c_registers_at(QTestState *qts, uint64_t base)
+{
+    assert_dw_i2c_reset_state(qts, base);
+    qtest_writel(qts, base + DW_I2C_INTR_MASK, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_INTR_MASK), ==,
+                    TH1520_I2C_INTR_VALID);
+    qtest_writel(qts, base + DW_I2C_COMP_PARAM1, 0);
+    qtest_writel(qts, base + DW_I2C_COMP_VERSION, 0);
+    qtest_writel(qts, base + DW_I2C_COMP_TYPE, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_PARAM1), ==,
+                    TH1520_I2C_COMP_PARAM1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_VERSION), ==,
+                    TH1520_I2C_COMP_VERSION);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_TYPE), ==,
+                    TH1520_I2C_COMP_TYPE);
+
+    qtest_writel(qts, base + DW_I2C_FS_SPKLEN, 0);
+    qtest_writel(qts, base + DW_I2C_HS_SPKLEN, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
+    qtest_writel(qts, base + DW_I2C_ENABLE, 1);
+    qtest_writel(qts, base + DW_I2C_FS_SPKLEN, 7);
+    qtest_writel(qts, base + DW_I2C_HS_SPKLEN, 7);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
+    dw_i2c_disable(qts, base);
+}
+
+static void test_aon_i2c_enable_mask(QTestState *qts)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+
+    /* Vendor SPL disables AON I2C by writing ~IC_ENABLE.ENABLE. */
+    qtest_writel(qts, base + DW_I2C_ENABLE, 0xfffffffeU);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ENABLE), ==, 0);
+    g_assert_false(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                   DW_I2C_INTR_TX_ABRT);
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR + 1, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, 0xa5 | DW_I2C_DATA_STOP);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_TX_ABRT);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE) & BIT(0));
+    qtest_readl(qts, base + DW_I2C_CLR_TX_ABRT);
+    dw_i2c_disable(qts, base);
+}
+
 static void test_dw_i2c_registers(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
-        uint64_t base = th1520_i2c_controllers[i].base;
-
-        assert_dw_i2c_reset_state(qts, base);
-        qtest_writel(qts, base + DW_I2C_INTR_MASK, UINT32_MAX);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_INTR_MASK), ==,
-                        TH1520_I2C_INTR_VALID);
-        qtest_writel(qts, base + DW_I2C_COMP_PARAM1, 0);
-        qtest_writel(qts, base + DW_I2C_COMP_VERSION, 0);
-        qtest_writel(qts, base + DW_I2C_COMP_TYPE, 0);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_PARAM1), ==,
-                        TH1520_I2C_COMP_PARAM1);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_VERSION), ==,
-                        TH1520_I2C_COMP_VERSION);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_COMP_TYPE), ==,
-                        TH1520_I2C_COMP_TYPE);
-
-        qtest_writel(qts, base + DW_I2C_FS_SPKLEN, 0);
-        qtest_writel(qts, base + DW_I2C_HS_SPKLEN, 0);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
-        qtest_writel(qts, base + DW_I2C_ENABLE, 1);
-        qtest_writel(qts, base + DW_I2C_FS_SPKLEN, 7);
-        qtest_writel(qts, base + DW_I2C_HS_SPKLEN, 7);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_FS_SPKLEN), ==, 1);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_HS_SPKLEN), ==, 1);
-        dw_i2c_disable(qts, base);
+        test_dw_i2c_registers_at(qts, th1520_i2c_controllers[i].base);
     }
+    test_dw_i2c_registers_at(qts, TH1520_AON_I2C_BASE);
+    test_aon_i2c_enable_mask(qts);
 
     qtest_system_reset(qts);
     for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
         assert_dw_i2c_reset_state(qts, th1520_i2c_controllers[i].base);
     }
+    assert_dw_i2c_reset_state(qts, TH1520_AON_I2C_BASE);
     qtest_quit(qts);
 }
 
@@ -7897,6 +7924,35 @@ static void test_dw_i2c_eeprom_backing(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_dw_i2c_interrupt(QTestState *qts, uint64_t base,
+                                  uint32_t irq)
+{
+    qtest_writel(qts, C900_PLIC_PRIORITY(irq), 5);
+    c900_plic_set_enable(qts, 1, irq, true);
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR + 1,
+                  DW_I2C_INTR_TX_ABRT);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, 0xa5 | DW_I2C_DATA_STOP);
+
+    g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_TX_ABRT);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_INTR_STAT) &
+                  DW_I2C_INTR_TX_ABRT);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE) & BIT(0));
+    g_assert_true(c900_plic_pending(qts, irq));
+    assert_only_irq(qts, 0);
+    g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==, irq);
+    assert_no_irq(qts);
+
+    qtest_readl(qts, base + DW_I2C_CLR_TX_ABRT);
+    g_assert_false(qtest_readl(qts, base + DW_I2C_INTR_STAT) &
+                   DW_I2C_INTR_TX_ABRT);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE), ==, 0);
+    qtest_writel(qts, C900_PLIC_CLAIM(1), irq);
+    dw_i2c_disable(qts, base);
+    c900_plic_set_enable(qts, 1, irq, false);
+    assert_no_irq(qts);
+}
+
 static void test_dw_i2c_interrupts(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -7905,37 +7961,10 @@ static void test_dw_i2c_interrupts(void)
     for (size_t i = 0; i < ARRAY_SIZE(th1520_i2c_controllers); i++) {
         const TH1520I2CController *controller =
             &th1520_i2c_controllers[i];
-        uint64_t base = controller->base;
 
-        qtest_writel(qts, C900_PLIC_PRIORITY(controller->irq), 5);
-        c900_plic_set_enable(qts, 1, controller->irq, true);
-        dw_i2c_enable(qts, base, BEAGLEV_AHEAD_EEPROM_ADDR + 1,
-                      DW_I2C_INTR_TX_ABRT);
-        qtest_writel(qts, base + DW_I2C_DATA_CMD,
-                      0xa5 | DW_I2C_DATA_STOP);
-
-        g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
-                      DW_I2C_INTR_TX_ABRT);
-        g_assert_true(qtest_readl(qts, base + DW_I2C_INTR_STAT) &
-                      DW_I2C_INTR_TX_ABRT);
-        g_assert_true(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE) &
-                      BIT(0));
-        g_assert_true(c900_plic_pending(qts, controller->irq));
-        assert_only_irq(qts, 0);
-        g_assert_cmphex(qtest_readl(qts, C900_PLIC_CLAIM(1)), ==,
-                        controller->irq);
-        assert_no_irq(qts);
-
-        qtest_readl(qts, base + DW_I2C_CLR_TX_ABRT);
-        g_assert_false(qtest_readl(qts, base + DW_I2C_INTR_STAT) &
-                       DW_I2C_INTR_TX_ABRT);
-        g_assert_cmphex(qtest_readl(qts, base + DW_I2C_TX_ABRT_SOURCE), ==,
-                        0);
-        qtest_writel(qts, C900_PLIC_CLAIM(1), controller->irq);
-        dw_i2c_disable(qts, base);
-        c900_plic_set_enable(qts, 1, controller->irq, false);
-        assert_no_irq(qts);
+        test_dw_i2c_interrupt(qts, controller->base, controller->irq);
     }
+    test_dw_i2c_interrupt(qts, TH1520_AON_I2C_BASE, TH1520_AON_I2C_IRQ);
 
     qtest_quit(qts);
 }
@@ -10938,6 +10967,7 @@ static void test_dw_i2c_migration(void)
 {
     static const uint8_t contents[] = { 0xa5, 0x5a };
     uint64_t base = TH1520_I2C0_BASE;
+    uint64_t aon_base = TH1520_AON_I2C_BASE;
     g_autofree char *path = NULL;
     g_autofree char *uri = NULL;
     QTestState *src;
@@ -10958,6 +10988,8 @@ static void test_dw_i2c_migration(void)
                   DW_I2C_INTR_RX_FULL);
     g_assert_true(qtest_readl(src, base + DW_I2C_INTR_STAT) &
                   DW_I2C_INTR_RX_FULL);
+    qtest_writel(src, aon_base + DW_I2C_SDA_SETUP, 0x22);
+    qtest_writel(src, aon_base + DW_I2C_INTR_MASK, DW_I2C_INTR_TX_ABRT);
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -10975,12 +11007,16 @@ static void test_dw_i2c_migration(void)
     g_assert_cmphex(qtest_readl(dst, base + DW_I2C_DATA_CMD), ==,
                     contents[0]);
     g_assert_cmphex(qtest_readl(dst, base + DW_I2C_RXFLR), ==, 0);
+    g_assert_cmphex(qtest_readl(dst, aon_base + DW_I2C_SDA_SETUP), ==, 0x22);
+    g_assert_cmphex(qtest_readl(dst, aon_base + DW_I2C_INTR_MASK), ==,
+                    DW_I2C_INTR_TX_ABRT);
     dw_i2c_disable(dst, base);
 
     /* The EEPROM data and its post-read address counter both migrate. */
     g_assert_cmphex(dw_i2c_eeprom_current_read(dst), ==, contents[1]);
     qtest_system_reset(dst);
     g_assert_cmphex(dw_i2c_eeprom_read(dst, 0x124), ==, contents[1]);
+    assert_dw_i2c_reset_state(dst, aon_base);
 
     qtest_quit(dst);
     qtest_quit(src);

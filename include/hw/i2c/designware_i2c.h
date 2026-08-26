@@ -58,6 +58,7 @@ struct DesignWareI2CState {
     uint32_t component_type;
     uint32_t intr_mask_reset;
     uint32_t intr_mask_valid;
+    uint32_t enable_mask;
     uint32_t fs_spklen_reset;
     uint32_t hs_spklen_reset;
     uint32_t scl_stuck_timeout_reset;
