@@ -10,6 +10,7 @@
 #include "qemu/iov.h"
 #include "qemu/units.h"
 #include "hw/misc/th1520_aon_reset.h"
+#include "hw/misc/th1520_ap6203bm.h"
 #include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_ddr.h"
@@ -107,6 +108,7 @@
 #define TH1520_SDIO1_BASE          0xffe70a0000ULL
 #define TH1520_GMAC0_APB_BASE      0xffec003000ULL
 #define TH1520_GMAC1_APB_BASE      0xffec004000ULL
+#define TH1520_AP6203BM_QOM_PATH   "/machine/ap6203bm"
 #define C900_MSIP(hart)            (TH1520_CLINT_BASE + 0x0000 + 4 * (hart))
 #define C900_MTIMECMP(hart)        (TH1520_CLINT_BASE + 0x4000 + 8 * (hart))
 #define C900_SSIP(hart)            (TH1520_CLINT_BASE + 0xc000 + 4 * (hart))
@@ -160,6 +162,17 @@
 #define DW_GPIO_VER_ID_CODE        0x6c
 #define DW_GPIO_CONFIG_REG2        0x70
 #define DW_GPIO_CONFIG_REG1        0x74
+
+#define AP6203BM_WL_REG_ON_GPIO    31
+#define AP6203BM_BT_REG_ON_GPIO    28
+#define AP6203BM_BT_WAKE_HOST_GPIO 30
+#define AP6203BM_WL_HOST_WAKE_GPIO 25
+#define AP6203BM_BT_HOST_WAKE_GPIO 29
+#define AP6203BM_CONTROL_MASK      (BIT(AP6203BM_WL_REG_ON_GPIO) | \
+                                   BIT(AP6203BM_BT_REG_ON_GPIO) | \
+                                   BIT(AP6203BM_BT_WAKE_HOST_GPIO))
+#define AP6203BM_HOST_WAKE_MASK    (BIT(AP6203BM_WL_HOST_WAKE_GPIO) | \
+                                   BIT(AP6203BM_BT_HOST_WAKE_GPIO))
 
 #define DW_I2C_CON                 0x00
 #define DW_I2C_TAR                 0x04
@@ -12016,6 +12029,105 @@ static void test_dw_gpio_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void ap6203bm_drive_controls(QTestState *qts, uint32_t level)
+{
+    qtest_writel(qts, TH1520_GPIO2_BASE + DW_GPIO_SWPORTA_DR, level);
+    qtest_writel(qts, TH1520_GPIO2_BASE + DW_GPIO_SWPORTA_DDR,
+                  AP6203BM_CONTROL_MASK);
+}
+
+static void ap6203bm_set_host_wakes(QTestState *qts, bool wl, bool bt)
+{
+    qtest_set_irq_in(qts, TH1520_AP6203BM_QOM_PATH, "wl-host-wake-in", 0,
+                     wl);
+    qtest_set_irq_in(qts, TH1520_AP6203BM_QOM_PATH, "bt-host-wake-in", 0,
+                     bt);
+}
+
+static void assert_ap6203bm_controls(QTestState *qts, bool wl, bool bt,
+                                      bool bt_wake)
+{
+    g_assert_cmpint(qtest_get_irq(qts, TH1520_AP6203BM_WL_REG_ON), ==, wl);
+    g_assert_cmpint(qtest_get_irq(qts, TH1520_AP6203BM_BT_REG_ON), ==, bt);
+    g_assert_cmpint(qtest_get_irq(qts, TH1520_AP6203BM_BT_WAKE_HOST), ==,
+                    bt_wake);
+}
+
+static void assert_ap6203bm_host_wakes(QTestState *qts, uint32_t expected)
+{
+    g_assert_cmphex(qtest_readl(qts, TH1520_GPIO2_BASE + DW_GPIO_EXT_PORTA) &
+                    AP6203BM_HOST_WAKE_MASK, ==, expected);
+}
+
+static void test_ap6203bm_control_wake(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    qtest_irq_intercept_out_named(qts, TH1520_AP6203BM_QOM_PATH, "control");
+    assert_ap6203bm_controls(qts, false, false, false);
+
+    ap6203bm_drive_controls(qts, AP6203BM_CONTROL_MASK);
+    assert_ap6203bm_controls(qts, true, true, true);
+    ap6203bm_set_host_wakes(qts, true, false);
+    assert_ap6203bm_host_wakes(qts, BIT(AP6203BM_WL_HOST_WAKE_GPIO));
+
+    ap6203bm_drive_controls(qts, BIT(AP6203BM_BT_REG_ON_GPIO) |
+                            BIT(AP6203BM_BT_WAKE_HOST_GPIO));
+    assert_ap6203bm_controls(qts, false, true, true);
+    ap6203bm_set_host_wakes(qts, false, true);
+    assert_ap6203bm_host_wakes(qts, BIT(AP6203BM_BT_HOST_WAKE_GPIO));
+
+    qtest_system_reset(qts);
+    assert_ap6203bm_controls(qts, false, false, false);
+    assert_ap6203bm_host_wakes(qts, 0);
+    qtest_quit(qts);
+}
+
+static void test_ap6203bm_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-ap6203bm-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(src, TH1520_AP6203BM_QOM_PATH, "control");
+    qtest_irq_intercept_out_named(dst, TH1520_AP6203BM_QOM_PATH, "control");
+
+    ap6203bm_drive_controls(src, BIT(AP6203BM_WL_REG_ON_GPIO) |
+                            BIT(AP6203BM_BT_REG_ON_GPIO));
+    ap6203bm_set_host_wakes(src, true, false);
+    assert_ap6203bm_controls(src, true, true, false);
+    assert_ap6203bm_host_wakes(src, BIT(AP6203BM_WL_HOST_WAKE_GPIO));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    assert_ap6203bm_controls(dst, true, true, false);
+    assert_ap6203bm_host_wakes(dst, BIT(AP6203BM_WL_HOST_WAKE_GPIO));
+    ap6203bm_set_host_wakes(dst, false, true);
+    assert_ap6203bm_host_wakes(dst, BIT(AP6203BM_BT_HOST_WAKE_GPIO));
+
+    qtest_system_reset(dst);
+    assert_ap6203bm_controls(dst, false, false, false);
+    assert_ap6203bm_host_wakes(dst, 0);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static int64_t board_led_intensity(QTestState *qts, const char *name)
 {
     g_autofree char *path = g_strdup_printf("/machine/%s", name);
@@ -14037,6 +14149,10 @@ int main(int argc, char **argv)
                        test_dw_gpio_interrupts);
         qtest_add_func("/beaglev-ahead/dw-gpio/migration",
                        test_dw_gpio_migration);
+        qtest_add_func("/beaglev-ahead/ap6203bm/control-wake",
+                       test_ap6203bm_control_wake);
+        qtest_add_func("/beaglev-ahead/ap6203bm/migration",
+                       test_ap6203bm_migration);
         qtest_add_func("/beaglev-ahead/board/leds", test_board_leds);
         qtest_add_func("/beaglev-ahead/dw-i2c/registers",
                        test_dw_i2c_registers);

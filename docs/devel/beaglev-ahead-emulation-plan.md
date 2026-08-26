@@ -2469,6 +2469,15 @@ PHY/link behavior, host stress and error paths, suspend/resume, device/OTG,
 VBUS/ID role switching, Fastboot/BootROM recovery, Wi-Fi and Bluetooth are
 still open, so P7 is not closed.
 
+The AP6203BM control/wake submilestone establishes only the schematic topology:
+GPIO2_31/28/30 drive ``WL_REG_ON``, ``BT_REG_ON`` and ``BT_WAKE_HOST``, while
+the peer drives ``WL_HW_OOB`` and ``HOST_WAKE_BT`` into GPIO2_25/29.  Those
+five digital levels are resettable and migratable, with focused GPIO, reset and
+migration qtests.  The all-low reset convention is not a hardware claim.
+There is deliberately no generic SD card on SDIO1 and no CYW43012 SDIO
+function, firmware/NVRAM, radio, Bluetooth UART/PCM, power, clock or timing
+model.  Exact polarities and sequencing still require the owner-board trace.
+
 ### Phase 8 — display, GPU, camera and media
 
 Deliver:

@@ -15,6 +15,7 @@
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_aon_reset.h"
+#include "hw/misc/th1520_ap6203bm.h"
 #include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_ddr.h"
@@ -117,6 +118,7 @@ struct BeagleVAheadState {
     MachineState parent_obj;
 
     TH1520SoCState soc;
+    TH1520AP6203BMState ap6203bm;
     Notifier machine_done;
     BeagleVAheadBootMode boot_mode;
     uint8_t boot_sel;

@@ -119,6 +119,12 @@ The machine currently provides:
   synthetic eMMC 5.1 speed profile with HS200 and HS400 at 1.8 V, eMMC CMD21
   tuning blocks and validated CMD6 timing/bus-width transitions.  Other QEMU
   eMMC users retain the generic card profile;
+* a board-private AP6203BM control/wake peer.  It routes GPIO2_31,
+  GPIO2_28 and GPIO2_30 to ``WL_REG_ON``, ``BT_REG_ON`` and
+  ``BT_WAKE_HOST``, and routes its ``WL_HW_OOB`` and ``HOST_WAKE_BT`` outputs
+  to GPIO2_25 and GPIO2_29.  The five digital levels reset and migrate.  It
+  intentionally does not implement an SDIO function, CYW43012 firmware,
+  WLAN, Bluetooth, RF, power, clock or timing behavior; and
 * two DesignWare GMAC 3.x cores at ``0xffe7070000`` and ``0xffe7060000``
   with TH1520 APB glue, descriptor DMA, normal/enhanced descriptors, FCS,
   checksum status, Clause 22 MDIO/PHY state, DMA receive-interrupt-watchdog
@@ -231,6 +237,10 @@ controller.  The physical initial hart states, Core0 TEE mode and secondary
 release sequence remain hardware-validation items.  Boot straps, the USB/UART
 downloader, and mask-ROM selection, parsing and boot from eMMC, SD, or QSPI
 are later milestones.
+
+SDIO1 represents the soldered radio route, not a generic removable card.  Its
+AP6203BM control/wake GPIO topology is modeled, but there is no emulated
+CYW43012 SDIO function or radio backend yet.
 
 The board EEPROM defaults to 4096 bytes of ``0xff`` because its factory image
 can contain board-unique data that QEMU must not invent.  A captured 4096-byte

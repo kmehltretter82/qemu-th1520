@@ -2317,6 +2317,40 @@ static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
     }
 }
 
+static void beaglev_ahead_attach_ap6203bm(BeagleVAheadState *s)
+{
+    DeviceState *gpio2 = DEVICE(&s->soc.gpio[2]);
+    DeviceState *module;
+
+    object_initialize_child(OBJECT(s), "ap6203bm", &s->ap6203bm,
+                            TYPE_TH1520_AP6203BM);
+    module = DEVICE(&s->ap6203bm);
+
+    /*
+     * Board schematic sheet 17 routes these module control/wake nets:
+     * GPIO2_31/WL_REG_ON, GPIO2_28/BT_REG_ON,
+     * GPIO2_30/BT_WAKE_HOST, GPIO2_25/WL_HW_OOB, and
+     * GPIO2_29/HOST_WAKE_BT.  This is deliberately not an SDIO, WLAN or
+     * Bluetooth protocol model; the AP6203BM peer only preserves the wires.
+     */
+    qdev_connect_gpio_out_named(gpio2, "gpio-out", 31,
+                                qdev_get_gpio_in_named(module,
+                                                       "wl-reg-on-in", 0));
+    qdev_connect_gpio_out_named(gpio2, "gpio-out", 28,
+                                qdev_get_gpio_in_named(module,
+                                                       "bt-reg-on-in", 0));
+    qdev_connect_gpio_out_named(gpio2, "gpio-out", 30,
+                                qdev_get_gpio_in_named(module,
+                                                       "bt-wake-host-in", 0));
+    qdev_connect_gpio_out_named(module, "host-wake",
+                                TH1520_AP6203BM_WL_HOST_WAKE,
+                                qdev_get_gpio_in_named(gpio2, "gpio-in", 25));
+    qdev_connect_gpio_out_named(module, "host-wake",
+                                TH1520_AP6203BM_BT_HOST_WAKE,
+                                qdev_get_gpio_in_named(gpio2, "gpio-in", 29));
+    qdev_realize(module, NULL, &error_fatal);
+}
+
 static void beaglev_ahead_attach_pmic(BeagleVAheadState *s)
 {
     /*
@@ -2509,6 +2543,7 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     beaglev_ahead_attach_storage(s);
+    beaglev_ahead_attach_ap6203bm(s);
     beaglev_ahead_attach_pmic(s);
     beaglev_ahead_attach_eeprom(s);
     beaglev_ahead_attach_leds(s);

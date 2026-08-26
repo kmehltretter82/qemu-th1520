@@ -34,6 +34,7 @@ config BEAGLEV_AHEAD
     select TH1520_MBOX
     select TH1520_IOPMP
     select TH1520_PMP_PORTAL
+    select TH1520_AP6203BM
     select TH1520_VIDEO_SYSREG
     select TH1520_ISO7816_CONFIG
     select TH1520_BOOTSEL
