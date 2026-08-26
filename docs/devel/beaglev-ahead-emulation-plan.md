@@ -1490,27 +1490,29 @@ controller timing and STOP semantics remain recorded open items in
 ### Vendor SPL DDR PLL configuration checkpoint
 
 The public LPDDR4 source defines DDR SYSREG at ``0xffff005000`` and generated
-register descriptions identify ``DDR_PLL_CFG0``/``DDR_PLL_CFG1`` at offsets
-``0x8``/``0xc`` plus ``DDR_PLL_STS`` at ``0x18``.  Its 3733 MT/s path asserts
-CFG1's reset bit, writes CFG0, releases the reset bit, polls lock, then writes
-bit 16, which that source comments as core-clock gating.  QEMU maps only those
-three 32-bit words.  Its source-provided reset values and writable masks are
-stored and migrated.  Clearing the reset bit makes the virtual lock bit
-visible immediately; that deterministic transition is an emulator convention
-for the public firmware poll, not a claim about PLL frequency, lock time or
-clock-tree behavior.
+register descriptions identify ``DDR_CFG0`` at offset ``0x0``,
+``DDR_PLL_CFG0``/``DDR_PLL_CFG1`` at ``0x8``/``0xc``, and ``DDR_PLL_STS`` at
+``0x18``.  CFG0 resets to zero and reserves bits 2--3; QEMU maps only that
+four-byte word with its source-derived writable mask (``0xfffffff3``), plus
+the three PLL words.  The firmware's staged CFG0 writes are preserved as
+software-visible state, with no reset, rail, clock, controller, PHY, DFI or
+DRAM consequence.  Its 3733 MT/s path asserts CFG1's reset bit, writes CFG0,
+releases the reset bit, polls lock, then writes bit 16, which that source
+comments as core-clock gating.  Clearing the reset bit makes the virtual lock
+bit visible immediately; that deterministic transition is an emulator
+convention for the public firmware poll, not a claim about PLL frequency, lock
+time or clock-tree behavior.
 
-Focused register/reset and migration qtests pass.  An unchanged public SPL
-again reaches the LPDDR banner.  To expose the next fault, a debugger changed
-only that guest instance's generic U-Boot trap ``ebreak`` into a no-op; no
-source or QEMU model byte was changed.  The next captured exception is a
-store/AMO access fault from the SPL's generic ``wr()`` helper at
-``0xffff005000``.  That base control word and all surrounding DDR SYSREG
-words intentionally remain unmapped.  Public source uses them to begin staged
-power-good, PHY-reset and APB-reset release, which leads into the controller,
-PHY and training sequence.  Modeling that progression without hardware or
-stronger public interface evidence would turn an observed boundary into an
-invented DRAM-success path.
+Focused CFG0 register/reset and migration qtests, the PLL qtests, and
+whole-machine migration pass.  An unchanged public SPL again reaches the
+LPDDR banner.  To expose the next fault, a debugger changed only that guest
+instance's generic U-Boot trap ``ebreak`` into a no-op; no source or QEMU model
+byte was changed.  The next captured exception is a store/AMO access fault
+from the SPL's generic ``wr()`` helper at ``0xffff000304`` (source name
+``DBG1`` at offset ``0x304`` of the DesignWare uMCTL2 controller aperture).
+That controller aperture intentionally remains unmapped.  Modeling it from
+this one access would turn an observed boundary into an invented DRAM-success
+path.
 
 This checkpoint does not model DDR PLL timing or output frequency, CFG0 reset
 effects, the DDR controller or PHY, DFI traffic, training, DRAM contents,

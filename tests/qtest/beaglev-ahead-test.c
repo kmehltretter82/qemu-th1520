@@ -12,6 +12,7 @@
 #include "hw/misc/th1520_aon_reset.h"
 #include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_ddr_control.h"
 #include "hw/misc/th1520_ddr_pll.h"
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
@@ -35,6 +36,7 @@
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
+#define TH1520_DDR_CFG0_BASE       0xffff005000ULL
 #define TH1520_DDR_PLL_CFG0_BASE   0xffff005008ULL
 #define TH1520_DDR_PLL_CFG1_BASE   0xffff00500cULL
 #define TH1520_DDR_PLL_STS_BASE    0xffff005018ULL
@@ -3728,6 +3730,67 @@ static void test_th1520_ddr_pll_migration(void)
 
     qtest_system_reset(dst);
     assert_th1520_ddr_pll_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void assert_th1520_ddr_control_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG0_BASE), ==,
+                    TH1520_DDR_CFG0_RESET);
+}
+
+static void test_th1520_ddr_control_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_ddr_control_reset_state(qts);
+
+    qtest_writel(qts, TH1520_DDR_CFG0_BASE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG0_BASE), ==,
+                    TH1520_DDR_CFG0_WRITABLE_MASK);
+
+    qtest_writel(qts, TH1520_DDR_CFG0_BASE, 0x000000d0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG0_BASE), ==,
+                    0x000000d0);
+
+    qtest_system_reset(qts);
+    assert_th1520_ddr_control_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_ddr_control_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-ddr-control-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    qtest_writel(src, TH1520_DDR_CFG0_BASE, 0x000000d0);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_DDR_CFG0_BASE), ==,
+                    0x000000d0);
+
+    qtest_system_reset(dst);
+    assert_th1520_ddr_control_reset_state(dst);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -13578,6 +13641,10 @@ int main(int argc, char **argv)
                        test_th1520_ddr_pll_registers);
         qtest_add_func("/beaglev-ahead/ddr-pll/migration",
                        test_th1520_ddr_pll_migration);
+        qtest_add_func("/beaglev-ahead/ddr-control/registers",
+                       test_th1520_ddr_control_registers);
+        qtest_add_func("/beaglev-ahead/ddr-control/migration",
+                       test_th1520_ddr_control_migration);
         qtest_add_func("/beaglev-ahead/miscsys/clock-outputs",
                        test_miscsys_clock_outputs);
         qtest_add_func("/beaglev-ahead/miscsys/clock-migration",

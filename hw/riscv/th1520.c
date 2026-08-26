@@ -86,6 +86,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
+    [TH1520_DEV_DDR_CFG0] = { 0xffff005000,
+                               TH1520_DDR_CONTROL_MMIO_SIZE },
     [TH1520_DEV_DDR_PLL_CFG0] = { 0xffff005008,
                                    TH1520_DDR_PLL_MMIO_SIZE },
     [TH1520_DEV_DDR_PLL_CFG1] = { 0xffff00500c,
@@ -560,6 +562,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "ap-clock", &s->ap_clock,
                             TYPE_TH1520_AP_CLOCK);
+    object_initialize_child(obj, "ddr-control", &s->ddr_control,
+                            TYPE_TH1520_DDR_CONTROL);
     object_initialize_child(obj, "ddr-pll", &s->ddr_pll,
                             TYPE_TH1520_DDR_PLL);
     object_initialize_child(obj, "ap-reset", &s->ap_reset,
@@ -801,6 +805,12 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(system_memory,
                                 TH1520_VENDOR_UBOOT_AP_CLOCK_BASE,
                                 &s->ap_clock_vendor_alias);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_control), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_control), 0,
+                    th1520_memmap[TH1520_DEV_DDR_CFG0].base);
 
     /*
      * The public vendor SPL accesses only these DDR SYSREG words while it

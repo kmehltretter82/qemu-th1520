@@ -266,6 +266,9 @@ config TH1520_CPR
 config TH1520_DDR_PLL
     bool
 
+config TH1520_DDR_CONTROL
+    bool
+
 config TH1520_MBOX
     bool
 
