@@ -1556,18 +1556,21 @@ and changes FS from Clean to Dirty.  The C910 CSR qtest checks aliases and
 that QEMU system reset clears both FXCR and FS.  Its whole-machine
 migration case directly sets and reads back the stored FXCR/FRM/FFLAGS fields.
 
-A dedicated TCG qtest now supplies the missing execution boundary.  Before
-incoming migration it poisons the stopped destination with DQNaN clear, FE set
-and exception-event tracking disabled.  The source migrates ``DQNaN|NX`` with
-FE clear and preloaded floating-point operands.  Without an intervening FXCR
-access, the destination guest proves source-qNaN payload propagation and then
-raises an already-sticky NX event, requiring ``DQNaN|FE|NX``.  A retained-RAM
-cookie next selects a post-system-reset phase.  That phase verifies FS Off,
-enables FP, seeds standard ``fflags.NV`` without touching FXCR, performs
-quiet-NaN ``flt.s``, requires FS Dirty, and only then reads ``FXCR=FE|NV``.
-QEMU reports this host-requested system reset as cold while retaining RAM; the
-test protects the emulator contract and is not evidence for physical TH1520
-warm-reset or retention behavior.
+A dedicated TCG qtest now supplies the missing execution boundary.  An
+incoming CPU cannot run before migration, so a qtest-only RISC-V hook raises
+one local, non-migrated SoftFloat invalid event on the stopped destination and
+asserts that the raised-event accumulator contains NV.  The source migrates
+``DQNaN|NX`` with FE clear and preloaded floating-point operands.  Without an
+intervening FXCR access, the resumed destination first requires exactly
+``DQNaN|NX``: any stale destination event would set FE at that read.  It then
+proves source-qNaN payload propagation and raises an already-sticky NX event,
+requiring ``DQNaN|FE|NX``.  A retained-RAM cookie next selects a
+post-system-reset phase.  That phase verifies FS Off, enables FP, seeds
+standard ``fflags.NV`` without touching FXCR, performs quiet-NaN ``flt.s``,
+requires FS Dirty, and only then reads ``FXCR=FE|NV``.  QEMU reports this
+host-requested system reset as cold while retaining RAM; the test protects the
+emulator contract and is not evidence for physical TH1520 warm-reset or
+retention behavior.
 
 Two further qtests exercise synthetic, descriptor-exact C910 CSR VMState
 version-1 and version-2 inputs across all four harts.  They save an ordinary
@@ -1631,12 +1634,13 @@ was restored immediately after the observed exit-at-stage-46 result; no mutant
 binary or immutable transcript is claimed.  Thus both event paths have
 mutation evidence.  Three further restored mutations prove the new boundary:
 removing post-load NaN reconstruction produces guest status ``0xdead3001``;
-removing post-load event rearming produces ``0xdead3002``; and removing
-reset-time event rearming produces ``0xdead3006`` before the first FXCR read.
-Four legacy-stream mutations additionally prove that the new tests detect a
-missing v1 PMU default, missing pre-v3 FXCR defaults, missing post-load NaN
-reconstruction and missing post-load exception-event rearming.  Their binaries
-are preserved under
+removing post-load event rearming produces ``0xdead3002``; removing the
+post-load raised-event clear produces ``0xdead3008`` before the first resumed
+FP operation; and removing reset-time event rearming produces ``0xdead3006``
+before the first FXCR read.  Four legacy-stream mutations additionally prove
+that the new tests detect missing v1 PMU defaults, missing pre-v3 FXCR
+defaults, missing post-load NaN reconstruction and missing post-load
+exception-event rearming.  Their binaries are preserved under
 ``../validation-artifacts/c910-legacy-migration-mutations-20260825``.
 
 The disk-backed historical harness under
@@ -1664,14 +1668,17 @@ accepts parent CPU version 11 only with TCG.  KVM retains the version-12 minimum
 required for its MP-state subsection; this was code-checked, not runtime-tested,
 because no RISC-V KVM environment was available.
 
-A dedicated destination-poison gate for a stale SoftFloat raised-event
-accumulator remains open because ``-incoming defer`` prevents pre-load guest
-execution; the existing guest still covers post-load rearming and derived
-behavior.  The v1 whole-board stream now loads, but exact historical execution
-equivalence remains impossible where the old wire omitted PLIC input/trigger
-and interrupt-cause distinctions or S-timer/TIME state.  Those deterministic
-defaults require physical comparison and must not be generalized into a claim
-of lossless compatibility.  Physical comparison remains open.
+The dedicated destination-poison gate now injects one non-migrated SoftFloat
+invalid event through the qtest-only hook while ``-incoming defer`` keeps the
+destination CPU stopped.  The guest's first FXCR read catches any stale event,
+and removing the post-load clear fails at ``0xdead3008``.  The v1 whole-board
+stream now loads, but exact historical execution equivalence remains impossible
+where the old wire omitted PLIC input/trigger and interrupt-cause distinctions
+or S-timer/TIME state.  Those deterministic defaults require physical
+comparison and must not be generalized into a claim of lossless compatibility.
+Physical comparison remains open.  The current normal ``riscv-csr-test`` gate
+passes all 14 cases with the new hook; rerun the dependency-minimal and
+ASan/UBSan configurations before advancing their historical FXCR gate claims.
 The C910 model is TCG-only and is rejected with KVM until its custom state can
 be synchronized; CPU-016 retains the unidentified TH1520 stepping rather than
 treating the pinned RTL as a silicon measurement.

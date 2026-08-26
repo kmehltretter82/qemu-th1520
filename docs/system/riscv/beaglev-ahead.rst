@@ -318,14 +318,15 @@ The C910 ``FXCR`` user CSR at 0x800 aliases ``frm`` and ``fflags`` and adds
 the DQNaN propagation control plus sticky exception-event flag FE.  QEMU
 models the pinned openC910 mask, FS access rules, NaN/event behavior, zero
 state after QEMU system reset, same-version migration, and exposes it as
-``th.c910.fxcr`` in ``info registers -a``.  Migration tests currently prove
-the stored fields and resume a guest without an intervening FXCR read: it
-proves DQNaN payload propagation and that a new already-sticky exception event
-sets FE.  The retained-RAM reset phase then proves FS Off and the first
-exception-producing FP operation after QEMU system reset.  An actual
-older-version FXCR-bearing stream remains open.  The physical TH1520 reset
-value and exact CPU stepping are also unmeasured, so this is a QEMU/openC910
-contract rather than silicon evidence.
+``th.c910.fxcr`` in ``info registers -a``.  Migration tests inject one local
+invalid SoftFloat event through a qtest-only hook while the incoming destination
+remains stopped.  The first resumed FXCR read must discard that non-migrated
+event and report the source state, then the guest proves DQNaN payload
+propagation and that a new already-sticky exception event sets FE.  The
+retained-RAM reset phase then proves FS Off and the first exception-producing FP
+operation after QEMU system reset.  An actual older-version FXCR-bearing stream
+remains open.  The physical TH1520 reset value and exact CPU stepping are also
+unmeasured, so this is a QEMU/openC910 contract rather than silicon evidence.
 
 Peripheral limitations
 ----------------------

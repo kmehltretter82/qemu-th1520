@@ -360,8 +360,12 @@ without first reading FXCR, proves quiet-NaN payload propagation and requires
 a new already-sticky NX event to set FE.  Retained RAM then selects a
 post-system-reset phase which proves FS Off, executes the first
 exception-producing ``flt.s`` and requires FS Dirty before its first FXCR
-read.  Normal, dependency-minimal and ASan/UBSan builds pass that execution
-gate.
+read.  A qtest-only hook also injects a local invalid SoftFloat event into the
+stopped incoming destination; the first resumed FXCR read must still be exactly
+``DQNaN|NX``, and a mutation removing the post-load raised-event clear fails at
+``0xdead3008``.  The current normal build passes the extended execution gate;
+the earlier dependency-minimal and ASan/UBSan results predate this added hook
+and require a focused rerun.
 
 The stage-45 fast-path mutant and independent stage-46 raised-event mutation
 are recorded in the focused audit evidence above.  The SoftFloat quick suite
