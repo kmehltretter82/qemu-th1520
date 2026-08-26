@@ -36,6 +36,7 @@
 #include "hw/misc/led.h"
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
+#include "hw/i2c/da9063.h"
 #include "hw/nvram/eeprom_at24c.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
@@ -274,6 +275,8 @@ static void th1520_aon_i2c_configure(DeviceState *i2c)
 {
     th1520_i2c_configure(i2c);
     qdev_prop_set_uint32(i2c, "enable-mask", TH1520_AON_I2C_ENABLE_MASK);
+    /* Vendor SPL observes FIFO drain before waiting for STOP_DET. */
+    qdev_prop_set_bit(i2c, "implicit-stop-on-fifo-drain", true);
 }
 
 typedef struct TH1520TimerInfo {
@@ -959,8 +962,8 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
 
     /*
      * Vendor SPL uses this AON controller for PMIC setup before Linux.  It is
-     * intentionally not part of the AP I2C list: no generated DT node, AP
-     * clock/reset connection, or fabricated I2C slave is implied.
+     * intentionally not part of the AP I2C list: no generated DT node or AP
+     * clock/reset connection is implied.
      */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->aon_i2c), errp)) {
         return;
@@ -2186,6 +2189,18 @@ static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
     }
 }
 
+static void beaglev_ahead_attach_pmic(BeagleVAheadState *s)
+{
+    /*
+     * The board schematic identifies U81 as a DA9063.  Public vendor SPL
+     * accesses it at 0x5a through AON I2C before DRAM initialization.
+     * The device only carries that SPL's DVC/register state; it creates no
+     * generated DT node or modeled rail, IRQ, RTC, watchdog, or GPIO effect.
+     */
+    i2c_slave_create_simple(s->soc.aon_i2c.bus, TYPE_DA9063,
+                            BEAGLEV_AHEAD_PMIC_ADDRESS);
+}
+
 static void beaglev_ahead_attach_eeprom(BeagleVAheadState *s)
 {
     g_autofree uint8_t *contents = g_malloc(BEAGLEV_AHEAD_EEPROM_SIZE);
@@ -2366,6 +2381,7 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     beaglev_ahead_attach_storage(s);
+    beaglev_ahead_attach_pmic(s);
     beaglev_ahead_attach_eeprom(s);
     beaglev_ahead_attach_leds(s);
 

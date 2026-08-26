@@ -15,6 +15,7 @@ config BEAGLEV_AHEAD
     depends on RISCV64
     select DEVICE_TREE
     select DESIGNWARE_I2C
+    select DA9063
     select DW_APB_GPIO
     select DW_APB_SSI
     select DW_APB_TIMER

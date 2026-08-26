@@ -174,6 +174,16 @@ static void dw_i2c_update_irq(DesignWareI2CState *s)
     qemu_set_irq(s->irq, !!(intr & DW_IC_INTR_ANY_MASK));
 }
 
+static void dw_i2c_stop(DesignWareI2CState *s)
+{
+    s->implicit_stop_pending = false;
+    s->regs[R_DW_IC_RAW_INTR_STAT] |= DW_IC_INTR_STOP_DET_MASK;
+    s->regs[R_DW_IC_STATUS] &= ~R_DW_IC_STATUS_ACTIVITY_MASK;
+    s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_TX_EMPTY_MASK;
+    i2c_end_transfer(s->bus);
+    dw_i2c_update_irq(s);
+}
+
 static uint64_t dw_ic_data_cmd_reg_post_read(RegisterInfo *reg, uint64_t value)
 {
     DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
@@ -206,7 +216,14 @@ static uint64_t dw_ic_data_cmd_reg_post_read(RegisterInfo *reg, uint64_t value)
         dw_i2c_update_irq(s);
     }
 
-    return fifo8_pop(&s->rx_fifo);
+    value = fifo8_pop(&s->rx_fifo);
+    if (s->implicit_stop_on_fifo_drain && s->implicit_stop_pending &&
+        s->regs[R_DW_IC_RXFLR] == 0 && i2c_bus_busy(s->bus)) {
+        i2c_nack(s->bus);
+        dw_i2c_stop(s);
+    }
+
+    return value;
 }
 
 static uint64_t dw_ic_clr_intr_reg_post_read(RegisterInfo *reg, uint64_t value)
@@ -338,6 +355,7 @@ static uint64_t dw_ic_spklen_reg_pre_write(RegisterInfo *reg, uint64_t value)
 
 static void dw_i2c_reset_to_idle(DesignWareI2CState *s)
 {
+    s->implicit_stop_pending = false;
     s->regs[R_DW_IC_ENABLE_STATUS] &= ~R_DW_IC_ENABLE_STATUS_IC_EN_MASK;
     s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_TX_EMPTY_MASK;
     s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_RX_FULL_MASK;
@@ -348,6 +366,24 @@ static void dw_i2c_reset_to_idle(DesignWareI2CState *s)
     s->regs[R_DW_IC_STATUS] &= ~R_DW_IC_STATUS_ACTIVITY_MASK;
     s->status = DW_I2C_STATUS_IDLE;
     dw_i2c_update_irq(s);
+}
+
+static uint64_t dw_ic_txflr_reg_post_read(RegisterInfo *reg, uint64_t value)
+{
+    DesignWareI2CState *s = DESIGNWARE_I2C(reg->opaque);
+
+    if (s->implicit_stop_on_fifo_drain && s->implicit_stop_pending &&
+        s->status == DW_I2C_STATUS_SENDING && value == 0 &&
+        i2c_bus_busy(s->bus)) {
+        /*
+         * Some controller integrations complete a transmit when software
+         * observes the drained FIFO.  The generic model transfers commands
+         * immediately, so the TXFLR read is the observable drain edge.
+         */
+        dw_i2c_stop(s);
+    }
+
+    return value;
 }
 
 static void dw_ic_tx_abort(DesignWareI2CState *s, uint32_t src)
@@ -401,6 +437,10 @@ static void dw_ic_data_cmd_reg_post_write(RegisterInfo *reg, uint64_t value)
             dw_ic_tx_abort(s, R_DW_IC_TX_ABRT_SOURCE_TXDATA_NOACK_MASK);
             return;
         }
+        if (s->implicit_stop_on_fifo_drain &&
+            !(value & R_DW_IC_DATA_CMD_STOP_MASK)) {
+            s->implicit_stop_pending = true;
+        }
         dw_i2c_update_irq(s);
     }
 
@@ -440,16 +480,14 @@ static void dw_ic_data_cmd_reg_post_write(RegisterInfo *reg, uint64_t value)
         }
         if (value & R_DW_IC_DATA_CMD_STOP_MASK) {
             i2c_nack(s->bus);
+        } else if (s->implicit_stop_on_fifo_drain) {
+            s->implicit_stop_pending = true;
         }
     }
 
     /* Stop command */
     if (value & R_DW_IC_DATA_CMD_STOP_MASK) {
-        s->regs[R_DW_IC_RAW_INTR_STAT] |= DW_IC_INTR_STOP_DET_MASK;
-        s->regs[R_DW_IC_STATUS] &= ~R_DW_IC_STATUS_ACTIVITY_MASK;
-        s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_TX_EMPTY_MASK;
-        i2c_end_transfer(s->bus);
-        dw_i2c_update_irq(s);
+        dw_i2c_stop(s);
     }
 }
 
@@ -654,6 +692,7 @@ static const RegisterAccessInfo designware_i2c_regs_info[] = {
         .ro    = 0xffffffff,
     },{ .name  = "DW_IC_TXFLR", .addr = A_DW_IC_TXFLR,
         .ro    = 0xffffffff,
+        .post_read = dw_ic_txflr_reg_post_read,
     },{ .name  = "DW_IC_RXFLR", .addr = A_DW_IC_RXFLR,
         .ro    = 0xffffffff,
     },{ .name  = "DW_IC_SDA_HOLD", .addr = A_DW_IC_SDA_HOLD,
@@ -768,6 +807,7 @@ static void designware_i2c_enter_reset(Object *obj, ResetType type)
     fifo8_reset(&s->rx_fifo);
 
     s->status = DW_I2C_STATUS_IDLE;
+    s->implicit_stop_pending = false;
 }
 
 static void designware_i2c_hold_reset(Object *obj, ResetType type)
@@ -792,13 +832,14 @@ static int designware_i2c_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_designware_i2c = {
     .name = TYPE_DESIGNWARE_I2C,
-    .version_id = 0,
+    .version_id = 1,
     .minimum_version_id = 0,
     .post_load = designware_i2c_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, DesignWareI2CState, DESIGNWARE_I2C_R_MAX),
         VMSTATE_FIFO8(rx_fifo, DesignWareI2CState),
         VMSTATE_UINT32(status, DesignWareI2CState),
+        VMSTATE_BOOL_V(implicit_stop_pending, DesignWareI2CState, 1),
         VMSTATE_END_OF_LIST(),
     },
 };
@@ -858,6 +899,8 @@ static const Property designware_i2c_properties[] = {
                        sda_stuck_timeout_reset, 0),
     DEFINE_PROP_UINT32("ack-general-call-reset", DesignWareI2CState,
                        ack_general_call_reset, 0),
+    DEFINE_PROP_BOOL("implicit-stop-on-fifo-drain", DesignWareI2CState,
+                     implicit_stop_on_fifo_drain, false),
 };
 
 static void designware_i2c_class_init(ObjectClass *klass, const void *data)

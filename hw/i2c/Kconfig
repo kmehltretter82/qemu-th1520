@@ -23,6 +23,10 @@ config DESIGNWARE_I2C
     select REGISTER
     select I2C
 
+config DA9063
+    bool
+    select I2C
+
 config ACPI_SMBUS
     bool
     select SMBUS

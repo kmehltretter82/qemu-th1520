@@ -1454,21 +1454,38 @@ After the banner, public vendor SPL initializes its PMIC path.  Its source
 names an AON DesignWare I2C controller at ``0xfffff4c000`` with PLIC source
 79, alongside the Linux-visible AP controller at ``0xffe7f20000``.  QEMU now
 maps only the AON controller's generic 4 KiB register block and routes source
-79.  It creates no generated DT node, AP reset/clock connection, pad effect,
-PMIC, I2C slave or voltage-rail model.
+79.  It creates no generated DT node, AP reset/clock connection or pad effect.
 
 The vendor controller header defines only ``IC_ENABLE`` bit 0, while its
 disable helper writes ``~1``.  An AON-only writable mask therefore retains
 that bit and prevents QEMU's generic abort command bits from changing the
 next transfer.  Linux-visible AP controllers retain the generic mask.  The
-focused qtests cover the source's exact disable write, NACK delivery through
-PLIC source 79, reset and migration.
+public Beagle configuration then accesses address ``0x5a`` using CONTROL_D,
+DVC_1/DVC_2 and VBCORE1/VBCORE2/VBIO A/B registers.  The board schematic
+labels U81 as a DA9063 on the AON I2C nets, and the pinned RevyOS DA9063 header
+names those exact page-0 registers.  QEMU attaches a deliberately partial
+DA9063 slave at that address.  It stores only those SPL-accessed register
+bytes; all-zero virtual reset is an emulator convention.  It does not model
+rails, voltage changes, PMIC interrupt/GPIO/RTC/watchdog effects, page
+selection or a generated PMIC DT node.
 
-The bounded staged trace no longer faults on the AON address and reaches
-``board_init_f set apcpu voltage failed``.  Its retained generic QEMU
-post-abort diagnostic cannot establish a PMIC response or topology.  This is
-a firmware-register checkpoint only, not a reason to invent a PMIC model or
-a claim of payload/OS handoff or physical behavior.
+The public SPL emits unflagged data commands, observes an empty TX FIFO and
+then waits for STOP_DET.  The generic DesignWare model instead requires an
+explicit STOP bit, so QEMU exposes an opt-in FIFO-drain completion mode and
+enables it only for this AON instance.  This is a source-compatible firmware
+rule, not a claim about physical STOP generation or bus timing; AP I2C
+instances retain the generic behavior.  Focused qtests cover the exact
+vendor-style read/write sequence, AON-only scope, PMIC reset/state and
+migration, including migration while completion is pending.
+
+The bounded staged trace now completes the entire CPU-voltage register
+sequence and prints ``FM[1] lpddr4x singlerank freq=3733 64bit dbi_off=n
+sdram init`` rather than ``board_init_f set apcpu voltage failed``.  It was
+stopped after 15 seconds; it establishes only a firmware checkpoint before
+LPDDR initialization, not DRAM success, payload/OS handoff or physical
+behavior.  PMIC defaults, rail effects, address strapping, bus topology,
+controller timing and STOP semantics remain recorded open items in
+``beaglev-ahead-hardware-validation.md``.
 
 ### Independent Alpine userspace lane
 

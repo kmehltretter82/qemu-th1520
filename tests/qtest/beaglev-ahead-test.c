@@ -159,6 +159,7 @@
 #define DW_I2C_CLR_TX_ABRT         0x54
 #define DW_I2C_ENABLE              0x6c
 #define DW_I2C_STATUS              0x70
+#define DW_I2C_TXFLR               0x74
 #define DW_I2C_RXFLR               0x78
 #define DW_I2C_TX_ABRT_SOURCE      0x80
 #define DW_I2C_SDA_SETUP           0x94
@@ -181,6 +182,7 @@
 #define DW_I2C_DATA_RESTART        BIT(10)
 #define DW_I2C_INTR_RX_FULL        BIT(2)
 #define DW_I2C_INTR_TX_ABRT        BIT(6)
+#define DW_I2C_INTR_STOP_DET       BIT(9)
 
 #define DW_TIMER_STRIDE            0x14
 #define DW_TIMER_LOAD_COUNT        0x00
@@ -435,6 +437,16 @@
 #define TH1520_I2C_INTR_RESET      0x000048ff
 #define TH1520_I2C_INTR_VALID      0x00004fff
 #define BEAGLEV_AHEAD_EEPROM_ADDR  0x50
+#define BEAGLEV_AHEAD_PMIC_ADDR    0x5a
+#define DA9063_REG_CONTROL_D       0x11
+#define DA9063_REG_DVC_1           0x32
+#define DA9063_REG_DVC_2           0x33
+#define DA9063_REG_VBCORE2_A       0xa3
+#define DA9063_REG_VBCORE1_A       0xa4
+#define DA9063_REG_VBIO_A          0xa7
+#define DA9063_REG_VBCORE2_B       0xb4
+#define DA9063_REG_VBCORE1_B       0xb5
+#define DA9063_REG_VBIO_B          0xb8
 #define TH1520_TIMER_COMP_VERSION  0x3231322a
 #define TH1520_TIMER_TICK_NS       8
 #define TH1520_PWM_TICK_NS         8
@@ -7712,6 +7724,99 @@ static void dw_i2c_disable(QTestState *qts, uint64_t base)
     g_assert_cmphex(qtest_readl(qts, base + DW_I2C_ENABLE_STATUS), ==, 0);
 }
 
+static void dw_i2c_pmic_write(QTestState *qts, uint8_t reg, uint8_t value)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, reg);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD,
+                  value | DW_I2C_DATA_STOP);
+    dw_i2c_disable(qts, base);
+}
+
+static void dw_i2c_pmic_set_pointer(QTestState *qts, uint8_t reg)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, reg | DW_I2C_DATA_STOP);
+    dw_i2c_disable(qts, base);
+}
+
+static uint8_t dw_i2c_pmic_current_read(QTestState *qts)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+    uint8_t value;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD,
+                  DW_I2C_DATA_READ | DW_I2C_DATA_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 1);
+    value = qtest_readl(qts, base + DW_I2C_DATA_CMD);
+    dw_i2c_disable(qts, base);
+    return value;
+}
+
+static uint8_t dw_i2c_pmic_read(QTestState *qts, uint8_t reg)
+{
+    dw_i2c_pmic_set_pointer(qts, reg);
+    return dw_i2c_pmic_current_read(qts);
+}
+
+static uint8_t dw_i2c_pmic_restart_read(QTestState *qts, uint8_t reg)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+    uint8_t value;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, reg);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD,
+                  DW_I2C_DATA_READ | DW_I2C_DATA_RESTART |
+                  DW_I2C_DATA_STOP);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 1);
+    value = qtest_readl(qts, base + DW_I2C_DATA_CMD);
+    dw_i2c_disable(qts, base);
+    return value;
+}
+
+static void dw_i2c_pmic_vendor_write(QTestState *qts, uint8_t reg,
+                                      uint8_t value)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, reg);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, value);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_TXFLR), ==, 0);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_STOP_DET);
+    dw_i2c_disable(qts, base);
+}
+
+static uint8_t dw_i2c_pmic_vendor_read(QTestState *qts, uint8_t reg)
+{
+    uint64_t base = TH1520_AON_I2C_BASE;
+    uint8_t value;
+
+    /* This is the public vendor SPL's separate send/read transaction. */
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, reg);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_TXFLR), ==, 0);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_STOP_DET);
+    dw_i2c_disable(qts, base);
+
+    dw_i2c_enable(qts, base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, base + DW_I2C_DATA_CMD, DW_I2C_DATA_READ);
+    g_assert_cmphex(qtest_readl(qts, base + DW_I2C_RXFLR), ==, 1);
+    value = qtest_readl(qts, base + DW_I2C_DATA_CMD);
+    g_assert_true(qtest_readl(qts, base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_STOP_DET);
+    dw_i2c_disable(qts, base);
+    return value;
+}
+
 static void dw_i2c_eeprom_write(QTestState *qts, uint16_t address,
                                 const uint8_t *data, size_t len)
 {
@@ -7881,6 +7986,89 @@ static void test_dw_i2c_eeprom(void)
     qtest_system_reset(qts);
     g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x020), ==, page_wrap_data[1]);
     g_assert_cmphex(dw_i2c_eeprom_read(qts, 0x040), ==, next_page);
+    qtest_quit(qts);
+}
+
+static void test_aon_i2c_pmic(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    /* Virtual PMIC reset defaults used by the vendor SPL's rail-A path. */
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_DVC_1), ==, 0);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_DVC_2), ==, 0);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBCORE1_A),
+                    ==, 0);
+
+    /* Replay the selected BeagleV Ahead SPL's CPU voltage sequence. */
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBCORE1_A, 0x12);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBCORE2_A, 0x34);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBIO_A, 0x56);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBCORE1_B,
+                             dw_i2c_pmic_vendor_read(qts,
+                                                      DA9063_REG_VBCORE1_A));
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBCORE2_B,
+                             dw_i2c_pmic_vendor_read(qts,
+                                                      DA9063_REG_VBCORE2_A));
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBIO_B,
+                             dw_i2c_pmic_vendor_read(qts,
+                                                      DA9063_REG_VBIO_A));
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_DVC_1, 0x03);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_DVC_2, 0x01);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBCORE1_A, 0x32);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBCORE2_A, 0x32);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_VBIO_A, 0x00);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_DVC_1, 0x00);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_DVC_2, 0x00);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_CONTROL_D, 0xff);
+    dw_i2c_pmic_vendor_write(qts, DA9063_REG_CONTROL_D, 0xf8);
+
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBCORE1_B),
+                    ==, 0x12);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBCORE2_B),
+                    ==, 0x34);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBIO_B),
+                    ==, 0x56);
+    g_assert_cmphex(dw_i2c_pmic_restart_read(qts, DA9063_REG_VBCORE1_A),
+                    ==, 0x32);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBCORE2_A),
+                    ==, 0x32);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBIO_A),
+                    ==, 0x00);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_DVC_1), ==, 0);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_DVC_2), ==, 0);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_CONTROL_D),
+                    ==, 0xf8);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBCORE1_A),
+                    ==, 0);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_VBCORE1_B),
+                    ==, 0);
+    g_assert_cmphex(dw_i2c_pmic_vendor_read(qts, DA9063_REG_DVC_1), ==, 0);
+    qtest_quit(qts);
+}
+
+static void test_aon_i2c_implicit_stop(void)
+{
+    uint64_t aon_base = TH1520_AON_I2C_BASE;
+    uint64_t ap_base = TH1520_I2C0_BASE;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    dw_i2c_enable(qts, aon_base, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(qts, aon_base + DW_I2C_DATA_CMD, DA9063_REG_DVC_1);
+    g_assert_cmphex(qtest_readl(qts, aon_base + DW_I2C_TXFLR), ==, 0);
+    g_assert_true(qtest_readl(qts, aon_base + DW_I2C_RAW_INTR_STAT) &
+                  DW_I2C_INTR_STOP_DET);
+    dw_i2c_disable(qts, aon_base);
+
+    /* The source-derived completion mode is confined to the AON controller. */
+    dw_i2c_enable(qts, ap_base, BEAGLEV_AHEAD_EEPROM_ADDR, 0);
+    qtest_writel(qts, ap_base + DW_I2C_DATA_CMD, 0x12);
+    g_assert_cmphex(qtest_readl(qts, ap_base + DW_I2C_TXFLR), ==, 0);
+    g_assert_false(qtest_readl(qts, ap_base + DW_I2C_RAW_INTR_STAT) &
+                   DW_I2C_INTR_STOP_DET);
+    qtest_writel(qts, ap_base + DW_I2C_DATA_CMD, 0x34 | DW_I2C_DATA_STOP);
+    dw_i2c_disable(qts, ap_base);
     qtest_quit(qts);
 }
 
@@ -11058,6 +11246,60 @@ static void test_dw_i2c_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_aon_i2c_pmic_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-pmic-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    dw_i2c_pmic_write(src, DA9063_REG_VBCORE1_A, 0x32);
+    dw_i2c_pmic_write(src, DA9063_REG_VBCORE1_B, 0x12);
+    dw_i2c_pmic_write(src, DA9063_REG_DVC_1, 0x03);
+    dw_i2c_pmic_write(src, DA9063_REG_DVC_2, 0xff);
+    dw_i2c_enable(src, TH1520_AON_I2C_BASE, BEAGLEV_AHEAD_PMIC_ADDR, 0);
+    qtest_writel(src, TH1520_AON_I2C_BASE + DW_I2C_DATA_CMD,
+                  DA9063_REG_VBCORE1_B);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    /* A pending source-compatible FIFO-drain stop also migrates. */
+    g_assert_cmphex(qtest_readl(dst, TH1520_AON_I2C_BASE + DW_I2C_TXFLR),
+                    ==, 0);
+    g_assert_true(qtest_readl(dst, TH1520_AON_I2C_BASE +
+                              DW_I2C_RAW_INTR_STAT) & DW_I2C_INTR_STOP_DET);
+    dw_i2c_disable(dst, TH1520_AON_I2C_BASE);
+
+    /* Pointer and register values persist across the stopped transfer. */
+    g_assert_cmphex(dw_i2c_pmic_current_read(dst), ==, 0x12);
+    g_assert_cmphex(dw_i2c_pmic_read(dst, DA9063_REG_VBCORE1_A), ==, 0x32);
+    g_assert_cmphex(dw_i2c_pmic_read(dst, DA9063_REG_DVC_1), ==, 0x03);
+    g_assert_cmphex(dw_i2c_pmic_read(dst, DA9063_REG_DVC_2), ==, 0x81);
+
+    qtest_system_reset(dst);
+    g_assert_cmphex(dw_i2c_pmic_read(dst, DA9063_REG_VBCORE1_A), ==, 0x00);
+    g_assert_cmphex(dw_i2c_pmic_read(dst, DA9063_REG_VBCORE1_B), ==, 0x00);
+    g_assert_cmphex(dw_i2c_pmic_read(dst, DA9063_REG_DVC_1), ==, 0x00);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_dw_spi_migration(void)
 {
     uint64_t base = th1520_spi0.base;
@@ -13265,10 +13507,16 @@ int main(int argc, char **argv)
                        test_dw_i2c_eeprom);
         qtest_add_func("/beaglev-ahead/dw-i2c/eeprom-backing",
                        test_dw_i2c_eeprom_backing);
+        qtest_add_func("/beaglev-ahead/dw-i2c/pmic",
+                       test_aon_i2c_pmic);
+        qtest_add_func("/beaglev-ahead/dw-i2c/aon-implicit-stop",
+                       test_aon_i2c_implicit_stop);
         qtest_add_func("/beaglev-ahead/dw-i2c/interrupts",
                        test_dw_i2c_interrupts);
         qtest_add_func("/beaglev-ahead/dw-i2c/migration",
                        test_dw_i2c_migration);
+        qtest_add_func("/beaglev-ahead/dw-i2c/pmic-migration",
+                       test_aon_i2c_pmic_migration);
         qtest_add_func("/beaglev-ahead/dw-spi/registers",
                        test_dw_spi_registers);
         qtest_add_func("/beaglev-ahead/dw-spi/loopback-interrupt",

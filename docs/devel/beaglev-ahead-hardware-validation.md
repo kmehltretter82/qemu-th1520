@@ -37,23 +37,44 @@ Resolution requires:
 
 Never close an item merely because Linux boots or a driver does not complain.
 
-## AON I2C open item (I2C-002)
+## AON I2C and PMIC open item (I2C-002)
 
-Public vendor U-Boot names an AON controller at ``0xfffff4c000`` with PLIC
-source 79 and defines only bit 0 of ``IC_ENABLE``; its disable helper writes
-``~1``.  QEMU maps a generic 4 KiB controller, routes source 79 and accepts
-only that enable bit for this AON instance.  It emits no DT node and supplies
-no PMIC/slave, pads, clock/reset link, rail effect or AON synthesis claim.
-Focused qtests cover the exact disable write, NACK/PLIC route, reset and
-migration.  A bounded SPL trace reaches the PMIC-voltage failure path without
-an AON-address fault, but its post-abort diagnostic does not identify the real
-PMIC response.
+Public vendor U-Boot commit ``bbf3994802d4ce64a22ccf795bc6dfe4bb9205da``
+names an AON controller at ``0xfffff4c000`` with PLIC source 79 and defines
+only bit 0 of ``IC_ENABLE``; its disable helper writes ``~1``.  The selected
+``CONFIG_TARGET_LIGHT_FM_C910_BEAGLE`` path uses I2C address ``0x5a`` for its
+CPU-voltage sequence.  The extracted public board schematic labels U81
+``DA9063`` and connects ``AON_SDA``/``AON_SCL`` to
+``DA9063_SDA``/``DA9063_SCL``.  This is source/schematic evidence, not an
+observation of the owner's unpowered board.
 
-On hardware, identify the PMIC and bus topology before writes; capture safe
-reset/read-only controller state, PLIC routing and stock-firmware
-transactions.  With a recovery plan, determine enable/reserved bits,
-timing/FIFO behavior, clock/reset/pad ownership and NACK/error behavior.  Do
-not model a PMIC or voltage rails until those observations are available.
+QEMU maps a generic 4 KiB controller, routes source 79 and accepts only that
+enable bit for the AON instance.  It attaches a private, partial DA9063 slave
+at ``0x5a`` which retains only the SPL-accessed page-0 state: CONTROL_D,
+DVC_1/DVC_2 and VBCORE1/VBCORE2/VBIO A/B.  Its all-zero reset state is an
+emulator convention, not a PMIC reset or power-rail claim.  The model creates
+no DT node, regulator/voltage effect, PMIC interrupt, GPIO, RTC, watchdog,
+pad, clock/reset link or general DA9063 page support.
+
+The vendor send path writes unflagged data, observes a drained TX FIFO, then
+waits for STOP_DET; the receive path also submits an unflagged read.  QEMU
+therefore has an opt-in, AON-only FIFO-drain completion mode.  It makes this
+public firmware sequence progress but does not assert that the physical TH1520
+controller generates a STOP at that point or has QEMU's immediate FIFO timing.
+All AP I2C instances retain generic DesignWare semantics.  Focused qtests
+cover the vendor transaction shape, its AON-only scope, reset, PMIC register
+state and migration with a pending completion.  A 15-second staged SPL run
+now passes the prior ``board_init_f set apcpu voltage failed`` checkpoint and
+prints the start of LPDDR4X initialization.  It is not a DRAM-success, OS-boot
+or physical-hardware claim.
+
+On hardware, first identify the fitted PMIC/address strap and bus topology
+without writes; capture stock-firmware transactions, controller status/FIFO
+behavior, STOP timing, PLIC routing, and PMIC read-only/reset state.  With a
+recovery plan, determine clock/reset/pad ownership, pull-ups/level shifting,
+NACK/error behavior, PMIC_INT routing, rail defaults/voltages/timing and cold,
+warm and power-loss retention.  Do not connect modeled PMIC state to voltage
+rails or widen the controller rule until those observations are available.
 
 ## Safe hardware workflow
 
