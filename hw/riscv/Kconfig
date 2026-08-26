@@ -28,6 +28,7 @@ config BEAGLEV_AHEAD
     select TH1520_GMAC
     select TH1520_CPR
     select TH1520_MBOX
+    select TH1520_IOPMP
     select TH1520_PINCTRL
     select TH1520_MISCSYS
     select TH1520_USB

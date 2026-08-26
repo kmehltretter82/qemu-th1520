@@ -15,6 +15,7 @@
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_mbox.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_pinctrl.h"
@@ -39,6 +40,7 @@
 #define TH1520_SPI_COUNT 1
 #define TH1520_TIMER_GROUP_COUNT 2
 #define TH1520_WDT_COUNT 2
+#define TH1520_IOPMP_COUNT 30
 
 #define TYPE_RISCV_TH1520_SOC "riscv.th1520.soc"
 OBJECT_DECLARE_SIMPLE_TYPE(TH1520SoCState, RISCV_TH1520_SOC)
@@ -56,6 +58,7 @@ struct TH1520SoCState {
     TH1520MiscSysState miscsys;
     TH1520USBState usb;
     TH1520MboxState mbox;
+    TH1520IOPMPState iopmp[TH1520_IOPMP_COUNT];
     MR75203State pvt;
     Clock *pvt_clk;
     XGeneRTCState rtc;

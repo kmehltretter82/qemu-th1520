@@ -10,6 +10,7 @@
 #include "qemu/iov.h"
 #include "qemu/units.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/net/mii.h"
 #include "hw/sd/sdhci.h"
@@ -869,6 +870,11 @@ typedef struct TH1520SPIController {
     uint32_t clock_id;
 } TH1520SPIController;
 
+typedef struct TH1520IOPMPController {
+    const char *name;
+    uint64_t base;
+} TH1520IOPMPController;
+
 typedef struct TH1520USBReg {
     uint32_t offset;
     uint32_t reset;
@@ -1075,6 +1081,39 @@ static const TH1520I2CController th1520_i2c_controllers[] = {
 
 static const TH1520SPIController th1520_spi0 = {
     TH1520_SPI0_BASE, TH1520_SPI0_IRQ, TH1520_CLK_SPI,
+};
+
+static const TH1520IOPMPController th1520_iopmp_controllers[] = {
+    { "emmc",      0xfffc028000ULL },
+    { "sdio0",     0xfffc029000ULL },
+    { "sdio1",     0xfffc02a000ULL },
+    { "usb0",      0xfffc02e000ULL },
+    { "ao",        0xffffc21000ULL },
+    { "aud",       0xffffc22000ULL },
+    { "chip-dbg",  0xffffc37000ULL },
+    { "eip120i",   0xffff220000ULL },
+    { "eip120ii",  0xffff230000ULL },
+    { "eip120iii", 0xffff240000ULL },
+    { "isp0",      0xfff4080000ULL },
+    { "isp1",      0xfff4081000ULL },
+    { "dw200",     0xfff4082000ULL },
+    { "vipre",     0xfff4083000ULL },
+    { "venc",      0xfffcc60000ULL },
+    { "vdec",      0xfffcc61000ULL },
+    { "g2d",       0xfffcc62000ULL },
+    { "fce",       0xfffcc63000ULL },
+    { "npu",       0xffff01c000ULL },
+    { "dpu0",      0xffff520000ULL },
+    { "dpu1",      0xffff521000ULL },
+    { "gpu",       0xffff522000ULL },
+    { "gmac1",     0xfffc001000ULL },
+    { "gmac2",     0xfffc002000ULL },
+    { "dmac",      0xffffc20000ULL },
+    { "tee-dmac",  0xffff250000ULL },
+    { "dsp0",      0xffff058000ULL },
+    { "dsp1",      0xffff059000ULL },
+    { "audio0",    0xffcb02e000ULL },
+    { "audio1",    0xffcb02f000ULL },
 };
 
 static const TH1520Timer th1520_timers[] = {
@@ -3225,6 +3264,166 @@ static void test_th1520_mbox_registers(void)
     qtest_system_reset(qts);
     assert_th1520_mbox_reset_state(qts);
     qtest_quit(qts);
+}
+
+static void assert_th1520_iopmp_reset_state(QTestState *qts)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_iopmp_controllers); i++) {
+        uint64_t base = th1520_iopmp_controllers[i].base;
+
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + TH1520_IOPMP_MISC_CTRL), ==, 0);
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + TH1520_IOPMP_DUMMY_ADDR), ==, 0);
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + TH1520_IOPMP_PAGE_LOCK0), ==, 0);
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + TH1520_IOPMP_DEFAULT_ATTR_CFG),
+                        ==, 0);
+    }
+}
+
+static void test_th1520_iopmp_registers(void)
+{
+    const uint64_t regions = th1520_iopmp_controllers[0].base;
+    const uint64_t bypass = th1520_iopmp_controllers[1].base;
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_iopmp_reset_state(qts);
+
+    /* Every vendor-referenced aperture has independent default state. */
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_iopmp_controllers); i++) {
+        uint64_t base = th1520_iopmp_controllers[i].base;
+        uint32_t attr = 0x50000000 | i;
+
+        qtest_writel(qts, base + TH1520_IOPMP_DEFAULT_ATTR_CFG, attr);
+        g_assert_cmphex(qtest_readl(qts,
+                                    base + TH1520_IOPMP_DEFAULT_ATTR_CFG),
+                        ==, attr);
+    }
+
+    qtest_writel(qts, regions + TH1520_IOPMP_REGION0_SADDR, 0x10000000);
+    qtest_writel(qts, regions + TH1520_IOPMP_REGION0_EADDR, 0x20000000);
+    qtest_writel(qts, regions + TH1520_IOPMP_ATTR_CFG0, 0x01234567);
+    qtest_writel(qts, regions + TH1520_IOPMP_DUMMY_ADDR, 0x00800000);
+    qtest_writel(qts, regions + TH1520_IOPMP_PAGE_LOCK0,
+                 BIT(0) | TH1520_IOPMP_PAGE_LOCK_DUMMY_ADDR |
+                 TH1520_IOPMP_PAGE_LOCK_DEFAULT_CFG);
+    qtest_writel(qts, regions + TH1520_IOPMP_REGION0_SADDR, 0x30000000);
+    qtest_writel(qts, regions + TH1520_IOPMP_REGION0_EADDR, 0x40000000);
+    qtest_writel(qts, regions + TH1520_IOPMP_ATTR_CFG0, 0x76543210);
+    qtest_writel(qts, regions + TH1520_IOPMP_DUMMY_ADDR, 0x00400000);
+    qtest_writel(qts, regions + TH1520_IOPMP_DEFAULT_ATTR_CFG, 0xdeadbeef);
+    g_assert_cmphex(qtest_readl(qts,
+                                regions + TH1520_IOPMP_REGION0_SADDR), ==,
+                    0x10000000);
+    g_assert_cmphex(qtest_readl(qts,
+                                regions + TH1520_IOPMP_REGION0_EADDR), ==,
+                    0x20000000);
+    g_assert_cmphex(qtest_readl(qts, regions + TH1520_IOPMP_ATTR_CFG0), ==,
+                    0x01234567);
+    g_assert_cmphex(qtest_readl(qts, regions + TH1520_IOPMP_DUMMY_ADDR), ==,
+                    0x00800000);
+    g_assert_cmphex(qtest_readl(qts,
+                                regions + TH1520_IOPMP_DEFAULT_ATTR_CFG), ==,
+                    0x50000000);
+
+    /* Region locks are independent; only region zero was made sticky. */
+    qtest_writel(qts, regions + TH1520_IOPMP_ATTR_CFG0 + 4, 0x89abcdef);
+    g_assert_cmphex(qtest_readl(qts,
+                                regions + TH1520_IOPMP_ATTR_CFG0 + 4), ==,
+                    0x89abcdef);
+
+    qtest_writel(qts, bypass + TH1520_IOPMP_MISC_CTRL, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, bypass + TH1520_IOPMP_MISC_CTRL), ==,
+                    TH1520_IOPMP_CTRL_BYPASS);
+    qtest_writel(qts, bypass + TH1520_IOPMP_DEFAULT_ATTR_CFG, 0xabcdef01);
+    qtest_writel(qts, bypass + TH1520_IOPMP_REGION0_SADDR, 0x10000000);
+    g_assert_cmphex(qtest_readl(qts,
+                                bypass + TH1520_IOPMP_DEFAULT_ATTR_CFG), ==,
+                    0x50000001);
+    g_assert_cmphex(qtest_readl(qts,
+                                bypass + TH1520_IOPMP_REGION0_SADDR), ==,
+                    0);
+    qtest_writel(qts, bypass + TH1520_IOPMP_PAGE_LOCK0,
+                 TH1520_IOPMP_PAGE_LOCK_BYPASS_EN);
+    qtest_writel(qts, bypass + TH1520_IOPMP_MISC_CTRL, 0);
+    g_assert_cmphex(qtest_readl(qts, bypass + TH1520_IOPMP_MISC_CTRL), ==,
+                    TH1520_IOPMP_CTRL_BYPASS);
+
+    qtest_system_reset(qts);
+    assert_th1520_iopmp_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_iopmp_migration(void)
+{
+    const uint64_t regions = th1520_iopmp_controllers[0].base;
+    const uint64_t bypass = th1520_iopmp_controllers[1].base;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-iopmp-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_iopmp_controllers); i++) {
+        qtest_writel(src, th1520_iopmp_controllers[i].base +
+                     TH1520_IOPMP_DEFAULT_ATTR_CFG, 0x60000000 | i);
+    }
+    qtest_writel(src, regions + TH1520_IOPMP_REGION0_SADDR, 0x01000000);
+    qtest_writel(src, regions + TH1520_IOPMP_REGION0_EADDR, 0x01ffffff);
+    qtest_writel(src, regions + TH1520_IOPMP_ATTR_CFG0, 0x10203040);
+    qtest_writel(src, regions + TH1520_IOPMP_DUMMY_ADDR, 0x00800000);
+    qtest_writel(src, regions + TH1520_IOPMP_PAGE_LOCK0,
+                 BIT(0) | TH1520_IOPMP_PAGE_LOCK_DUMMY_ADDR |
+                 TH1520_IOPMP_PAGE_LOCK_DEFAULT_CFG);
+    qtest_writel(src, bypass + TH1520_IOPMP_MISC_CTRL,
+                 TH1520_IOPMP_CTRL_BYPASS);
+    qtest_writel(src, bypass + TH1520_IOPMP_PAGE_LOCK0,
+                 TH1520_IOPMP_PAGE_LOCK_BYPASS_EN);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    for (size_t i = 0; i < ARRAY_SIZE(th1520_iopmp_controllers); i++) {
+        g_assert_cmphex(qtest_readl(dst, th1520_iopmp_controllers[i].base +
+                                    TH1520_IOPMP_DEFAULT_ATTR_CFG), ==,
+                        0x60000000 | i);
+    }
+    g_assert_cmphex(qtest_readl(dst,
+                                regions + TH1520_IOPMP_REGION0_SADDR), ==,
+                    0x01000000);
+    g_assert_cmphex(qtest_readl(dst,
+                                regions + TH1520_IOPMP_REGION0_EADDR), ==,
+                    0x01ffffff);
+    g_assert_cmphex(qtest_readl(dst, regions + TH1520_IOPMP_ATTR_CFG0), ==,
+                    0x10203040);
+    g_assert_cmphex(qtest_readl(dst, regions + TH1520_IOPMP_DUMMY_ADDR), ==,
+                    0x00800000);
+    g_assert_cmphex(qtest_readl(dst, regions + TH1520_IOPMP_PAGE_LOCK0), ==,
+                    BIT(0) | TH1520_IOPMP_PAGE_LOCK_DUMMY_ADDR |
+                    TH1520_IOPMP_PAGE_LOCK_DEFAULT_CFG);
+    g_assert_cmphex(qtest_readl(dst, bypass + TH1520_IOPMP_MISC_CTRL), ==,
+                    TH1520_IOPMP_CTRL_BYPASS);
+    g_assert_cmphex(qtest_readl(dst, bypass + TH1520_IOPMP_PAGE_LOCK0), ==,
+                    TH1520_IOPMP_PAGE_LOCK_BYPASS_EN);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void mr75203_qom_set(QTestState *qts, const char *property,
@@ -12438,6 +12637,10 @@ int main(int argc, char **argv)
                        test_th1520_mbox_registers);
         qtest_add_func("/beaglev-ahead/th1520-mbox/migration",
                        test_th1520_mbox_migration);
+        qtest_add_func("/beaglev-ahead/th1520-iopmp/registers",
+                       test_th1520_iopmp_registers);
+        qtest_add_func("/beaglev-ahead/th1520-iopmp/migration",
+                       test_th1520_iopmp_migration);
         qtest_add_func("/beaglev-ahead/mr75203/registers",
                        test_mr75203_registers);
         qtest_add_func("/beaglev-ahead/mr75203/migration",

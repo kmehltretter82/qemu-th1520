@@ -566,7 +566,7 @@ validation.
 | GPU/DPU/HDMI/DSI | Matching models missing | New software-visible register/queue/display pipelines |
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
-| Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
+| Security/IOPMP/eFuse | Thirty TH1520 IOPMP configuration windows expose 16 region attributes/ranges, default attribute, dummy address, bypass and sticky page locks with reset and VMState.  They intentionally have no DMA-master enforcement, translation, fault interrupt, DT binding, fuse/key, TEE or secure-boot effect | Establish access-control and violation behavior before connecting a window to a DMA master; add documented public fuse/key, TEE and secure-boot state separately |
 | Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  The C910 CSR subsection accepts synthetic, descriptor-exact v1/v2 layouts across four harts, including version-specific PMU defaults and derived FP state.  Pinned genuine v1/v2 producer captures establish the corresponding historical wire layouts, and both old-to-current board streams now load completely with direct seeded four-hart state validation.  TCG accepts the v1-era parent CPU version 11, with a validator retaining the KVM version-12 floor.  Ahead-only load aliases consume the old `riscv_sifive_plic`, `riscv_mtimer` and UART0 `serial` layouts; a nonzero synthetic regression checks their mappings, synthesized defaults, behavior and current-identity-only re-save.  Missing old PLIC line/trigger/cause state and old S-timer/TIME state impose documented irreducible limits.  Focused GMAC tests preserve filter/IPC/ring state and the current-v2 armed RIWT deadline.  Pre-v2 RIWT streams load unarmed because no old deadline exists, and separately created destination sockets do not imply migration of queued packets or network backends | Extend the same state inventory and boundary testing to every new controller and backend; characterize the legacy bridge's irrecoverable interrupt/timer cases against hardware rather than broadening its load-only scope; add in-flight DMA ownership and queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
 
 ## Workspace implementation status
@@ -1309,6 +1309,25 @@ init or hardware comparison.  In the vendor boot, non-storage devices remain
 deferred and the runtime console is unavailable; GPIO registration warnings
 also remain.  The binding split and the required hardware/stock-DTB comparison
 are tracked as ``DT-002`` in the validation ledger.
+
+### Vendor U-Boot configuration checkpoint
+
+The public vendor U-Boot's ``light_iopmp_config()`` writes ``0xffffffff`` to
+the default-attribute register at offset ``0xc0`` for 31 controller IDs (30
+unique 4 KiB apertures; its AUD and AUDIO IDs alias one aperture).  QEMU now
+maps those configuration windows with the registers and sticky locks described
+by the vendor Linux IOPMP driver.  The focused register and migration qtests
+pass.  This is intentionally configuration state only: it does not imply DMA
+filtering, address translation, fault/interrupt delivery, a DT binding, TEE,
+secure boot, or physical reset values.
+
+A direct run of that U-Boot now passes the former store fault at
+``0xfffc0280c0`` and emits its banner.  The next first fault is a 32-bit load
+at ``0xffff011100``.  That is U-Boot's ``clock_config.c`` AP-clock base plus
+``0x100``, and is distinct from QEMU's existing REE AP clock controller at
+``0xffef010000``.  It is therefore recorded as a separate clock-window gap,
+not silently aliased.  The exact reset contents, ownership and relationship of
+the two windows require a physical or better public-source comparison.
 
 ### Independent Alpine userspace lane
 

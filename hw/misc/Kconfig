@@ -266,6 +266,9 @@ config TH1520_CPR
 config TH1520_MBOX
     bool
 
+config TH1520_IOPMP
+    bool
+
 config TH1520_PINCTRL
     bool
 

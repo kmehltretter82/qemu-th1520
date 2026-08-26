@@ -225,6 +225,11 @@ typedef struct TH1520SPIInfo {
     uint32_t clock_id;
 } TH1520SPIInfo;
 
+typedef struct TH1520IOPMPInfo {
+    const char *name;
+    hwaddr base;
+} TH1520IOPMPInfo;
+
 static const TH1520TimerInfo
 th1520_timer_info[TH1520_TIMER_GROUP_COUNT] = {
     { "timer0-3", TH1520_DEV_TIMER0_3, TH1520_TIMER0_IRQ },
@@ -240,6 +245,47 @@ static const TH1520WDTInfo th1520_wdt_info[TH1520_WDT_COUNT] = {
 
 static const TH1520SPIInfo th1520_spi_info[TH1520_SPI_COUNT] = {
     { "spi0", TH1520_DEV_SPI0, TH1520_SPI0_IRQ, TH1520_CLK_SPI },
+};
+
+/*
+ * Vendor U-Boot writes the default attribute in all of these apertures
+ * during board_init().  Its IOPMP_AUD and IOPMP_AUDIO IDs both refer to the
+ * aud aperture, so this table intentionally contains the 30 unique windows.
+ * No DT node is generated: the vendor IOPMP binding is not established for
+ * the BeagleV Ahead board and QEMU does not connect this configuration state
+ * to a modeled DMA master.
+ */
+static const TH1520IOPMPInfo th1520_iopmp_info[TH1520_IOPMP_COUNT] = {
+    { "iopmp-emmc",       0xfffc028000ULL },
+    { "iopmp-sdio0",      0xfffc029000ULL },
+    { "iopmp-sdio1",      0xfffc02a000ULL },
+    { "iopmp-usb0",       0xfffc02e000ULL },
+    { "iopmp-ao",         0xffffc21000ULL },
+    { "iopmp-aud",        0xffffc22000ULL },
+    { "iopmp-chip-dbg",   0xffffc37000ULL },
+    { "iopmp-eip120i",    0xffff220000ULL },
+    { "iopmp-eip120ii",   0xffff230000ULL },
+    { "iopmp-eip120iii",  0xffff240000ULL },
+    { "iopmp-isp0",       0xfff4080000ULL },
+    { "iopmp-isp1",       0xfff4081000ULL },
+    { "iopmp-dw200",      0xfff4082000ULL },
+    { "iopmp-vipre",      0xfff4083000ULL },
+    { "iopmp-venc",       0xfffcc60000ULL },
+    { "iopmp-vdec",       0xfffcc61000ULL },
+    { "iopmp-g2d",        0xfffcc62000ULL },
+    { "iopmp-fce",        0xfffcc63000ULL },
+    { "iopmp-npu",        0xffff01c000ULL },
+    { "iopmp-dpu0",       0xffff520000ULL },
+    { "iopmp-dpu1",       0xffff521000ULL },
+    { "iopmp-gpu",        0xffff522000ULL },
+    { "iopmp-gmac1",      0xfffc001000ULL },
+    { "iopmp-gmac2",      0xfffc002000ULL },
+    { "iopmp-dmac",       0xffffc20000ULL },
+    { "iopmp-tee-dmac",   0xffff250000ULL },
+    { "iopmp-dsp0",       0xffff058000ULL },
+    { "iopmp-dsp1",       0xffff059000ULL },
+    { "iopmp-audio0",     0xffcb02e000ULL },
+    { "iopmp-audio1",     0xffcb02f000ULL },
 };
 
 static const uint32_t th1520_mshc_irqs[TH1520_MSHC_COUNT] = {
@@ -522,6 +568,10 @@ static void th1520_soc_init(Object *obj)
                     TH1520_AP_CLOCK_WDT0_OUTPUT));
     }
     object_initialize_child(obj, "mbox", &s->mbox, TYPE_TH1520_MBOX);
+    for (int i = 0; i < TH1520_IOPMP_COUNT; i++) {
+        object_initialize_child(obj, th1520_iopmp_info[i].name,
+                                &s->iopmp[i], TYPE_TH1520_IOPMP);
+    }
     object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "ts-count", TH1520_PVT_TS_COUNT);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "pd-count", TH1520_PVT_PD_COUNT);
@@ -853,6 +903,15 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->mbox), 0,
                        qdev_get_gpio_in_named(DEVICE(&s->plic), "source",
                                               TH1520_MBOX_IRQ));
+
+    for (int i = 0; i < TH1520_IOPMP_COUNT; i++) {
+        SysBusDevice *iopmp = SYS_BUS_DEVICE(&s->iopmp[i]);
+
+        if (!sysbus_realize(iopmp, errp)) {
+            return;
+        }
+        sysbus_mmio_map(iopmp, 0, th1520_iopmp_info[i].base);
+    }
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->pvt), errp)) {
         return;
