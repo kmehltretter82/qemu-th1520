@@ -1368,6 +1368,27 @@ contents, ownership, aliases and functional effects of these windows, and the
 vendor-firmware storage sequence, still require hardware or stronger
 public-source evidence.
 
+The same public TH1520 System User Manual identifies the REE system-control
+base as ``0xffef018000`` and ``BOOT_SEL`` as its offset ``0x10``.  Its low
+four bits are read-only sampled strap state; bit 4 is a write-one-to-set lock
+that is set after reset.  The manual's media table gives values 0--3 for USB,
+4 for eMMC, 5 for SD, 6 for SPI-NAND and 7 for SPI-NOR.  QEMU now maps only
+that four-byte REE word: it exposes the selected strap bits plus the set lock,
+ignores guest writes that cannot affect the post-reset state, and migrates the
+strap state.  It deliberately does not model the rest of the system-control
+block or its TEE mirror.
+
+The virtual board defaults to eMMC selection (a read value of ``0x14``),
+because its primary storage attachment is the eMMC controller.  This is a
+virtual-board configuration, not a claim about the exact straps on the
+owner's unpowered PCB.  ``-machine beaglev-ahead,boot-sel=<value>`` selects
+the exposed four-bit strap value; only bits 2:0 have a documented media
+meaning and bit 3 is retained without inventing one.  Focused qtests cover
+the default, write/reset invariance, an SD selection and migration.  A new
+bounded direct U-Boot run no longer encounters the prior ``BOOT_SEL`` access
+fault, but still does not hand off to an OS; that is a stopping boundary, not
+evidence of the next missing device.
+
 ### Independent Alpine userspace lane
 
 To avoid treating the small portable rootfs as the only userspace contract,

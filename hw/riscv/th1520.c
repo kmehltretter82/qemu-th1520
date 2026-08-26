@@ -77,6 +77,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_VOSYS] = { 0xffef528000, 0x00001000 },
     [TH1520_DEV_ISO7816_CONFIG] = { 0xfff7f30010,
                                     TH1520_ISO7816_CONFIG_MMIO_SIZE },
+    [TH1520_DEV_BOOTSEL] = { 0xffef018010,
+                              TH1520_BOOTSEL_MMIO_SIZE },
     [TH1520_DEV_USB_DRD] = { 0xffec03f000, 0x00001000 },
     [TH1520_DEV_USB_CORE] = { 0xffe7040000, 0x00010000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
@@ -601,6 +603,7 @@ static void th1520_soc_init(Object *obj)
     qdev_prop_set_bit(DEVICE(&s->vosys), "vosys", true);
     object_initialize_child(obj, "iso7816-config", &s->iso7816_config,
                             TYPE_TH1520_ISO7816_CONFIG);
+    object_initialize_child(obj, "bootsel", &s->bootsel, TYPE_TH1520_BOOTSEL);
     object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "ts-count", TH1520_PVT_TS_COUNT);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "pd-count", TH1520_PVT_PD_COUNT);
@@ -783,6 +786,12 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->iso7816_config), 0,
                     th1520_memmap[TH1520_DEV_ISO7816_CONFIG].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->bootsel), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->bootsel), 0,
+                    th1520_memmap[TH1520_DEV_BOOTSEL].base);
 
     object_property_set_link(OBJECT(&s->usb), "dma", OBJECT(system_memory),
                              &error_abort);
@@ -2252,12 +2261,18 @@ static void beaglev_ahead_machine_init(MachineState *ms)
         exit(EXIT_FAILURE);
     }
 
+    if (s->boot_sel & ~TH1520_BOOTSEL_SELECT_MASK) {
+        error_report("BeagleV Ahead boot-sel must be in the range 0x0..0xf");
+        exit(EXIT_FAILURE);
+    }
+
     memory_region_add_subregion(get_system_memory(),
                                 th1520_memmap[TH1520_DEV_DRAM].base,
                                 ms->ram);
 
     object_initialize_child(OBJECT(ms), "soc", &s->soc,
                             TYPE_RISCV_TH1520_SOC);
+    qdev_prop_set_uint8(DEVICE(&s->soc.bootsel), "boot-sel", s->boot_sel);
     qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     beaglev_ahead_attach_storage(s);
@@ -2299,6 +2314,18 @@ static void beaglev_ahead_set_boot_mode(Object *obj, const char *value,
         error_setg(errp, "unsupported BeagleV Ahead boot mode '%s' "
                    "(expected 'direct' or 'mask-rom')", value);
     }
+}
+
+static void beaglev_ahead_machine_instance_init(Object *obj)
+{
+    BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(obj);
+
+    s->boot_sel = TH1520_BOOTSEL_EMMC;
+    object_property_add_uint8_ptr(obj, "boot-sel", &s->boot_sel,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(obj, "boot-sel",
+        "BOOT_SEL[3:0] pin state: 0-3 USB, 4 eMMC, 5 SD, 6 SPI-NAND, "
+        "or 7 SPI-NOR");
 }
 
 static void beaglev_ahead_machine_class_init(ObjectClass *oc,
@@ -2346,6 +2373,7 @@ static const TypeInfo beaglev_ahead_types[] = {
         .name = TYPE_BEAGLEV_AHEAD_MACHINE,
         .parent = TYPE_MACHINE,
         .instance_size = sizeof(BeagleVAheadState),
+        .instance_init = beaglev_ahead_machine_instance_init,
         .class_init = beaglev_ahead_machine_class_init,
         .interfaces = riscv64_machine_interfaces,
     },

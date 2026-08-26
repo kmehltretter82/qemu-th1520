@@ -275,6 +275,9 @@ config TH1520_VIDEO_SYSREG
 config TH1520_ISO7816_CONFIG
     bool
 
+config TH1520_BOOTSEL
+    bool
+
 config TH1520_PINCTRL
     bool
 

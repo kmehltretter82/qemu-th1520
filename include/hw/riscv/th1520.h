@@ -14,6 +14,7 @@
 #include "hw/i2c/designware_i2c.h"
 #include "hw/intc/thead_c900_clint.h"
 #include "hw/intc/thead_c900_plic.h"
+#include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
@@ -63,6 +64,7 @@ struct TH1520SoCState {
     TH1520VideoSysRegState visys;
     TH1520VideoSysRegState vosys;
     TH1520ISO7816ConfigState iso7816_config;
+    TH1520BootSelState bootsel;
     TH1520USBState usb;
     TH1520MboxState mbox;
     TH1520IOPMPState iopmp[TH1520_IOPMP_COUNT];
@@ -98,6 +100,7 @@ struct BeagleVAheadState {
     TH1520SoCState soc;
     Notifier machine_done;
     BeagleVAheadBootMode boot_mode;
+    uint8_t boot_sel;
 };
 
 enum {
@@ -111,6 +114,7 @@ enum {
     TH1520_DEV_VISYS,
     TH1520_DEV_VOSYS,
     TH1520_DEV_ISO7816_CONFIG,
+    TH1520_DEV_BOOTSEL,
     TH1520_DEV_USB_DRD,
     TH1520_DEV_USB_CORE,
     TH1520_DEV_UART0,

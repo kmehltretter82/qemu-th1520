@@ -9,6 +9,7 @@
 #include "qemu/bswap.h"
 #include "qemu/iov.h"
 #include "qemu/units.h"
+#include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
@@ -36,6 +37,7 @@
 #define TH1520_VISYS_BASE          0xffe4040000ULL
 #define TH1520_VOSYS_BASE          0xffef528000ULL
 #define TH1520_ISO7816_CONFIG_BASE 0xfff7f30010ULL
+#define TH1520_BOOTSEL_BASE         0xffef018010ULL
 #define TH1520_USB_DRD_BASE        0xffec03f000ULL
 #define TH1520_USB_CORE_BASE       0xffe7040000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
@@ -3650,6 +3652,63 @@ static void test_th1520_iso7816_config_migration(void)
                     TH1520_ISO7816_CONFIG_MIE);
     qtest_system_reset(dst);
     assert_th1520_iso7816_config_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void assert_th1520_bootsel_state(QTestState *qts, uint8_t boot_sel)
+{
+    g_assert_cmphex(qtest_readl(qts, TH1520_BOOTSEL_BASE), ==,
+                    (boot_sel & TH1520_BOOTSEL_SELECT_MASK) |
+                    TH1520_BOOTSEL_UPDATE);
+}
+
+static void test_th1520_bootsel_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_bootsel_state(qts, TH1520_BOOTSEL_EMMC);
+    qtest_writel(qts, TH1520_BOOTSEL_BASE, UINT32_MAX);
+    assert_th1520_bootsel_state(qts, TH1520_BOOTSEL_EMMC);
+    qtest_system_reset(qts);
+    assert_th1520_bootsel_state(qts, TH1520_BOOTSEL_EMMC);
+    qtest_quit(qts);
+
+    qts = qtest_init("-machine beaglev-ahead,boot-sel=5 -bios none");
+    assert_th1520_bootsel_state(qts, 5);
+    qtest_quit(qts);
+}
+
+static void test_th1520_bootsel_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-bootsel-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead,boot-sel=5 -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    assert_th1520_bootsel_state(src, 5);
+    assert_th1520_bootsel_state(dst, TH1520_BOOTSEL_EMMC);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    assert_th1520_bootsel_state(dst, 5);
+    qtest_system_reset(dst);
+    assert_th1520_bootsel_state(dst, 5);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -12908,6 +12967,10 @@ int main(int argc, char **argv)
                        test_th1520_iso7816_config_registers);
         qtest_add_func("/beaglev-ahead/th1520-iso7816-config/migration",
                        test_th1520_iso7816_config_migration);
+        qtest_add_func("/beaglev-ahead/th1520-bootsel/registers",
+                       test_th1520_bootsel_registers);
+        qtest_add_func("/beaglev-ahead/th1520-bootsel/migration",
+                       test_th1520_bootsel_migration);
         qtest_add_func("/beaglev-ahead/mr75203/registers",
                        test_mr75203_registers);
         qtest_add_func("/beaglev-ahead/mr75203/migration",
