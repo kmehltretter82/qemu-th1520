@@ -363,9 +363,11 @@ exception-producing ``flt.s`` and requires FS Dirty before its first FXCR
 read.  A qtest-only hook also injects a local invalid SoftFloat event into the
 stopped incoming destination; the first resumed FXCR read must still be exactly
 ``DQNaN|NX``, and a mutation removing the post-load raised-event clear fails at
-``0xdead3008``.  The current normal build passes the extended execution gate;
-the earlier dependency-minimal and ASan/UBSan results predate this added hook
-and require a focused rerun.
+``0xdead3008``.  The current normal build passes all 14
+``riscv-csr-test`` cases with the extended execution gate; focused
+dependency-minimal and ASan/UBSan reruns of the added hook pass too.  The
+instrumented run emits only its established ``makecontext`` warning, with no
+ASan or UBSan finding.
 
 The stage-45 fast-path mutant and independent stage-46 raised-event mutation
 are recorded in the focused audit evidence above.  The SoftFloat quick suite

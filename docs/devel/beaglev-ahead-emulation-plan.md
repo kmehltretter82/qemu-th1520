@@ -1677,8 +1677,10 @@ where the old wire omitted PLIC input/trigger and interrupt-cause distinctions
 or S-timer/TIME state.  Those deterministic defaults require physical
 comparison and must not be generalized into a claim of lossless compatibility.
 Physical comparison remains open.  The current normal ``riscv-csr-test`` gate
-passes all 14 cases with the new hook; rerun the dependency-minimal and
-ASan/UBSan configurations before advancing their historical FXCR gate claims.
+passes all 14 cases with the new hook; focused dependency-minimal and
+ASan/UBSan reruns of that hook also pass.  The latter emits only the established
+``makecontext`` warning, with no ASan or UBSan finding; this is focused evidence,
+not a new complete historical gate total.
 The C910 model is TCG-only and is rejected with KVM until its custom state can
 be synchronized; CPU-016 retains the unidentified TH1520 stepping rather than
 treating the pinned RTL as a silicon measurement.

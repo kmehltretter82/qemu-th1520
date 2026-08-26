@@ -187,10 +187,12 @@ raised accumulator.  After the source stream
 loads, the resumed guest's first FXCR read must be exactly ``DQNaN|NX``;
 otherwise stale destination state would set FE.  A temporary mutation removing
 the C910 post-load raised-event clear fails at guest status ``0xdead3008``;
-the restored normal build passes all 14 ``riscv-csr-test`` cases.  This closes
-the internal QEMU regression gap only.  Focused dependency-minimal and
-ASan/UBSan reruns of the added hook remain pending; the older multi-build gate
-totals above predate it.  The physical capture and all CPU-016
+the restored normal build passes all 14 ``riscv-csr-test`` cases, and focused
+dependency-minimal and ASan/UBSan reruns of the added hook pass too.  The
+instrumented run has only the established ``makecontext`` warning, with no
+ASan or UBSan finding.  This closes the internal QEMU regression gap only; the
+older multi-build gate totals above predate this focused case.  The physical
+capture and all CPU-016
 hardware-validation work remain open.
 
 ## Historical C910 migration checkpoint
