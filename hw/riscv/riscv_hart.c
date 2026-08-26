@@ -25,6 +25,7 @@
 #include "system/qtest.h"
 #include "system/tcg.h"
 #include "qemu/cutils.h"
+#include "fpu/softfloat.h"
 #include "hw/core/sysbus.h"
 #include "target/riscv/cpu.h"
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
@@ -76,6 +77,10 @@ static void csr_call(char *cmd, uint64_t cpu_num, int csrno, uint64_t *val)
         ret = riscv_csr_read_i64(env, csrno, val);
     } else if (strcmp(cmd, "set_csr") == 0) {
         ret = riscv_csr_write_i64(env, csrno, *val);
+    } else if (strcmp(cmd, "raise_fp_exception") == 0) {
+        /* qtest-only hook for migration state reconstruction tests. */
+        float_raise(*val, &env->fp_status);
+        *val = get_float_exception_flags_raised(&env->fp_status);
     }
 
     g_assert(ret == RISCV_EXCP_NONE);

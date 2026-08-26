@@ -22,6 +22,7 @@
     .equ TEST_FAIL_RESET_COMPARE,     0xdead3005
     .equ TEST_FAIL_RESET_FS_DIRTY,    0xdead3006
     .equ TEST_FAIL_RESET_FXCR,        0xdead3007
+    .equ TEST_FAIL_MIGRATED_STALE,    0xdead3008
     .equ TEST_FAIL_TRAP,              0xdead30ff
 
     .equ CSR_FFLAGS,                  0x001
@@ -85,6 +86,11 @@ source_phase:
 wait_for_go:
     ld      t0, TEST_GO - TEST_STATUS(s0)
     beqz    t0, wait_for_go
+
+    /* No destination-side raised event may survive the post-load hook. */
+    csrr    t0, CSR_FXCR
+    li      t1, FXCR_SOURCE
+    bne     t0, t1, fail_migrated_stale
 
     /* DQNAN=1 propagates the first quiet-NaN operand's payload. */
     fadd.s  ft3, ft0, ft1
@@ -167,6 +173,9 @@ fail_reset_fs_dirty:
     j       finish
 fail_reset_fxcr:
     li      t0, TEST_FAIL_RESET_FXCR
+    j       finish
+fail_migrated_stale:
+    li      t0, TEST_FAIL_MIGRATED_STALE
     j       finish
 unexpected_trap:
     li      t0, TEST_FAIL_TRAP

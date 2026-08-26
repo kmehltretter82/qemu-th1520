@@ -199,6 +199,15 @@ static void set_csr(QTestState *qts, uint32_t csrno, uint64_t val)
     set_csr_hart(qts, 0, csrno, val);
 }
 
+static uint64_t raise_fp_exception(QTestState *qts, uint64_t flags)
+{
+    uint64_t val = flags;
+
+    g_assert_cmpint(qtest_csr_call(qts, "raise_fp_exception", 0, 0, &val),
+                    ==, 0);
+    return val;
+}
+
 static void assert_csr_mask(QTestState *qts, uint32_t csrno, uint64_t mask,
                             uint64_t expected)
 {
@@ -685,11 +694,11 @@ static void run_test_thead_c910_fxcr_migration_reset(void)
     src = qtest_init(args);
     dst = qtest_init(dst_args);
 
-    /* Make a missing post-load reconstruction fail instead of by chance. */
-    set_csr(dst, CSR_MSTATUS,
-            get_csr(dst, CSR_MSTATUS) | MSTATUS_FS_INITIAL);
-    set_csr(dst, CSR_TH_FXCR, reset_fxcr);
-    g_assert_cmphex(get_csr(dst, CSR_TH_FXCR), ==, reset_fxcr);
+    /*
+     * The incoming CPU cannot run before migration.  Leave one local,
+     * non-migrated SoftFloat event for the C910 post-load hook to discard.
+     */
+    g_assert_cmphex(raise_fp_exception(dst, FFLAGS_NV), ==, FFLAGS_NV);
 
     qtest_memwrite(src, 0, c910_fxcr_migration_guest_bin,
                    sizeof(c910_fxcr_migration_guest_bin));
