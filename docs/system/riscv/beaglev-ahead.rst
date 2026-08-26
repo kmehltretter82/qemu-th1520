@@ -121,7 +121,8 @@ The machine currently provides:
   eMMC users retain the generic card profile;
 * two DesignWare GMAC 3.x cores at ``0xffe7070000`` and ``0xffe7060000``
   with TH1520 APB glue, descriptor DMA, normal/enhanced descriptors, FCS,
-  checksum status, Clause 22 MDIO/PHY state, PLIC sources 66/67 and migration.
+  checksum status, Clause 22 MDIO/PHY state, DMA receive-interrupt-watchdog
+  timing, PLIC sources 66/67 and migration including an armed watchdog timer.
   Board GMAC0 can use a QEMU network backend; GMAC1 is board-disabled; and
 * a four-channel DesignWare AXI DMAC 1.01a at ``0xffefc00000`` on PLIC source
   27, with direct and linked-list memory-to-memory copies, 64-bit addresses,
@@ -281,8 +282,12 @@ scalar RV64 oracles for ``th.vslidedown.vx`` and ``th.vrgather.vx``.  It checks
 valid, VLMAX, ``UINT64_MAX`` and ``1ULL << 32`` scalar indices, a slide that
 partly crosses VLMAX, in-place slide, helper and optimized gather paths, and
 mask/prestart/tail/``vstart`` state.  This permutation gate dynamically covers
-RV64 e8,m1 only; other SEW/LMUL and XLEN combinations plus physical C910
-results remain outstanding.  MAEE
+RV64 e8,m1 scalar indexing.  Checkpoint ``78ad4d6e56`` also checks e64,m1
+``th.vrgather.vv`` with an index above 32 bits and requires exact traps for all
+three slide-down forms when masked ``vd=v0`` at LMUL=1, including first-trap
+``vstart``/destination preservation and legal unmasked/non-``v0`` controls.
+Other SEW/LMUL and XLEN combinations plus physical C910 results remain
+outstanding.  MAEE
 PTE bits 63:59 are carried
 through translation while MAEE is enabled.  When MAEE is clear, C910 ignores
 those PTE bits and obtains attributes from its physical system map; QEMU
@@ -734,10 +739,26 @@ board's RGMII/RTL8211F-facing DT connection and accepts a normal QEMU network
 backend; GMAC1 is present at the SoC level but disabled in the board DT because
 the board routes no second PHY.  Mainline Linux binds GMAC0 as DWMAC1000 and
 observes the same user/version identity and advertised checksum/extended-
-descriptor features as a public physical boot capture.  Programmable
-MAC/VLAN/hash filtering, complete checksum corner cases, PTP/MMC/WOL/EEE,
-flow-control timing and RTL8211F vendor pages, delays, GPIO reset and interrupt
-behavior remain incomplete.
+descriptor features as a public physical boot capture.  Checkpoint
+``1369cec4d9`` implements DMA RIWT[7:0] for Linux receive-interrupt mitigation.
+Each unit is 256 clock cycles; TH1520 currently supplies a fixed 500 MHz
+reset/reference-rate assumption, so Linux's default ``0xa0`` expires after
+exactly 81,920 ns.  A DIC-suppressed terminal receive completion arms the
+one-shot; expiry raises RI/NIS and the PLIC line, while a non-DIC completion,
+zero write or reset cancels it.  Current VMState version 2 preserves an armed
+deadline.  Older streams retain the low register byte but load unarmed because
+they contain no deadline.
+
+The complete GMAC qtest group passes 12/12.  Four clean normal/minimal
+one-/four-hart Linux runs pass DHCP, 3/3 gateway pings and a 1 MiB HTTP
+SHA-256 download.  A retained contention run exposes a Linux masked-RI race:
+RIWT expires while RIE is masked, then an unrelated TX interrupt W1C-clears RI
+without scheduling RX and temporarily strands three completed descriptors.
+QEMU does not hide that timing with a device-model workaround.  Programmable
+MAC/VLAN/hash filtering, complete checksum corner cases, sustained contention
+stress, dynamic RIWT clock/gate behavior, physical RIWT timing, PTP/MMC/WOL/
+EEE, flow-control timing and RTL8211F vendor pages, delays, GPIO reset and
+interrupt behavior remain incomplete.
 
 The general AXI DMAC implements the four-channel software path used by the
 mainline ``dw-axi-dmac`` driver.  Direct and 64-byte-LLI memory-to-memory
@@ -790,12 +811,18 @@ data/register/interrupt state.  The PVT migration test preserves guest
 registers, sample counters, temperature/voltage inputs and their resulting
 conversions.  The focused RTC migration test preserves counter and prescaler
 phase, match/control state and a future PLIC alarm.  Together with the focused
-device tests, the current complete normal gate passes 114/114 board and 14/14
-CSR tests; the dependency-minimal gate passes 113/113 and 7/7 respectively.
-ASan/UBSan passes all 7 CSR tests plus the current focused whole-machine,
-legacy-device and eMMC tuning-migration cases; its preceding complete board
-gate passed 112/112.  The 48-stage C910 FXCR guest and all six XTheadVector
-firmware guests pass in all three configurations.  Generic SoftFloat passes
+device tests, an armed DWC GMAC RIWT deadline now survives current-version
+migration: a half-expired timer remains quiet through remaining time minus one
+nanosecond and expires on the next.  Pre-version-2 GMAC streams load the masked
+register value unarmed because their missing deadline cannot be reconstructed.
+The current complete board gates pass 116/116 normal, 115/115
+dependency-minimal and 115/115 ASan/UBSan.  The complete normal RISC-V TCG gate
+passes 37/37, the explicitly enumerated Ahead-specific minimal TCG gate passes
+14/14, and all six XTheadVector firmware payloads pass directly under
+ASan/UBSan.  The preceding migration checkpoint's 114/114 board plus 14/14 CSR
+normal, 113/113 plus 7/7 minimal and 112/112 sanitizer-board totals remain
+historical evidence.  The 48-stage C910 FXCR guest passes in all three
+configurations.  Generic SoftFloat passes
 its 17/17 quick suite and the slow ``fp-test-mulAdd`` FMA test.  The only
 conditional omission is the keyboard-hotplug test because the deliberately
 minimal configurations exclude ``usb-kbd``; their
@@ -809,8 +836,10 @@ coroutines is expected and was not accompanied by an ASan/UBSan finding.
 Dedicated current, synthetic pre-version-3 and genuine historical C910 CSR
 migration gates pass.  Their documented old-wire ambiguities, physical reset
 behavior and silicon state remain open.  External backends and peers do not
-migrate; in-flight storage and GMAC DMA plus active or attached USB migration
-also remain open.
+migrate; queued packets, in-flight storage and GMAC DMA ownership, plus active
+or attached USB migration also remain open.  The fixed 500 MHz RIWT conversion
+does not follow dynamic clock-rate/gate changes and is not a measurement of the
+owner's silicon.
 
 QSPI/XIP, board SPI peripherals, timer cascade and physical toggle routing,
 PVT alarm/timer/IRQ and analog timing fidelity, non-application watchdogs,

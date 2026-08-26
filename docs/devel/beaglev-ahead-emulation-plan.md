@@ -1,14 +1,14 @@
 # BeagleV Ahead / TH1520 QEMU emulation plan
 
-Status: portable Linux single- and four-hart eMMC root/integrity/process-reopen,
-PLL-polling, C910 FXCR, synthetic C910 CSR VMState v1/v2 compatibility,
-genuine historical v1/v2 producer-to-current migration, Ahead-scoped
-load-only compatibility for the former PLIC, timer and boot-UART sections,
-pending eMMC tuning-IRQ migration, and XTheadVector scalar-index permutation
-boundaries are validated; complete
-normal/dependency-minimal board/CSR checkpoints and the recorded ASan/UBSan
-gates also pass.  The official image and
-physical-card/CPU validation remain open, 2026-08-25
+Status: portable Linux single- and four-hart eMMC root/integrity/process-reopen
+and GMAC DHCP/ping/HTTP-integrity traffic, PLL-polling, C910 FXCR, synthetic
+C910 CSR VMState v1/v2 compatibility, genuine historical v1/v2
+producer-to-current migration, Ahead-scoped load-only compatibility for the
+former PLIC, timer and boot-UART sections, pending eMMC tuning-IRQ migration,
+XTheadVector scalar/vector-index permutation and slide-overlap boundaries, and
+GMAC receive-interrupt watchdog timing/migration are validated.  Current
+normal, dependency-minimal and ASan/UBSan board gates also pass.  The official
+image and physical-card/CPU validation remain open, 2026-08-26
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -33,6 +33,10 @@ Ahead legacy-device migration checkpoint: d6f2cb0239
 eMMC tuning-IRQ migration checkpoint: 96ac3437f0
 
 XTheadVector scalar-permutation checkpoint: 9eef55f462
+
+XTheadVector vector-permutation/slide checkpoint: 78ad4d6e56
+
+GMAC receive-interrupt-watchdog checkpoint: 1369cec4d9
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -63,21 +67,37 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  The current bounded checkpoint fixes two RV64
-scalar-index correctness defects in the vendor-derived XTheadVector execution
-engine.  ``th.vslidedown.vx`` now rejects an out-of-range offset before adding
-the destination lane, so ``UINT64_MAX`` cannot wrap back into the source group.
-``th.vrgather.vx`` now retains the full XLEN-wide scalar index instead of
-truncating it to 32 bits.  An independent scalar-RV64 firmware oracle covers
-valid, VLMAX, ``UINT64_MAX`` and ``1ULL << 32`` indices; helper and optimized
-gather paths; masking, prestart and v0.7.1 tail-zero state; in-place slide; and
-a slide that crosses the source boundary partway through the active body.
-Targeted old-code and off-by-one mutations fail at distinct firmware exits 3,
-9 and 13.  All six XTheadVector firmware payloads pass in normal,
-dependency-minimal and ASan/UBSan builds; the sanitizer run reports only its
-established ``makecontext``/``swapcontext`` support warning.
+than upstream bug reporting.  Checkpoint ``78ad4d6e56``
+extends the sixth XTheadVector payload.  ``th.vrgather.vv`` now retains every
+bit of an e64 vector index: an independent two-lane e64,m1 oracle requires
+``1ULL << 32`` to select zero and index 1 to select source lane 1.  The frozen
+RVV 0.7.1 slide-down rules also prohibit a masked destination from overlapping
+``v0`` even at LMUL=1, overriding the generic LMUL=1 overlap allowance.  Raw
+encodings require illegal-instruction traps for ``th.vslidedown.vx``,
+``th.vslidedown.vi`` and ``th.vslide1down.vx`` with masked ``vd=v0``; the first
+trap preserves nonzero ``vstart`` and all 16 ``v0`` bytes, while unmasked
+``vd=v0`` and masked non-``v0`` controls remain legal.  The augmented guest
+passes in normal, dependency-minimal and ASan/UBSan builds.  Isolated gather
+and slide-checker mutations fail at exits 14 and 15.
 
-The immediately preceding checkpoint closed the pending eMMC tuning-interrupt
+Checkpoint ``1369cec4d9`` implements the DWMAC receive-interrupt
+watchdog register used by Linux RX interrupt mitigation.  TH1520 uses the
+pinned 500 MHz ``stmmaceth`` reset/reference rate, so Linux's default
+``RIWT=0xa0`` expires after exactly 81,920 ns.  A DIC-suppressed terminal RX
+descriptor arms the one-shot timer; expiry raises RI/NIS and the GMAC PLIC
+line, while an immediate non-DIC RI, a zero write or reset cancels it.  Current
+VMState version 2 preserves an armed deadline; a pre-version-2 stream retains
+the masked low register byte but cannot reconstruct a missing deadline and is
+loaded unarmed.  The complete GMAC qtest group passes 12/12, including focused
+watchdog and migration cases, and the complete board gates pass 116/116
+normal, 115/115 dependency-minimal and 115/115 under ASan/UBSan.
+
+The preceding committed checkpoint fixed two RV64 scalar-index correctness
+defects in the vendor-derived XTheadVector execution engine.  Its independent
+scalar-RV64 oracle and mutations at exits 3, 9 and 13 remain valid historical
+evidence.
+
+An earlier checkpoint closed the pending eMMC tuning-interrupt
 migration boundary without changing the SDHCI wire format or inventing hardware
 behavior.  An earlier milestone completed backward loading of the captured C910
 CSR VMState v1 and v2 subsection layouts on all four harts and the obsolete
@@ -355,11 +375,17 @@ closes an important compatibility boundary but does not move either rounded
 estimate: the irrecoverable old-wire ambiguities above and the much larger
 physical and peripheral fidelity inventory remain open.
 
-The scalar-permutation checkpoint closes two concrete RV64 wrong-result bugs
-and adds a mutation-sensitive oracle, but it also does not move either rounded
-estimate.  Dynamic coverage is deliberately limited to RV64 e8,m1; other
-element widths and LMULs, RV32, big-endian execution, the remaining permutation
-forms and physical C910 comparison remain open.
+The scalar/vector-permutation and slide-legality checkpoints close four
+concrete RV64 wrong-result or illegal-encoding bugs and add mutation-sensitive
+oracles, while the GMAC receive-interrupt watchdog closes the Linux driver's
+immediate interrupt-mitigation dependency.  These bounded changes do not move
+either rounded estimate.  Dynamic permutation coverage now includes RV64
+e8,m1 scalar slide/gather and slide-overlap cases plus e64,m1 vector gather;
+other element widths and LMULs, RV32, big-endian execution, the remaining
+permutation forms and physical C910 comparison remain open.  Four clean
+normal/minimal one-/four-hart Linux runs complete DHCP, three pings and a
+1 MiB HTTP SHA-256 transfer, but longer and contention-sensitive network stress
+remains open.
 
 The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
 miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
@@ -495,8 +521,8 @@ validation.
 | C910 identity | Missing | New thead-c910 CPU model and exact reset/ID configuration |
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
-| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction, mask-overlap and scalar-index permutation boundaries | Complete per-instruction and randomized differential coverage, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
-| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests downgrade current savevm subsections to descriptor-exact C910 CSR VMState v1/v2 layouts and reproduce the v1 parent-CPU version 11, then validate legacy defaults and carried state in poisoned destinations.  Genuine pinned last-v1 and last-v2 producer streams independently prove the four-hart wire layouts; both now load completely into current QEMU through Ahead-only legacy device aliases, and direct destination inspection preserves the hart-distinct CSR/CPUID state plus v2 PMU state.  Parent CPU v11 is accepted only under TCG; KVM remains version 12 or newer.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds; the current complete normal and dependency-minimal board/CSR gates pass 114/114 plus 14/14 and 113/113 plus 7/7.  ASan/UBSan passes all 7 CSR tests and the current focused whole-machine and legacy-device migration cases; its preceding complete board gate passed 112/112.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; characterize the documented legacy-device ambiguity boundaries on physical hardware, and compare every physical hart/stepping under CPU-016 |
+| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction, mask overlap, RV64 e8,m1 scalar permutation and slide legality, and e64,m1 vector gather indices | Complete per-instruction and randomized differential coverage across SEW/LMUL/XLEN, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
+| T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests downgrade current savevm subsections to descriptor-exact C910 CSR VMState v1/v2 layouts and reproduce the v1 parent-CPU version 11, then validate legacy defaults and carried state in poisoned destinations.  Genuine pinned last-v1 and last-v2 producer streams independently prove the four-hart wire layouts; both now load completely into current QEMU through Ahead-only legacy device aliases, and direct destination inspection preserves the hart-distinct CSR/CPUID state plus v2 PMU state.  Parent CPU v11 is accepted only under TCG; KVM remains version 12 or newer.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds.  The preceding complete normal and dependency-minimal board/CSR gates passed 114/114 plus 14/14 and 113/113 plus 7/7, while the preceding complete sanitizer board gate passed 112/112.  The current complete board gates pass 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan; the normal full RISC-V TCG gate passes 37/37, the minimal Ahead-specific TCG enumeration passes 14/14, and all six XTheadVector payloads pass directly under ASan/UBSan.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; characterize the documented legacy-device ambiguity boundaries on physical hardware, and compare every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
 | Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
@@ -504,7 +530,7 @@ validation.
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM with 32-byte page-write wrapping, and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, EEPROM busy/write-protect behavior, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
 | SD/eMMC | A reusable DWC MSHC wrapper and all three TH1520 instances provide SDHCI v4.20, vendor/PHY state, PIO, SDMA, v4 64-bit ADMA2, Auto CMD23, IRQ/reset/migration, eMMC unit 0 and microSD unit 1; the three active-low misc-system storage reset groups drive isolated controller resets, and mainline Linux probes them with 64-bit ADMA.  Unit 0 opts into the synthetic eMMC 5.1/1.8 V HS200/HS400 speed profile and CMD21 contract; generic eMMC remains unchanged.  Four-hop qtest coverage preserves a partial tuning FIFO, an armed Execute Tuning request, completed HS200 tuning with pending `RBUFRDY` and its direct post-load IRQ, data-reset deassertion with sampled-clock retention, and final HS400 state.  The generated DT adopts the vendor `mmc0=eMMC`, `mmc1=sdio0`, `mmc2=sdio1` aliases and tests all three, while the pinned upstream DTS omission remains an explicit provenance uncertainty.  Portable Linux wraps the pinned ext2 root in an MBR with `PARTUUID=1520a110-01`; normal/minimal one- and four-hart gates mount HS400, write/sync/hash 1 MiB, remount read-only and verify the stable hash from a fresh QEMU process | Pin and boot an official image and vendor U-Boot; reconcile the vendor aliases with stock-image DT and hardware evidence; add filesystem/block stress, `e2fsck`, cache-eviction/power-loss boundaries and longer SMP repetition; validate physical CID/CSD/EXT_CSD, voltage and electrical tuning/timing; add CQE/ADMA3, boot partitions/RPMB, SDIO Wi-Fi, removable-card GPIOs, error/tuning injection and mask-ROM storage boot; validate split reset members and held-reset behavior |
-| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000. Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status. TH1520 additionally enables Type-2 RX status for a bounded IPv4/IPv6 TCP/UDP/ICMP subset. The shared transmit COE now honors TXCOESEL, TSF and first-descriptor CIC0-3, inserts IPv4 header and IPv4/IPv6 TCP/UDP/ICMP checksums through one C-VLAN or ESVL-enabled S-VLAN, preserves guest source buffers, and writes terminal enhanced IHE/IPE/ES status | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete RX drop/forward threshold policy and malformed/zero-checksum corners; compare TX CIC2, CIC1-on-IPv6, malformed-length/status, trailing/padding, FIFO/PBL recovery, threshold, fragment/extension and stacked-VLAN behavior; add PTP/MMC/WOL/EEE, flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
+| Ethernet | A reusable DWC GMAC 3.x model now provides descriptor DMA, IRQs, FCS, Clause 22 MDIO, a configurable PHY and VMState; both TH1520 instances and their APB glue are integrated, individual and shared AP reset groups drive resets, and mainline Linux binds GMAC0 as DWMAC1000. Receive filtering covers MAC0 plus 31 enable-controlled perfect addresses, byte masks and source selection; promiscuous/receive-all, broadcast/multicast, inverse and four control-frame modes; 64-bin unicast/multicast hashing; C-/S-VLAN exact, VID-only and inverse matching; and final-descriptor DA/SA/VLAN status. TH1520 additionally enables Type-2 RX status for a bounded IPv4/IPv6 TCP/UDP/ICMP subset. The shared transmit COE honors TXCOESEL, TSF and first-descriptor CIC0-3, inserts IPv4 header and IPv4/IPv6 TCP/UDP/ICMP checksums through one C-VLAN or ESVL-enabled S-VLAN, preserves guest source buffers, and writes terminal enhanced IHE/IPE/ES status. The low eight bits of DMA RIWT implement Linux's DIC-based RX interrupt mitigation at a fixed TH1520 500 MHz reset/reference rate; expiry raises RI/NIS, reset/zero/immediate RI cancel the timer, and VMState v2 preserves its deadline. Clean normal/minimal Linux one-/four-hart runs pass DHCP, 3/3 ping and a 1 MiB HTTP SHA-256 transfer | Validate the physical 32-entry/64-bin synthesis and exact filter, VLAN, control-frame and pause semantics; establish whether VLAN hash exists before implementing it; complete RX drop/forward threshold policy and malformed/zero-checksum corners; compare TX CIC2, CIC1-on-IPv6, malformed-length/status, trailing/padding, FIFO/PBL recovery, threshold, fragment/extension and stacked-VLAN behavior; add PTP/MMC/WOL/EEE, flow control, RTL8211F vendor pages/delays/IRQ/reset, traffic stress and error injection; validate the RIWT clock, DIC/reload/write/W1C/stop/reset behavior, dynamic clock/gate effects, individual/shared reset boundaries and whether they cover the embedded QEMU PHY |
 | SPI/QSPI | A reusable DW APB SSI master is integrated at the Linux-described SPI0 node with its AP reset pair. The pinned mainline DT/driver tree supplies no QSPI controller node or programming contract, so QSPI/XIP is deliberately not inferred from clock/reset names alone | Validate the TH1520 synthesis, reset split and board wiring; add QSPI/XIP only after a public or hardware-established controller/flash contract exists |
 | PWM | A six-channel TH1520 PWM controller is integrated at ``0xffec01c000`` with its Linux binding, AP clock ID 51, aligned 32-bit control/period/falling-point registers, continuous normal/inverted waveforms, boundary-latched reconfiguration, reset and VMState.  Its AP gate drives a provisional 125 MHz/zero QEMU clock; gating freezes the pending phase and output, including across migration, and re-enabling resumes it.  It exposes test-only QOM outputs and resets immediately when either known AP PWM reset bit is asserted; the board has no generated PWM consumer | Validate reset/register/strobe semantics, physical clock rate and gate phase/output behavior, one-shot/inactive behavior, the rest of the 16 KiB aperture, pinmux/header routing and safe physical electrical behavior |
 | GPIO/pinctrl/LEDs | A reusable one-port DW APB GPIO model and all six Linux-described TH1520 banks now provide 157 lines, exact IRQ/clock/DT wiring, edge/level interrupts, reset and VMState.  AP reset pairs drive GPIO0-3; GPIO4 and AO GPIO remain in their separate domains.  Five blue user-LED objects consume GPIO4 pins 8-12 and one green power LED remains on; QOM, reset, migration and Linux ``gpio-leds`` tests cover them.  All three TH1520 pad controllers provide software-visible PADCFG/MUXCFG state, exact apertures/clocks, digital reset values/write masks and VMState; both AP pad controllers have reset wiring, and the board DT includes exact GPIO ranges and LED/GMAC0/UART0/Wi-Fi groups | Validate GPIO synthesis IDs, direction wording and debounce timing, split reset/domain behavior, LED polarity/brightness/defaults and electrical effects on hardware; add remaining GPIO consumers, buttons, mux-driven signal routing and deterministic header/device backends |
@@ -517,7 +543,7 @@ validation.
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
 | C906/E902/DSPs | C906 CPU model is partial; E902/Q7 system integration missing | Add exact cores or execution adapters, memories, IRQs and firmware handoff |
 | Security/IOPMP/eFuse | Missing | New access-control, fuse/key, TEE and secure-boot state |
-| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  The C910 CSR subsection accepts synthetic, descriptor-exact v1/v2 layouts across four harts, including version-specific PMU defaults and derived FP state.  Pinned genuine v1/v2 producer captures establish the corresponding historical wire layouts, and both old-to-current board streams now load completely with direct seeded four-hart state validation.  TCG accepts the v1-era parent CPU version 11, with a validator retaining the KVM version-12 floor.  Ahead-only load aliases consume the old `riscv_sifive_plic`, `riscv_mtimer` and UART0 `serial` layouts; a nonzero synthetic regression checks their mappings, synthesized defaults, behavior and current-identity-only re-save.  Missing old PLIC line/trigger/cause state and old S-timer/TIME state impose documented irreducible limits.  A focused GMAC test preserves MAC0/MAC31, frame-filter, address-hash and VLAN state and proves post-load old-address rejection/new-address acceptance using a separately created destination socket | Extend the same state inventory and boundary testing to every new controller and backend; characterize the legacy bridge's irrecoverable interrupt/timer cases against hardware rather than broadening its load-only scope; add in-flight state if synchronous devices later gain timing, queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
+| Migration | Current C910, CLINT, PLIC, AP clock/reset, UART, I2C and board EEPROM, SPI0, TH1520 PWM, APB timer, both AP watchdogs, X-Gene RTC, TH1520 mailbox, MR75203 PVT, GPIO and board-LED intensity, TH1520 padctrl, DWC MSHC, DWC GMAC, TH1520 GMAC APB glue, DW AXI DMAC, TH1520 USB misc/DRD, DWC3/xHCI, DRAM and SRAM state has VMState and focused regression coverage; established boot-critical state also has a whole-machine regression.  The C910 CSR subsection accepts synthetic, descriptor-exact v1/v2 layouts across four harts, including version-specific PMU defaults and derived FP state.  Pinned genuine v1/v2 producer captures establish the corresponding historical wire layouts, and both old-to-current board streams now load completely with direct seeded four-hart state validation.  TCG accepts the v1-era parent CPU version 11, with a validator retaining the KVM version-12 floor.  Ahead-only load aliases consume the old `riscv_sifive_plic`, `riscv_mtimer` and UART0 `serial` layouts; a nonzero synthetic regression checks their mappings, synthesized defaults, behavior and current-identity-only re-save.  Missing old PLIC line/trigger/cause state and old S-timer/TIME state impose documented irreducible limits.  Focused GMAC tests preserve filter/IPC/ring state and the current-v2 armed RIWT deadline.  Pre-v2 RIWT streams load unarmed because no old deadline exists, and separately created destination sockets do not imply migration of queued packets or network backends | Extend the same state inventory and boundary testing to every new controller and backend; characterize the legacy bridge's irrecoverable interrupt/timer cases against hardware rather than broadening its load-only scope; add in-flight DMA ownership and queued-packet/backend reconnection coverage for GMAC, and USB transfers active across migration |
 
 ## Workspace implementation status
 
@@ -746,7 +772,15 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   bounded IPv4/IPv6 TCP/UDP/ICMP checksums through one supported VLAN tag.
   It changes only the gathered outgoing frame, preserves guest DMA buffers,
   ignores bytes beyond the IP-declared payload as stuff, and reports IHE/IPE
-  only on the terminal descriptor with enhanced-format ES semantics; and
+  only on the terminal descriptor with enhanced-format ES semantics.  The
+  low eight bits of DMA RIWT provide the Linux-visible receive-interrupt
+  watchdog: a DIC-suppressed completed frame arms a 256-cycle-unit one-shot,
+  expiry raises RI/NIS, and an immediate non-DIC RI, a zero write or reset
+  cancels it.  The reusable model defaults its conversion clock to zero;
+  TH1520 supplies a fixed 500 MHz reset/reference-rate assumption, making
+  Linux's default ``0xa0`` exactly 81,920 ns.  Current VMState version 2
+  migrates an armed timer and pre-version-2 loads remain deliberately unarmed
+  because no old deadline exists; and
 * a reusable Synopsys DesignWare AXI DMAC 1.01a model with four channels,
   direct and 64-byte-LLI memory-to-memory transfers, 64-bit addresses,
   transfer-width and increment behavior, descriptor valid/last/writeback,
@@ -857,13 +891,15 @@ the migration channel.  It still starts all four C910 harts at the same
 address and supplies no strap, media, security or release-controller behavior,
 so it is only the first bounded Phase-4 checkpoint.
 
-At the current checkpoint the complete gate passes 114/114 board qtests and
-14/14 CSR qtests in the normal build, and 113/113 plus 7/7 in the
-dependency-minimal build.  The ASan/UBSan build passes all 7 CSR tests and the
-current focused whole-machine, legacy-device and eMMC tuning migration tests;
-its preceding
-complete board gate passed 112/112.  The sole conditional difference in the
-board totals is
+At the preceding migration checkpoint the complete normal and
+dependency-minimal gates passed 114/114 board plus 14/14 CSR qtests and
+113/113 plus 7/7 respectively; its preceding complete ASan/UBSan board gate
+passed 112/112.  With the current vector and RIWT checkpoints, the
+complete board gates pass 116/116 normal, 115/115 dependency-minimal and
+115/115 ASan/UBSan.  The complete normal RISC-V TCG gate passes 37/37, the
+explicit Ahead-specific minimal TCG enumeration passes 14/14, and all six
+XTheadVector payloads pass directly under ASan/UBSan.  The sole conditional
+difference in the board totals is
 the HID hotplug test because ``usb-kbd`` is intentionally absent from the
 minimal configuration.  The four remaining USB tests cover exact
 misc/DRD register resets and masks, provisional DWC3/xHCI capabilities, all
@@ -901,10 +937,9 @@ covered M/S interrupt delivery and AIA virtual aliases with complete, disabled
 and missing-prerequisite configurations.  The complete RISC-V qtest gate
 passed 17 suites with one expected skip, and the complete RISC-V TCG guest
 suite passed.  Dependency-minimal and ASan/UBSan configurations each pass
-their seven available C910 CSR/migration subtests.  The dependency-minimal
-board gate passes 113/113; the ASan/UBSan build has a preceding 112/112 full
-board result plus current focused whole-machine, legacy-device and eMMC tuning
-migration passes.  The
+their seven available C910 CSR/migration subtests.  At the current checkpoint,
+the dependency-minimal and ASan/UBSan board gates each pass
+115/115.  The
 explicitly historical 108/108 sanitizer result and the earlier focused 9/9
 CPR plus 13/13 storage results remain milestone evidence only.
 
@@ -990,6 +1025,24 @@ normal, dependency-minimal and ASan/UBSan builds.  This dynamic checkpoint is
 RV64 e8,m1 only; other widths, LMULs, RV32, big-endian execution and silicon
 behavior remain explicitly unverified under ``CPU-006``.
 
+Checkpoint ``78ad4d6e56`` keeps the same sixth payload but adds two
+independent boundaries.  The ``th.vrgather.vv`` helper now carries an e64
+vector index as ``uint64_t`` instead of truncating it to 32 bits.  A scalar
+e64,m1 oracle uses source values ``0x1122334455667788`` and
+``0x99aabbccddeeff00`` with indices ``1ULL << 32`` and 1, requiring zero and
+the second source value respectively.  The slide-down translator uses a
+dedicated checker because frozen RVV 0.7.1 gives ``th.vslidedown.vx``,
+``th.vslidedown.vi`` and ``th.vslide1down.vx`` an instruction-specific
+masked-``v0`` destination prohibition which overrides the generic LMUL=1
+overlap allowance.  Three raw encodings must trap, with the first preserving
+nonzero ``vstart`` and every ``v0`` byte; unmasked ``v0`` destinations and
+masked non-``v0`` destinations remain legal.  Restoring the 32-bit vector
+index or the generic overlap checker fails at exits 14 and 15.  The augmented
+six-payload set passes directly in normal, dependency-minimal and ASan/UBSan
+builds.  Its dynamic permutation scope is RV64 e8,m1 scalar and e64,m1 vector
+indexing, not all SEW/LMUL combinations; RV32, big-endian execution, remaining
+forms and physical C910 comparison stay open under ``CPU-006``.
+
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
 MXSTATUS.MM and the SXSTATUS.MM alias across TB boundaries; exercises
@@ -1057,7 +1110,7 @@ still allowed, PTE precedence and physical fallback.  Normal,
 dependency-minimal and ASan/UBSan focused runs pass.  These values are test
 fixtures, not a proposed TH1520 map.
 
-Ten GMAC-path tests cover the exact DT/clock/APB/MDIO contract, masked APB
+Twelve GMAC-path tests cover the exact DT/clock/APB/MDIO contract, masked APB
 writes, both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS,
 extension-word preservation, and socket-backed packet paths.  They include a
 deterministic positive-barrier rejection regression, a 34-case matrix for
@@ -1072,7 +1125,9 @@ hop-by-hop, one C-/enabled S-VLAN, split descriptors and buffers, TSF bypass,
 UDP zero, trailing stuff, a mismatched UDP length, short payloads, malformed
 headers, terminal status and guest-buffer preservation.  The seven-case NPCM
 suite separately covers normal-descriptor CIC3 IPv4/UDP compatibility and
-retains its legacy Type-2 receive contract.  Four DMAC tests cover
+retains its legacy Type-2 receive contract.  The two additional GMAC tests
+cover exact RIWT masking/timing/IRQ/reset/cancellation and a half-expired
+current-v2 deadline across migration.  Four DMAC tests cover
 reset/masks, a direct copy and PLIC route, a two-item LLI chain above 4 GiB,
 invalid-descriptor failure and completed-state/IRQ migration; the direct-boot
 test also checks the complete generated binding and AP clock-provider IDs.
@@ -1193,11 +1248,28 @@ with ``CONFIG_STMMAC_ETH``, ``CONFIG_STMMAC_PLATFORM`` and
 probe error or clock-divider warning, reads user/version ID ``0x10/0x37``, and
 selects DWMAC1000, RGMII, Type-2 RX checksum, TX checksum insertion,
 enhanced/extended descriptors and ring mode.  This establishes the mainline
-driver/register contract.  The focused qtest now also establishes QEMU's
-deterministic CIC0-3 transmit contract, including IPv6, but no Linux traffic
-run or physical capture has compared that contract with silicon.  This does
-not establish a working physical link, the provisional hardware-feature
-aggregate, RTL8211F vendor behavior, or any traffic/stress requirement in P5.
+driver/register contract.  It also enables RX mitigation through DMA RIWT and
+programs the Linux default ``0xa0``.  QEMU converts that value using a fixed
+500 MHz TH1520 reset/reference-rate assumption to exactly 81,920 ns; dynamic
+clock-rate and gate effects remain unmodeled and the owner's physical rate is
+not proved.
+
+Four clean user-network runs complete DHCP, 3/3 gateway pings and a 1 MiB HTTP
+download with SHA-256
+``fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83``.
+``run-9uieaud1`` and ``run-tk0021lq`` cover normal one- and four-hart Linux;
+``run-ev_lpw_x`` and ``run-xc7n_lma`` repeat both with the dependency-minimal
+QEMU.  A separate ``run-53c1sfu1`` is intentionally retained as a
+contention/timing-sensitive failure: DHCP and three pings passed and the HTTP
+GET reached the host, but RIWT expired while Linux NAPI had RIE masked; an
+unrelated TX interrupt then made the ISR W1C-clear the masked RI without
+scheduling RX, and three completed descriptors were temporarily stranded.
+The 1 MiB transfer consequently stalled.  No QEMU correctness workaround was
+added for this Linux masked-interrupt race.  The focused qtests establish
+QEMU's deterministic CIC0-3 transmit and RIWT contracts, while the clean
+Linux runs establish bounded bidirectional traffic; neither proves a physical
+link, the provisional hardware-feature aggregate, RTL8211F vendor behavior,
+dynamic clock/gate effects or the sustained traffic/stress requirement in P5.
 
 The pinned Linux source, with ``CONFIG_DMATEST=y``, also binds the general
 controller as ``dw_axi_dmac_platform`` with four channels.  A tiny initramfs
@@ -1490,11 +1562,11 @@ device identities and no ``riscv_sifive_plic``, ``riscv_mtimer`` or legacy
 UART ``serial`` identity.  This proves both that the load-only handlers run and
 that they do not create a reverse-migration promise.
 
-The current complete normal and dependency-minimal board/CSR gates pass
-114/114 plus 14/14 and 113/113 plus 7/7 respectively.  ASan/UBSan passes all
-7 CSR tests and the current focused whole-machine, legacy-device and eMMC
-tuning migration cases; its
-preceding complete board gate passed 112/112.
+At this historical migration checkpoint, the complete normal and
+dependency-minimal board/CSR gates passed 114/114 plus 14/14 and 113/113 plus
+7/7 respectively.  Its preceding complete ASan/UBSan board gate passed
+112/112, with the focused whole-machine, legacy-device and eMMC tuning
+migration cases checked separately.
 
 The generic SoftFloat quick suite passes 17/17, and its slow
 ``fp-test-mulAdd`` FMA test also passes for f16, f32, f64 and f128.
@@ -1608,10 +1680,14 @@ the first trap and legal LMUL=1, unmasked and non-``v0`` controls.  A sixth
 payload uses independent scalar RV64 oracles for ``th.vslidedown.vx`` and
 ``th.vrgather.vx``.  It covers overflow-safe VLMAX and ``UINT64_MAX`` slide
 indices, a partial source-boundary crossing, in-place execution, full-width
-``1ULL << 32`` and ``UINT64_MAX`` gather indices, helper/optimized paths and
-mask/prestart/tail state.  Three targeted mutations fail at their distinct
-wrap, truncation and off-by-one exits.  The dynamic permutation coverage is
-currently e8,m1 on RV64; other SEW/LMUL and XLEN combinations remain open.
+  ``1ULL << 32`` and ``UINT64_MAX`` gather indices, helper/optimized paths and
+  mask/prestart/tail state.  Three targeted mutations fail at their distinct
+  wrap, truncation and off-by-one exits.  The same payload now also checks an
+  e64,m1 ``th.vrgather.vv`` index above 32 bits and the instruction-specific
+  LMUL=1 masked-``v0`` prohibition for all three slide-down forms; two more
+  targeted mutations fail at exits 14 and 15.  Dynamic permutation coverage is
+  RV64 e8,m1 scalar plus e64,m1 vector indexing; other SEW/LMUL and XLEN
+  combinations remain open.
 Vector loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
@@ -1687,9 +1763,9 @@ tuning with ``RBUFRDY`` status/status-enable/signal-enable state and direct
 post-load eMMC IRQ reconstruction, data-reset deassertion with sampled-clock
 retention, and final HS400 migration.  Removing the SDHCI post-load IRQ update
 fails at the direct IRQ boundary.  Three focused qtests and the fail-before
-comparison pass; the current complete board gates are 114/114 in the normal
-build and 113/113 in the dependency-minimal build.  The preceding complete
-ASan/UBSan board gate passed 112/112, and the current focused
+comparison pass; at that migration checkpoint the complete board gates passed
+114/114 in the normal build and 113/113 in the dependency-minimal build.  Its
+preceding complete ASan/UBSan board gate passed 112/112, and the focused
 whole-machine, legacy-device and eMMC tuning migration cases also pass under
 ASan/UBSan.
 The earlier ASan/UBSan storage-only gate passed 13/13.  Pinned Linux reaches
@@ -1717,11 +1793,17 @@ one C- or enabled S-VLAN tag, checksum-error and documented bypass paths.
 The shared TX engine now models TXCOESEL/TSF gates, first-descriptor CIC0-3,
 bounded IPv4/IPv6 TCP/UDP/ICMP insertion, one supported VLAN tag, split-frame
 assembly and normal/enhanced status distinctions without changing guest
-buffers.  Ten focused GMAC qtests include a deterministic rejection barrier,
-a 34-case filter matrix, a Type-2 matrix, an 18-case TX checksum matrix,
-split-descriptor boundaries and same-version filter/IPC-state migration with
-a separately created destination socket.  The seven-case NPCM suite and the
-successful mainline ``dwmac-thead`` probe remain green.  CQE/ADMA3 and
+buffers.  DMA RIWT now implements the driver's DIC-based interrupt-mitigation
+timer at the fixed 500 MHz TH1520 reset/reference rate, raises RI/NIS and PLIC
+source 66 on expiry, cancels on reset/zero/immediate RI, and migrates an armed
+deadline in VMState v2.  Twelve focused GMAC qtests include a deterministic
+rejection barrier, a 34-case filter matrix, a Type-2 matrix, an 18-case TX
+checksum matrix, split-descriptor boundaries, filter/IPC-state migration and
+exact 81,920 ns RIWT timing/current-v2 migration.  The seven-case NPCM suite,
+successful mainline ``dwmac-thead`` probe and four clean normal/minimal
+one-/four-hart DHCP/ping/1 MiB HTTP-integrity runs remain green.  The retained
+masked-RI contention failure keeps sustained traffic and driver IRQ stress
+open without adding a QEMU workaround.  CQE/ADMA3 and
 boot/RPMB behavior, SDIO Wi-Fi, card-detect/write-protect wiring and error
 injection remain open.  The physical eMMC part, CID/CSD/complete EXT_CSD,
 voltage support and electrical/analog HS200/HS400 timing also remain open; the
@@ -1738,6 +1820,11 @@ behavior, block/network stress, stock-image boot, and every remaining P5
 acceptance item are still open.  The physical 32-entry/64-bin synthesis and
 exact filtering, control-frame and VLAN semantics also require hardware
 validation; VLAN-hash mode remains disabled until its presence is established.
+RIWT still needs owner-board comparison of the actual clock, DIC start/reload
+edges, W1C and live-write behavior, DMA stop/disable, clock-rate/gate changes,
+reset domains and expiry-to-PLIC latency on both cores.  The fixed 500 MHz QEMU
+conversion is a documented reset/reference-rate assumption, not a dynamic
+silicon clock model.
 P5 is therefore not closed.
 
 ### Phase 6 — clocks, reset, power and control I/O

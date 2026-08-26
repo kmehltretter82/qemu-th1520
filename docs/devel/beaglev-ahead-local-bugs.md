@@ -7,15 +7,15 @@ work in this branch.  These findings are not claims about pre-existing
 upstream QEMU, and must not be filed as upstream bugs without an independent
 baseline reproducer.
 
-* Audit checkpoint: 2026-08-25
+* Audit checkpoint: 2026-08-26
 * Branch: `beaglev-ahead`
-* Latest-finding pre-fix workspace HEAD: `e734a5c4c8`
+* Latest-finding pre-fix workspace HEAD: `78ad4d6e56`
 * Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
 
 ## Current disposition
 
-The thirteen local findings recorded during implementation (`UQ-L001` through
-`UQ-L013`) are fixed and have focused regressions.  The GMAC audit found that
+The fifteen local findings recorded during implementation (`UQ-L001` through
+`UQ-L015`) are fixed and have focused regressions.  The GMAC audit found that
 the reusable DWC GMAC transmit path advertised checksum offload while its
 inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
 did not model the feature/TSF gates or descriptor-format error status.  At the
@@ -51,7 +51,7 @@ delay, reset behavior and migration state are retained.  A raw RV64 qtest
 reproduces the old failure under single-threaded TCG and passes before and
 after system reset with the fix.
 
-The latest local checkpoint fixes two RV64 scalar-index wrong-result defects
+The preceding scalar-index checkpoint fixes two RV64 wrong-result defects
 in the vendor-derived XTheadVector helpers.  ``th.vslidedown.vx`` could wrap an
 XLEN-wide offset back into the source group before checking VLMAX, while
 ``th.vrgather.vx`` truncated its helper-path scalar index to 32 bits.  Checkpoint
@@ -62,6 +62,20 @@ slide-boundary off-by-one makes it fail at exits 3, 9 and 13 respectively.
 Current upstream QEMU has no
 XTheadVector implementation, so this remains a public-series/vendor-fork review
 finding rather than a report against released upstream QEMU.
+
+Checkpoint ``78ad4d6e56`` fixes two nearby vector-permutation/slide defects.
+``th.vrgather.vv`` truncated e64 indices to 32 bits, and the three slide-down
+forms used the generic LMUL=1 mask-overlap allowance despite frozen RVV 0.7.1's
+instruction-specific masked-``vd=v0`` prohibition.  The augmented sixth guest
+uses an independent e64,m1 oracle, exact illegal traps and legal controls;
+isolated mutations fail at exits 14 and 15.
+
+Checkpoint ``1369cec4d9`` implements the DWMAC DMA receive-interrupt watchdog
+needed by the advertised 3.70/Linux path.  It adds exact low-byte masking,
+256-cycle timing, RI/NIS/PLIC delivery, cancellation/reset and version-2 timer
+migration while preserving the reusable NPCM version-1/default-zero-clock
+contract.  This is a local missing-device-behavior finding, not a report
+against released upstream QEMU.
 
 Remaining items are fidelity gaps or hardware questions, not confirmed bugs;
 they stay open until an authoritative specification or an owner-board capture
@@ -90,6 +104,8 @@ the short review index and current test checkpoint.
 | UQ-L011 | DWC GMAC TX checksum | The local reusable/TH1520 integration collapsed CIC2 and CIC3 into the same IPv4 TCP/UDP recalculation and did not enforce the advertised TXCOESEL/store-and-forward contract, leaving IPv6 offload and descriptor error status incomplete. | Fixed with bounded CIC0-3 IPv4/IPv6 TCP/UDP/ICMP insertion, first/terminal split-frame handling and format-aware IHE/IPE/ES writeback; an 18-case BeagleV matrix and one NPCM normal-descriptor CIC3 compatibility case cover the correction. |
 | UQ-L012 | TH1520 PLL polling | A guest could observe virtual time beyond a due PLL-lock deadline while ``PLL_STS`` remained stale until the I/O thread dispatched its timer callback. | Fixed by materializing an expired deadline on ``PLL_STS`` reads through the existing lock helper; the raw RV64 single-threaded-TCG qtest fails with the preserved pre-fix binary and passes twice, across reset, with the fix. |
 | UQ-L013 | XTheadVector scalar permutation | `th.vslidedown.vx` could wrap a full-XLEN offset into a valid source lane, and the `th.vrgather.vx` helper truncated its scalar index to 32 bits. | Fixed with overflow-safe slide bounds and a `target_ulong` gather index; an independent scalar oracle covers helper/optimized, mask/prestart/tail, in-place and boundary paths, and mutations fail at exits 3, 9 and 13. |
+| UQ-L014 | XTheadVector vector permutation/slide legality | `th.vrgather.vv` truncated e64 vector indices to 32 bits, and the slide-down translators missed the frozen v0.7.1 instruction-specific masked-`vd=v0` prohibition at LMUL=1. | Fixed in `78ad4d6e56` with a `uint64_t` gather index and dedicated slide checker; an e64,m1 oracle, three exact illegal traps, state preservation and legal controls pass, while mutations fail at exits 14 and 15. |
+| UQ-L015 | DWC GMAC receive-interrupt watchdog | The local DWMAC 3.70/Ahead path advertised and Linux enabled RIWT mitigation, but the register did not schedule RI, so DIC-suppressed receive completions could remain unreported. | Fixed in `1369cec4d9` with low-byte RIWT timing, RI/NIS/PLIC delivery, cancellation/reset and VMState v2; focused watchdog/migration tests pass and the GMAC group passes 12/12. |
 
 ## Audit evidence
 
@@ -131,7 +147,7 @@ second mutant was restored immediately; no preserved binary or immutable log
 is claimed for it.  The generic SoftFloat quick suite passes 17/17, and the
 slow ``fp-test-mulAdd`` FMA test passes for f16, f32, f64 and f128.
 
-### Current focused XTheadVector scalar-permutation checkpoint
+### Current focused XTheadVector permutation/slide checkpoint
 
 All six XTheadVector firmware payloads run directly on the Ahead machine and
 pass **6/6** in each of the normal, dependency-minimal and ASan/UBSan builds.
@@ -139,12 +155,37 @@ The instrumented run reports only the established incomplete
 ``makecontext``/``swapcontext`` support warning, with no ASan/UBSan diagnostic.
 The pre-fix helper fails with exit 3; isolated gather-truncation and slide
 boundary mutations fail with exits 9 and 13.  The fixed source was restored
-before the passing runs.
+before the passing runs.  Checkpoint ``78ad4d6e56`` augments that same sixth
+payload with an e64,m1 ``th.vrgather.vv`` oracle and the three LMUL=1
+slide-down masked-``vd=v0`` traps.  Isolated vector-index and checker mutations
+fail at exits 14 and 15; the fixed source passes in all three builds.
+
+### Current GMAC RIWT and Linux-traffic checkpoint
+
+The focused receive-watchdog and watchdog-migration qtests pass **1/1** each,
+the complete GMAC group passes **12/12**, and whole-machine plus legacy-device
+migration remain green.  The timer checks low-byte masking, the exact
+81,920 ns deadline for ``0xa0`` at the fixed 500 MHz TH1520 reset/reference
+rate, RI/NIS/PLIC delivery, reset/zero/immediate-RI cancellation and a
+half-expired current-v2 deadline.  The reusable property's default-zero clock
+and NPCM's version-1 format are unchanged.
+
+Four clean pinned-Linux runs pass DHCP, 3/3 gateway pings and the SHA-256 of a
+1 MiB HTTP download: normal one-/four-hart ``run-9uieaud1`` and
+``run-tk0021lq``, plus minimal ``run-ev_lpw_x`` and ``run-xc7n_lma``.  Retained
+``run-53c1sfu1`` is a contention/timing-sensitive Linux masked-RI race: RIWT
+expires while RIE is masked, an unrelated TX interrupt W1C-clears RI without
+scheduling RX, and three completed descriptors are temporarily stranded.  It
+is not hidden by a QEMU workaround.
+
+The current complete board gates pass **116/116** normal, **115/115**
+dependency-minimal and **115/115** ASan/UBSan.  The normal full RISC-V TCG gate
+passes **37/37**, the enumerated Ahead-specific minimal TCG gate passes
+**14/14**, and the six vector payloads pass directly under ASan/UBSan.
 
 The complete aggregate checkpoints below predate the scalar-permutation
 payload and are retained as historical evidence rather than silently
-incremented.  No post-``9eef55f462`` **30/30** complete normal TCG-suite result
-is claimed here.
+incremented.  The current complete results are stated above.
 
 ### Pre-scalar-permutation complete normal build
 
@@ -357,8 +398,10 @@ change must add a reproducer and a regression before changing any of them.
   attached transfer still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load
-  reject/accept behavior and a Type-2 RDES4 result.  It creates the destination
-  socket separately and does not migrate queued packets or the backend.  DMAC,
+  reject/accept behavior and a Type-2 RDES4 result.  DWC GMAC VMState v2 now
+  also preserves an armed RIWT deadline; pre-v2 loads remain unarmed because
+  no old deadline exists.  The tests create the destination socket separately
+  and do not migrate queued packets or the backend.  DMAC,
   I2C, SPI, and PVT are intentionally synchronous today;
   adding asynchronous timing requires versioned VMState and boundary tests.
 * `GMAC-001`: the receive-filter model follows the current DT contract of 64
@@ -371,7 +414,12 @@ change must add a reproducer and a regression before changing any of them.
   semantics, normal/enhanced status, malformed/trailing/padding behavior,
   fragments and IPv6 extensions, stacked/alternate VLANs, UDP-zero behavior,
   PTP composition, descriptor/bus-fault ordering and sustained traffic remain
-  open.  The previous generic helper's incidental S-VLAN/QinQ traversal is not
+  open.  RIWT uses a fixed 500 MHz TH1520 reset/reference-rate assumption; the
+  owner's actual clock, repeated-DIC and W1C/re-arm ordering, live writes, DMA
+  stop/disable, dynamic gate/rate changes, reset domains and expiry latency are
+  unverified.  The retained masked-RI Linux race keeps contention stress open
+  without changing the device model.  The previous generic helper's incidental
+  S-VLAN/QinQ traversal is not
   claimed by the new one-tag/ESVL parser.  Exact filter, control-frame, pause
   and VLAN behavior also requires physical comparison.
 * `USB-002`: the current model is a host-only digital DWC3/xHCI integration
