@@ -1338,13 +1338,21 @@ outputs, display/ISP/HDMI/DSI behavior or generated DT nodes.  Focused reset,
 mask and migration qtests pass.
 
 The direct U-Boot run consequently gets past the former VISYS load at
-``0xffe4040030`` and prints all of its pre-video clock rates.  A short interrupt
-trace's first fault then moves to the load at ``0xfffc02d104``.  The public
-source labels the containing 4 KiB base ``MISCSYS_TEE_REG_BASE`` but does not
-name offset ``0x104`` in the paths examined here.  It remains an explicitly
-unmodeled next gap, rather than a reason to map an anonymous register bank.
-The exact reset contents, ownership, aliases and functional effects of all
-these windows require hardware or stronger public-source evidence.
+``0xffe4040030`` and prints all of its pre-video clock rates.  Its
+``light.c`` defines ``0xfffc02d104`` as ``SYSCLK_USB_CTRL`` and
+``usb_clk_config()`` sets its low four bits.  The vendor Linux misc-system
+gate driver independently describes REE misc-system ``+0x104`` as those four
+USB gate bits.  QEMU therefore maps exactly that four-byte vendor address as
+an explicit shared-state compatibility alias to the existing REE register.
+The focused bidirectional/reset and migration qtests pass.  This maps neither
+the rest of the TEE aperture nor a DT node, and it does not establish a
+physical alias or any unmodeled register's reset/side effects.
+
+A 15-second direct U-Boot run after that mapping emits the banner and clock
+rates with no QEMU guest-error diagnostic, but it does not reach an OS handoff.
+That is a firmware configuration checkpoint, not a boot-success claim.  The
+exact reset contents, ownership, aliases and functional effects of all these
+windows still require hardware or stronger public-source evidence.
 
 ### Independent Alpine userspace lane
 

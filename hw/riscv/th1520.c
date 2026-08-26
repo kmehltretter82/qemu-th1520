@@ -56,6 +56,15 @@
  */
 #define TH1520_VENDOR_UBOOT_AP_CLOCK_BASE 0xffff011000ULL
 
+/*
+ * Vendor U-Boot enables the four USB gates through this TEE-misc address,
+ * whereas vendor Linux describes the gate register at REE misc-system +
+ * 0x104.  Keep the precise compatibility access shared with the REE state;
+ * it neither claims a physical fabric alias nor creates a generic TEE
+ * aperture or DT node.
+ */
+#define TH1520_VENDOR_UBOOT_USB_CLOCK_BASE 0xfffc02d104ULL
+
 static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_DRAM]  = { 0x0000000000, 0x100000000 },
     [TH1520_DEV_PLIC]  = { 0xffd8000000, 0x01000000 },
@@ -743,6 +752,15 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->miscsys), 0,
                     th1520_memmap[TH1520_DEV_MISCSYS].base);
+    memory_region_init_alias(&s->tee_miscsys_usb_clock_alias, OBJECT(dev),
+                             "th1520.tee-miscsys-usb-clock-alias",
+                             sysbus_mmio_get_region(
+                                 SYS_BUS_DEVICE(&s->miscsys), 0),
+                             TH1520_MISCSYS_USB_CLOCK_CTRL,
+                             sizeof(uint32_t));
+    memory_region_add_subregion(system_memory,
+                                TH1520_VENDOR_UBOOT_USB_CLOCK_BASE,
+                                &s->tee_miscsys_usb_clock_alias);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->visys), errp)) {
         return;

@@ -29,6 +29,7 @@
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
 #define TH1520_VENDOR_UBOOT_AP_CLOCK_BASE 0xffff011000ULL
+#define TH1520_VENDOR_UBOOT_USB_CLOCK_BASE 0xfffc02d104ULL
 #define TH1520_AP_RESET_BASE       0xffef014000ULL
 #define TH1520_MISCSYS_BASE        0xffec02c000ULL
 #define TH1520_VISYS_BASE          0xffe4040000ULL
@@ -9173,6 +9174,32 @@ static void test_th1520_usb_registers(void)
     qtest_quit(qts);
 }
 
+static void test_th1520_vendor_uboot_usb_clock_alias(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 0xf);
+    g_assert_cmphex(qtest_readl(qts, TH1520_VENDOR_UBOOT_USB_CLOCK_BASE),
+                    ==, 0xf);
+
+    qtest_writel(qts, TH1520_VENDOR_UBOOT_USB_CLOCK_BASE, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 0);
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_CLK, 5);
+    g_assert_cmphex(qtest_readl(qts, TH1520_VENDOR_UBOOT_USB_CLOCK_BASE),
+                    ==, 5);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 0xf);
+    g_assert_cmphex(qtest_readl(qts, TH1520_VENDOR_UBOOT_USB_CLOCK_BASE),
+                    ==, 0xf);
+
+    qtest_quit(qts);
+}
+
 static void test_th1520_usb_reset_outputs(void)
 {
     const uint32_t changed_gctl = TH1520_USB_GCTL_RESET ^ BIT(0) ^ BIT(2);
@@ -9547,7 +9574,9 @@ static void test_th1520_usb_migration(void)
     qtest_writel(src,
                   TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
     qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_BUS_CLK, 0);
-    qtest_writel(src, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_CLK, 5);
+    qtest_writel(src, TH1520_VENDOR_UBOOT_USB_CLOCK_BASE, 5);
+    g_assert_cmphex(qtest_readl(src, TH1520_MISCSYS_BASE +
+                                TH1520_MISCSYS_USB_CLK), ==, 5);
     qtest_writel(src, TH1520_USB_DRD_BASE + 0x0c, 0x5a5a);
     qtest_writel(src, TH1520_USB_DRD_BASE + 0x50, 0x10203040);
     qtest_writel(src, TH1520_USB_DRD_BASE + 0x54, 0x89abcdef);
@@ -9573,6 +9602,8 @@ static void test_th1520_usb_migration(void)
                                 TH1520_MISCSYS_BUS_CLK), ==, 0);
     g_assert_cmphex(qtest_readl(dst, TH1520_MISCSYS_BASE +
                                 TH1520_MISCSYS_USB_CLK), ==, 5);
+    g_assert_cmphex(qtest_readl(dst, TH1520_VENDOR_UBOOT_USB_CLOCK_BASE),
+                    ==, 5);
     g_assert_cmphex(qtest_readl(dst, TH1520_USB_DRD_BASE + 0x0c), ==,
                     0x5a5a);
     g_assert_cmphex(qtest_readl(dst, TH1520_USB_DRD_BASE + 0x50), ==,
@@ -12818,6 +12849,8 @@ int main(int argc, char **argv)
                        test_mr75203_migration);
         qtest_add_func("/beaglev-ahead/usb/registers",
                        test_th1520_usb_registers);
+        qtest_add_func("/beaglev-ahead/usb/vendor-uboot-clock-alias",
+                       test_th1520_vendor_uboot_usb_clock_alias);
         qtest_add_func("/beaglev-ahead/usb/reset-outputs",
                        test_th1520_usb_reset_outputs);
         qtest_add_func("/beaglev-ahead/usb/host-dma-irq",
