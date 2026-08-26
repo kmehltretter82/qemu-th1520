@@ -11507,6 +11507,120 @@ static void test_dwcmshc_emmc_tuning_migration(void)
     g_assert_cmpint(g_unlink(final_image), ==, 0);
 }
 
+static void test_dwcmshc_adma_migration(void)
+{
+    enum {
+        BLOCKS = 6,
+        DESCS_PER_DELAY = 5,
+        DESCRIPTOR_SIZE = 16,
+        TRANSFER_DELAY_NS = 100,
+    };
+    const uint64_t base = TH1520_SDIO0_BASE;
+    uint8_t expected[BLOCKS * DWCMSHC_BLOCK_SIZE];
+    uint8_t actual[sizeof(expected)];
+    uint8_t descriptors[BLOCKS * DESCRIPTOR_SIZE] = {};
+    g_autofree char *src_image = NULL;
+    g_autofree char *dst_image = NULL;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    for (unsigned block = 0; block < BLOCKS; block++) {
+        memset(expected + block * DWCMSHC_BLOCK_SIZE, 0x10 + block,
+               DWCMSHC_BLOCK_SIZE);
+        descriptors[block * DESCRIPTOR_SIZE] =
+            SDHC_ADMA_ATTR_VALID | SDHC_ADMA_ATTR_ACT_TRAN |
+            (block == BLOCKS - 1 ? SDHC_ADMA_ATTR_END : 0);
+        stw_le_p(descriptors + block * DESCRIPTOR_SIZE + 2,
+                 DWCMSHC_BLOCK_SIZE);
+        stq_le_p(descriptors + block * DESCRIPTOR_SIZE + 4,
+                 DWCMSHC_ADMA_DATA_ADDR + block * DWCMSHC_BLOCK_SIZE);
+    }
+    src_image = dwcmshc_create_image(expected, sizeof(expected));
+    dst_image = dwcmshc_create_image(expected, sizeof(expected));
+    fd = g_file_open_tmp("beaglev-ahead-adma-migration-XXXXXX", &path,
+                         NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=1,file=%s,format=raw,auto-read-only=off",
+        src_image);
+    dst = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=1,file=%s,format=raw,auto-read-only=off "
+        "-incoming defer",
+        dst_image);
+
+    dwcmshc_init_sd(src, base);
+
+    qtest_memwrite(src, DWCMSHC_ADMA_DESC_ADDR, descriptors,
+                   sizeof(descriptors));
+    qtest_memset(src, DWCMSHC_ADMA_DATA_ADDR, 0xa5, sizeof(expected));
+    qtest_writeb(src, base + SDHC_HOSTCTL, SDHC_CTRL_ADMA2_32);
+    qtest_writew(src, base + SDHC_HOSTCTL2,
+                  R_SDHC_HOSTCTL2_VERSION4_MASK |
+                  R_SDHC_HOSTCTL2_ADDRESSING_MASK |
+                  R_SDHC_HOSTCTL2_CMD23_ENA_MASK);
+    qtest_writew(src, base + SDHC_NORINTSTS, UINT16_MAX);
+    qtest_writew(src, base + SDHC_ERRINTSTS, UINT16_MAX);
+    qtest_writew(src, base + SDHC_NORINTSTSEN,
+                  SDHC_NISEN_CMDCMP | SDHC_NISEN_TRSCMP);
+    qtest_writew(src, base + SDHC_NORINTSIGEN, 0);
+    dwcmshc_write_adma_address(src, base, DWCMSHC_ADMA_DESC_ADDR);
+
+    /*
+     * SDHCI processes five descriptors synchronously, then arms its
+     * 100 ns transfer timer for the sixth.  Do not touch its MMIO space
+     * between this command and migration: an MMIO access resumes the timer.
+     */
+    sdhci_cmd_regs(src, base, DWCMSHC_BLOCK_SIZE, BLOCKS, 0,
+                   SDHC_TRNS_DMA | SDHC_TRNS_BLK_CNT_EN |
+                   SDHC_TRNS_ACMD_AUTO | SDHC_TRNS_READ | SDHC_TRNS_MULTI,
+                   (18 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+    qtest_memread(src, DWCMSHC_ADMA_DATA_ADDR, actual, sizeof(actual));
+    g_assert_cmpmem(actual, DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE,
+                    expected, DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE);
+    for (size_t i = DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE;
+         i < sizeof(actual); i++) {
+        g_assert_cmphex(actual[i], ==, 0xa5);
+    }
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    qtest_clock_step(dst, TRANSFER_DELAY_NS - 1);
+    qtest_memread(dst, DWCMSHC_ADMA_DATA_ADDR, actual, sizeof(actual));
+    g_assert_cmpmem(actual, DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE,
+                    expected, DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE);
+    for (size_t i = DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE;
+         i < sizeof(actual); i++) {
+        g_assert_cmphex(actual[i], ==, 0xa5);
+    }
+
+    qtest_clock_step(dst, 1);
+    qtest_memread(dst, DWCMSHC_ADMA_DATA_ADDR, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), expected, sizeof(expected));
+    g_assert_cmphex(dwcmshc_read_adma_address(dst, base), ==,
+                    DWCMSHC_ADMA_DESC_ADDR + sizeof(descriptors));
+    g_assert_cmphex(qtest_readw(dst, base + SDHC_BLKCNT), ==, 0);
+    g_assert_true(qtest_readw(dst, base + SDHC_NORINTSTS) & SDHC_NIS_TRSCMP);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+    g_assert_cmpint(g_unlink(src_image), ==, 0);
+    g_assert_cmpint(g_unlink(dst_image), ==, 0);
+}
+
 static void test_dwcmshc_migration(void)
 {
     const uint64_t base = TH1520_EMMC_BASE;
@@ -12285,6 +12399,8 @@ int main(int argc, char **argv)
                        test_dwcmshc_emmc_tuning_migration);
         qtest_add_func("/beaglev-ahead/dwcmshc/v4-64bit-adma",
                        test_dwcmshc_v4_adma);
+        qtest_add_func("/beaglev-ahead/dwcmshc/adma-migration",
+                       test_dwcmshc_adma_migration);
         qtest_add_func("/beaglev-ahead/dwcmshc/migration",
                        test_dwcmshc_migration);
         qtest_add_func("/beaglev-ahead/c900-plic/reset",
