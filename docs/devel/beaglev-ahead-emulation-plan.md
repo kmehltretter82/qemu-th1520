@@ -36,6 +36,8 @@ XTheadVector scalar-permutation checkpoint: 9eef55f462
 
 XTheadVector vector-permutation/slide checkpoint: 78ad4d6e56
 
+XTheadVector vector-index-width/group checkpoint: 6d147eea4b
+
 GMAC receive-interrupt-watchdog checkpoint: 1369cec4d9
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
@@ -378,11 +380,14 @@ physical and peripheral fidelity inventory remain open.
 The scalar/vector-permutation and slide-legality checkpoints close four
 concrete RV64 wrong-result or illegal-encoding bugs and add mutation-sensitive
 oracles, while the GMAC receive-interrupt watchdog closes the Linux driver's
-immediate interrupt-mitigation dependency.  These bounded changes do not move
-either rounded estimate.  Dynamic permutation coverage now includes RV64
-e8,m1 scalar slide/gather and slide-overlap cases plus e64,m1 vector gather;
-other element widths and LMULs, RV32, big-endian execution, the remaining
-permutation forms and physical C910 comparison remain open.  Four clean
+immediate interrupt-mitigation dependency.  The follow-up vector-index
+width/group regression independently checks ``th.vrgather.vv`` at e8,m2,
+e16,m1, e32,m1 and e64,m1, including its two-register source group.  These
+bounded changes do not move either rounded estimate.  Dynamic permutation
+coverage now includes RV64 e8,m1 scalar slide/gather and slide-overlap cases
+plus e8,m2/e16,m1/e32,m1/e64,m1 vector gather; other element widths and LMULs,
+RV32, big-endian execution, the remaining permutation forms and physical C910
+comparison remain open.  Four clean
 normal/minimal one-/four-hart Linux runs complete DHCP, three pings and a
 1 MiB HTTP SHA-256 transfer, but longer and contention-sensitive network stress
 remains open.
@@ -521,7 +526,7 @@ validation.
 | C910 identity | Missing | New thead-c910 CPU model and exact reset/ID configuration |
 | RV64 IMAFDC/S/U | Generic implementation exists | Constrain to C910 behavior and test exceptions/corner cases |
 | T-Head scalar ISA | XTheadBa/Bb/Bs/Cmo/CondMov/FMemIdx/Fmv/Mac/MemIdx/MemPair/Sync exist | Audit against C910 encodings and behavior |
-| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction, mask overlap, RV64 e8,m1 scalar permutation and slide legality, and e64,m1 vector gather indices | Complete per-instruction and randomized differential coverage across SEW/LMUL/XLEN, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
+| C910 vector | Missing upstream; this workspace has a separate XTheadVector decoder, 128-bit state, frozen v0.7.1-derived execution engine, CSRs, debug/migration support and architectural guests covering state, status, reduction, mask overlap, RV64 e8,m1 scalar permutation and slide legality, and e8,m2/e16,m1/e32,m1/e64,m1 vector gather indices | Complete per-instruction and randomized differential coverage across SEW/LMUL/XLEN, OS context/signal/ptrace tests, XTheadZvamo evidence and physical comparison without conflating it with RVV 1.0 |
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests downgrade current savevm subsections to descriptor-exact C910 CSR VMState v1/v2 layouts and reproduce the v1 parent-CPU version 11, then validate legacy defaults and carried state in poisoned destinations.  Genuine pinned last-v1 and last-v2 producer streams independently prove the four-hart wire layouts; both now load completely into current QEMU through Ahead-only legacy device aliases, and direct destination inspection preserves the hart-distinct CSR/CPUID state plus v2 PMU state.  Parent CPU v11 is accepted only under TCG; KVM remains version 12 or newer.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds.  The preceding complete normal and dependency-minimal board/CSR gates passed 114/114 plus 14/14 and 113/113 plus 7/7, while the preceding complete sanitizer board gate passed 112/112.  The current complete board gates pass 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan; the normal full RISC-V TCG gate passes 37/37, the minimal Ahead-specific TCG enumeration passes 14/14, and all six XTheadVector payloads pass directly under ASan/UBSan.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; characterize the documented legacy-device ambiguity boundaries on physical hardware, and compare every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
@@ -1042,6 +1047,14 @@ six-payload set passes directly in normal, dependency-minimal and ASan/UBSan
 builds.  Its dynamic permutation scope is RV64 e8,m1 scalar and e64,m1 vector
 indexing, not all SEW/LMUL combinations; RV32, big-endian execution, remaining
 forms and physical C910 comparison stay open under ``CPU-006``.
+
+Checkpoint ``6d147eea4b`` extends that independent vector-index oracle rather
+than changing the CPU model.  It checks e8,m2 (32 lanes over a two-register
+group), e16,m1 and e32,m1 in addition to e64,m1.  Each case checks an in-range
+unsigned vector index and an out-of-range result of zero.  The focused guest
+passes in normal, dependency-minimal and ASan/UBSan builds.  This is QEMU
+regression coverage, not a physical-C910 result; untested SEW/LMUL/XLEN
+combinations remain open.
 
 The 2026-08-24 C910 alignment milestone also passes the complete normal-build
 RISC-V softmmu TCG suite.  Its dedicated M-mode payload toggles
@@ -1685,9 +1698,9 @@ indices, a partial source-boundary crossing, in-place execution, full-width
   wrap, truncation and off-by-one exits.  The same payload now also checks an
   e64,m1 ``th.vrgather.vv`` index above 32 bits and the instruction-specific
   LMUL=1 masked-``v0`` prohibition for all three slide-down forms; two more
-  targeted mutations fail at exits 14 and 15.  Dynamic permutation coverage is
-  RV64 e8,m1 scalar plus e64,m1 vector indexing; other SEW/LMUL and XLEN
-  combinations remain open.
+  targeted mutations fail at exits 14 and 15.  The follow-up independent
+  vector-index oracle covers e8,m2/e16,m1/e32,m1/e64,m1; other SEW/LMUL and
+  XLEN combinations remain open.
 Vector loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
