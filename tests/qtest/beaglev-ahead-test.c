@@ -18,6 +18,7 @@
 #include "hw/misc/th1520_iopmp.h"
 #include "hw/misc/th1520_iso7816.h"
 #include "hw/misc/th1520_miscsys.h"
+#include "hw/misc/th1520_pmp_portal.h"
 #include "hw/misc/th1520_tee_dsp_reset.h"
 #include "hw/misc/th1520_tee_miscsys_clock.h"
 #include "hw/misc/th1520_tee_vosys_dpu_reset.h"
@@ -34,6 +35,7 @@
 
 #define TH1520_BROM_BASE           0xffffd00000ULL
 #define TH1520_CLINT_BASE          0xffdc000000ULL
+#define TH1520_PMP_PORTAL_BASE     0xffdc020000ULL
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
@@ -4031,6 +4033,101 @@ static void test_th1520_iso7816_config_migration(void)
                     TH1520_ISO7816_CONFIG_MIE);
     qtest_system_reset(dst);
     assert_th1520_iso7816_config_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static const uint32_t th1520_pmp_portal_offsets[
+    TH1520_PMP_PORTAL_REG_COUNT] = {
+    TH1520_PMP_PORTAL_CONFIG,
+    TH1520_PMP_PORTAL_WORD_100,
+    TH1520_PMP_PORTAL_WORD_104,
+    TH1520_PMP_PORTAL_WORD_108,
+    TH1520_PMP_PORTAL_WORD_10C,
+};
+
+/* Values from the public vendor SPL's clear_ddr_pmp() sequence. */
+static const uint32_t th1520_pmp_portal_restore_values[
+    TH1520_PMP_PORTAL_REG_COUNT] = {
+    0x00004040,
+    0x00000000,
+    0x00400000,
+    0x0ffe0180,
+    0x0ffe1000,
+};
+
+static void assert_th1520_pmp_portal_values(
+    QTestState *qts, const uint32_t values[TH1520_PMP_PORTAL_REG_COUNT])
+{
+    for (int i = 0; i < TH1520_PMP_PORTAL_REG_COUNT; i++) {
+        g_assert_cmphex(qtest_readl(qts, TH1520_PMP_PORTAL_BASE +
+                                    th1520_pmp_portal_offsets[i]), ==,
+                        values[i]);
+    }
+}
+
+static void assert_th1520_pmp_portal_reset_state(QTestState *qts)
+{
+    static const uint32_t reset_values[TH1520_PMP_PORTAL_REG_COUNT];
+
+    assert_th1520_pmp_portal_values(qts, reset_values);
+}
+
+static void write_th1520_pmp_portal_restore_values(QTestState *qts)
+{
+    /* Vendor SPL writes 0x104, 0x100, 0x10c, 0x108, then configuration. */
+    static const uint8_t spl_write_order[] = { 2, 1, 4, 3, 0 };
+
+    for (int i = 0; i < ARRAY_SIZE(spl_write_order); i++) {
+        uint8_t reg = spl_write_order[i];
+
+        qtest_writel(qts, TH1520_PMP_PORTAL_BASE +
+                     th1520_pmp_portal_offsets[reg],
+                     th1520_pmp_portal_restore_values[reg]);
+    }
+}
+
+static void test_th1520_pmp_portal_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_pmp_portal_reset_state(qts);
+    write_th1520_pmp_portal_restore_values(qts);
+    assert_th1520_pmp_portal_values(qts, th1520_pmp_portal_restore_values);
+    qtest_system_reset(qts);
+    assert_th1520_pmp_portal_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_pmp_portal_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-pmp-portal-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    write_th1520_pmp_portal_restore_values(src);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    assert_th1520_pmp_portal_values(dst, th1520_pmp_portal_restore_values);
+    qtest_system_reset(dst);
+    assert_th1520_pmp_portal_reset_state(dst);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -13991,6 +14088,10 @@ int main(int argc, char **argv)
                        test_th1520_iso7816_config_registers);
         qtest_add_func("/beaglev-ahead/th1520-iso7816-config/migration",
                        test_th1520_iso7816_config_migration);
+        qtest_add_func("/beaglev-ahead/th1520-pmp-portal/registers",
+                       test_th1520_pmp_portal_registers);
+        qtest_add_func("/beaglev-ahead/th1520-pmp-portal/migration",
+                       test_th1520_pmp_portal_migration);
         qtest_add_func("/beaglev-ahead/th1520-bootsel/registers",
                        test_th1520_bootsel_registers);
         qtest_add_func("/beaglev-ahead/th1520-bootsel/migration",

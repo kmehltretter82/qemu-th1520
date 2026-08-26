@@ -1539,16 +1539,25 @@ Focused CFG0/CFG1, controller/PHY and whole-machine migration qtests pass.  An
 unchanged public SPL now executes through the controller/PHY sequence and its
 auto-self-refresh SYSREG write.  Its serial log contains no intermediate
 progress marker, so a debugger replaced only that disposable guest's generic
-U-Boot diagnostic ``ebreak`` with a no-op.  The next captured exception is a
-store access fault at ``setup_ddr_pmp+18``: ``mcause=7``,
+U-Boot diagnostic ``ebreak`` with a no-op.  The next captured exception used
+to be a store access fault at ``setup_ddr_pmp+18``: ``mcause=7``,
 ``mepc=0xffe00006ea``, ``mtval=0xffdc020104``.  Public source defines this as
-``PMP_BASE_ADDR + 0x104`` with ``PMP_BASE_ADDR=0xffdc020000``.  It is a later
-SPL security/control boundary, not evidence that physical DRAM initialized.
+``PMP_BASE_ADDR + 0x104`` with ``PMP_BASE_ADDR=0xffdc020000``.
+
+The public DTS calls the containing ``0x1000``-byte region
+``pmp@ffdc020000``.  QEMU deliberately maps only the five words public SPL
+code accesses: ``0x000``, ``0x100``, ``0x104``, ``0x108`` and ``0x10c``.  They
+retain 32-bit values, reset to zero and migrate.  Those readback and reset
+choices are QEMU compatibility conventions, not discovered hardware behavior.
+The focused qtest replays the separate public restore sequence, as well as
+reset and migration.  It proves the former source access is representable; it
+does not claim that SPL now reaches a later checkpoint.
 
 This checkpoint does not model DDR PLL timing or output frequency, physical
 reset/rail effects, DFI traffic, PHY firmware execution, analog training,
 DRAM contents, rank/width/topology, refresh, retention, warm-reset behavior,
-the vendor-named PMP aperture or OS handoff.  These limits and the safe
+the rest of the vendor-named PMP aperture, portal enforcement/security
+semantics, CPU PMP interaction or OS handoff.  These limits and the safe
 hardware validation needed before any expansion remain in
 ``beaglev-ahead-hardware-validation.md``.
 

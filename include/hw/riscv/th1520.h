@@ -25,6 +25,7 @@
 #include "hw/misc/th1520_mbox.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_pinctrl.h"
+#include "hw/misc/th1520_pmp_portal.h"
 #include "hw/misc/th1520_tee_dsp_reset.h"
 #include "hw/misc/th1520_tee_miscsys_clock.h"
 #include "hw/misc/th1520_tee_vosys_dpu_reset.h"
@@ -62,6 +63,7 @@ struct TH1520SoCState {
     MemoryRegion sram;
     MemoryRegion brom;
     THeadC900CLINTState clint;
+    TH1520PMPPortalState pmp_portal;
     THeadC900PLICState plic;
     TH1520APClockState ap_clock;
     MemoryRegion ap_clock_vendor_alias;
@@ -124,6 +126,7 @@ enum {
     TH1520_DEV_DRAM,
     TH1520_DEV_PLIC,
     TH1520_DEV_CLINT,
+    TH1520_DEV_PMP_PORTAL,
     TH1520_DEV_SRAM,
     TH1520_DEV_AP_CLOCK,
     TH1520_DEV_DDR_CONTROLLER,

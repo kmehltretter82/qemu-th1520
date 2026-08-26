@@ -84,6 +84,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_DRAM]  = { 0x0000000000, 0x100000000 },
     [TH1520_DEV_PLIC]  = { 0xffd8000000, 0x01000000 },
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
+    [TH1520_DEV_PMP_PORTAL] = { 0xffdc020000,
+                                 TH1520_PMP_PORTAL_APERTURE_SIZE },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
     [TH1520_DEV_DDR_CONTROLLER] = { 0xffff000000,
@@ -173,6 +175,15 @@ static const int th1520_mshc_memmap[TH1520_MSHC_COUNT] = {
     TH1520_DEV_EMMC,
     TH1520_DEV_SDIO0,
     TH1520_DEV_SDIO1,
+};
+
+static const uint32_t th1520_pmp_portal_offsets[
+    TH1520_PMP_PORTAL_REG_COUNT] = {
+    TH1520_PMP_PORTAL_CONFIG,
+    TH1520_PMP_PORTAL_WORD_100,
+    TH1520_PMP_PORTAL_WORD_104,
+    TH1520_PMP_PORTAL_WORD_108,
+    TH1520_PMP_PORTAL_WORD_10C,
 };
 
 static const int th1520_uart_memmap[TH1520_UART_COUNT] = {
@@ -562,6 +573,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_RISCV_HART_ARRAY);
     object_initialize_child(obj, "clint", &s->clint,
                             TYPE_THEAD_C900_CLINT);
+    object_initialize_child(obj, "pmp-portal", &s->pmp_portal,
+                            TYPE_TH1520_PMP_PORTAL);
     object_initialize_child(obj, "plic", &s->plic,
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "ap-clock", &s->ap_clock,
@@ -965,6 +978,20 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                     qdev_get_gpio_in(cpu, IRQ_S_SOFT));
         qdev_connect_gpio_out_named(DEVICE(&s->clint), "stimer", i,
                                     qdev_get_gpio_in(cpu, IRQ_S_TIMER));
+    }
+
+    /*
+     * The public DTS describes a 4 KiB PMP portal, but public SPL source
+     * touches only five words.  Do not map the unknown remainder or connect
+     * this firmware state to CPU PMP/security enforcement.
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->pmp_portal), errp)) {
+        return;
+    }
+    for (int i = 0; i < TH1520_PMP_PORTAL_REG_COUNT; i++) {
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->pmp_portal), i,
+                        th1520_memmap[TH1520_DEV_PMP_PORTAL].base +
+                        th1520_pmp_portal_offsets[i]);
     }
 
     for (int i = 0; i < TH1520_UART_COUNT; i++) {
