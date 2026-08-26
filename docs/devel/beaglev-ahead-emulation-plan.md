@@ -956,6 +956,16 @@ predates these tests and remains useful milestone evidence; the later complete
 ASan/UBSan board gate supersedes it at 112/112, and the current migration path
 was rerun separately.
 
+A later ``dwcmshc/adma-migration`` qtest covers SDHCI's actual asynchronous
+ADMA boundary without adding a timing model: a six-descriptor SDIO0 v4-ADMA
+read migrates after five descriptors have completed and the existing 100 ns
+transfer timer owns the sixth.  The destination leaves that buffer unchanged
+through 99 ns and completes it one nanosecond later.  A mutation that omits
+the timer from SDHCI VMState fails, while normal, dependency-minimal and
+ASan/UBSan focused runs pass; the subsequent normal whole-board qtest gate
+passes 119/119.  It uses separate identical raw images, so it
+does not claim migration of backing media or a physical TH1520 timing result.
+
 The current generic RISC-V CSR/migration binary passes fourteen subtests,
 including
 fixed-only, active, inhibited and pending PMU migration plus Sscofpmf

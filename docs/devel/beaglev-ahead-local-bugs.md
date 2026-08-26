@@ -403,14 +403,21 @@ change must add a reproducer and a regression before changing any of them.
   ``eth0`` and subsequently reports network-interface and TPM selftest
   failures before printing ``Boot successful.``  These configuration-specific
   observations are recorded, not treated as board-model regressions.
-* `MIG-001`: storage, GMAC, and USB migration during in-flight DMA or an
+* `MIG-001`: a six-descriptor SDIO0 v4-ADMA read now migrates at the
+  controller's real asynchronous boundary: five descriptors are complete and
+  the sixth is armed for the existing 100 ns SDHCI transfer timer.  The
+  destination keeps the sixth buffer untouched through 99 ns and completes it
+  one nanosecond later; removing the timer from SDHCI VMState makes the
+  regression fail.  It uses separately initialized identical backing images,
+  so it validates controller/timer ownership rather than migration of card
+  media or a backend.  GMAC and USB migration during in-flight DMA or an
   attached transfer still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load
   reject/accept behavior and a Type-2 RDES4 result.  DWC GMAC VMState v2 now
   also preserves an armed RIWT deadline; pre-v2 loads remain unarmed because
   no old deadline exists.  The tests create the destination socket separately
-  and do not migrate queued packets or the backend.  DMAC,
+  and do not migrate queued packets or the backend.  AXI DMAC,
   I2C, SPI, and PVT are intentionally synchronous today;
   adding asynchronous timing requires versioned VMState and boundary tests.
 * `GMAC-001`: the receive-filter model follows the current DT contract of 64

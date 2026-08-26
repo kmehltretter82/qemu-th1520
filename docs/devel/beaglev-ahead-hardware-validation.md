@@ -195,6 +195,22 @@ older multi-build gate totals above predate this focused case.  The physical
 capture and all CPU-016
 hardware-validation work remain open.
 
+### SDHCI ADMA migration implementation update
+
+The local QEMU qtest starts a six-descriptor SDIO0 v4-ADMA CMD18, snapshots
+after the model has synchronously copied five descriptors, then restores the
+sixth descriptor while SDHCI's existing 100 ns transfer timer is armed.  It
+remains pending through 99 ns of destination virtual time and completes after
+one further nanosecond.  Removing the timer from SDHCI VMState makes this gate
+fail, so the check covers timer/transfer ownership rather than merely saved
+register bytes.
+
+This is not a measurement or claim about TH1520 physical timing.  The source
+and destination use separately initialized identical raw images; card media,
+backing files and other external endpoints are not migrated.  Storage writes,
+errors, aborts, SDMA and additional transfer phases remain open, as do GMAC
+and USB transfers in flight across migration.
+
 ## Historical C910 migration checkpoint
 
 The re-runnable evidence is stored on disk, outside the QEMU source tree, at
