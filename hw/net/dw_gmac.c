@@ -39,6 +39,7 @@ REG32(DWMAC_DMA_STATUS, 0x1014)
 REG32(DWMAC_DMA_CONTROL, 0x1018)
 REG32(DWMAC_DMA_INTR_ENA, 0x101c)
 REG32(DWMAC_DMA_MISSED_FRAME_CTR, 0x1020)
+REG32(DWMAC_DMA_RX_WATCHDOG, 0x1024)
 REG32(DWMAC_DMA_HOST_TX_DESC, 0x1048)
 REG32(DWMAC_DMA_HOST_RX_DESC, 0x104c)
 REG32(DWMAC_DMA_CUR_TX_BUF_ADDR, 0x1050)
@@ -92,6 +93,8 @@ REG32(DW_GMAC_PTP_TTSR, 0x71c)
 
 #define DWMAC_DMA_BUS_MODE_SWR               BIT(0)
 #define DWMAC_DMA_BUS_MODE_ATDS              BIT(7)
+#define DWMAC_DMA_RX_WATCHDOG_RIWT_MASK      0xff
+#define DWMAC_DMA_RX_WATCHDOG_CYCLE_SCALE    256
 #define DWMAC_DMA_HW_FEATURE_TX_COE           BIT(16)
 #define DWMAC_DMA_HW_FEATURE_RX_COE_TYPE2     BIT(18)
 #define DWMAC_DMA_HW_FEATURE_ENH_DESC         BIT(24)
@@ -844,6 +847,9 @@ static unsigned gmac_tx_checksum_control(const DWGMACState *gmac,
 
 static void dw_gmac_soft_reset(DWGMACState *gmac)
 {
+    if (gmac->rx_watchdog_timer) {
+        timer_del(gmac->rx_watchdog_timer);
+    }
     memcpy(gmac->regs, dw_gmac_cold_reset_values,
            DW_GMAC_NR_REGS * sizeof(uint32_t));
     for (unsigned int index = 1; index < gmac->num_mac_addrs; index++) {
@@ -923,6 +929,33 @@ static void gmac_update_irq(DWGMACState *gmac)
                                gmac->regs[R_DWMAC_DMA_INTR_ENA],
                                level);
     qemu_set_irq(gmac->irq, level);
+}
+
+static void gmac_rx_watchdog_expired(void *opaque)
+{
+    DWGMACState *gmac = opaque;
+
+    gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_RI;
+    gmac_update_irq(gmac);
+}
+
+static void gmac_rx_watchdog_start(DWGMACState *gmac)
+{
+    uint64_t cycles;
+    int64_t delay_ns;
+    uint32_t riwt = gmac->regs[R_DWMAC_DMA_RX_WATCHDOG] &
+                    DWMAC_DMA_RX_WATCHDOG_RIWT_MASK;
+
+    if (!riwt || !gmac->rx_watchdog_clock_hz ||
+        timer_pending(gmac->rx_watchdog_timer)) {
+        return;
+    }
+
+    cycles = (uint64_t)riwt * DWMAC_DMA_RX_WATCHDOG_CYCLE_SCALE;
+    delay_ns = DIV_ROUND_UP(cycles * NANOSECONDS_PER_SECOND,
+                            gmac->rx_watchdog_clock_hz);
+    timer_mod_ns(gmac->rx_watchdog_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + MAX(delay_ns, 1));
 }
 
 static int gmac_read_rx_desc(dma_addr_t addr, struct DWGMACRxDesc *desc)
@@ -1252,7 +1285,11 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
         gmac->regs[R_DWMAC_DMA_HOST_RX_DESC] = next_desc_addr;
         if (eof_transferred) {
             if (!gmac_rx_irq_disabled(&rx_desc)) {
+                timer_del(gmac->rx_watchdog_timer);
                 gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_RI;
+            } else if (!(gmac->regs[R_DWMAC_DMA_STATUS] &
+                         DWMAC_DMA_STATUS_RI)) {
+                gmac_rx_watchdog_start(gmac);
             }
             break;
         }
@@ -1927,6 +1964,14 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
         }
         break;
 
+    case A_DWMAC_DMA_RX_WATCHDOG:
+        gmac->regs[offset / sizeof(uint32_t)] =
+            v & DWMAC_DMA_RX_WATCHDOG_RIWT_MASK;
+        if (!gmac->regs[offset / sizeof(uint32_t)]) {
+            timer_del(gmac->rx_watchdog_timer);
+        }
+        break;
+
     default:
         gmac->regs[offset / sizeof(uint32_t)] = v;
         break;
@@ -1948,6 +1993,7 @@ static void dw_gmac_reset(DeviceState *dev)
     if (gmac->nic) {
         gmac_phy_set_link(gmac, !qemu_get_queue(gmac->nic)->link_down);
     }
+    gmac_update_irq(gmac);
 
     trace_dw_gmac_reset(DEVICE(gmac)->canonical_path,
                         gmac->phy_regs[gmac->phy_addr][MII_BMSR]);
@@ -2002,6 +2048,9 @@ static void dw_gmac_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    gmac->rx_watchdog_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                            gmac_rx_watchdog_expired, gmac);
+
     memory_region_init_io(&gmac->iomem, OBJECT(gmac), &dw_gmac_ops, gmac,
                           object_get_typename(OBJECT(dev)), 8 * KiB);
     sysbus_init_mmio(sbd, &gmac->iomem);
@@ -2026,12 +2075,19 @@ static void dw_gmac_unrealize(DeviceState *dev)
     DWGMACState *gmac = DW_GMAC(dev);
 
     qemu_del_nic(gmac->nic);
+    timer_free(gmac->rx_watchdog_timer);
+    gmac->rx_watchdog_timer = NULL;
 }
 
 static int dw_gmac_post_load(void *opaque, int version_id)
 {
     DWGMACState *gmac = opaque;
 
+    gmac->regs[R_DWMAC_DMA_RX_WATCHDOG] &=
+        DWMAC_DMA_RX_WATCHDOG_RIWT_MASK;
+    if (version_id < 2) {
+        timer_del(gmac->rx_watchdog_timer);
+    }
     gmac_sync_conf_mac(gmac);
     gmac_update_irq(gmac);
     return 0;
@@ -2041,12 +2097,13 @@ static const VMStateField dw_gmac_vmstate_fields[] = {
     VMSTATE_UINT32_ARRAY(regs, DWGMACState, DW_GMAC_NR_REGS),
     VMSTATE_UINT16_2DARRAY_V(phy_regs, DWGMACState, DW_GMAC_MAX_PHYS,
                              DW_GMAC_MAX_PHY_REGS, 1),
+    VMSTATE_TIMER_PTR_V(rx_watchdog_timer, DWGMACState, 2),
     VMSTATE_END_OF_LIST()
 };
 
 static const VMStateDescription vmstate_dw_gmac = {
     .name = TYPE_DW_GMAC,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 0,
     .post_load = dw_gmac_post_load,
     .fields = dw_gmac_vmstate_fields,
@@ -2064,6 +2121,8 @@ static const Property dw_gmac_properties[] = {
     DEFINE_NIC_PROPERTIES(DWGMACState, conf),
     DEFINE_PROP_UINT32("version", DWGMACState, version, 0x1032),
     DEFINE_PROP_UINT32("hw-feature", DWGMACState, hw_feature, 0x100d4f37),
+    DEFINE_PROP_UINT64("riwt-clock-frequency", DWGMACState,
+                       rx_watchdog_clock_hz, 0),
     /* Preserve legacy users' accept-all behavior unless explicitly enabled. */
     DEFINE_PROP_BOOL("rx-filtering", DWGMACState, rx_filtering, false),
     /* Preserve legacy descriptor status unless explicitly enabled. */

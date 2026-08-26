@@ -14,6 +14,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 #include "net/net.h"
+#include "qemu/timer.h"
 
 #define DW_GMAC_REG_SIZE 0x1060
 #define DW_GMAC_NR_REGS (DW_GMAC_REG_SIZE / sizeof(uint32_t))
@@ -173,9 +174,11 @@ typedef struct DWGMACState {
 
     uint32_t regs[DW_GMAC_NR_REGS];
     uint16_t phy_regs[DW_GMAC_MAX_PHYS][DW_GMAC_MAX_PHY_REGS];
+    QEMUTimer *rx_watchdog_timer;
 
     uint32_t version;
     uint32_t hw_feature;
+    uint64_t rx_watchdog_clock_hz;
     bool rx_filtering;
     bool rx_coe_type2;
     uint16_t hash_bins;

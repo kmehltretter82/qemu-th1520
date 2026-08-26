@@ -45,6 +45,8 @@
 
 #include <libfdt.h>
 
+#define TH1520_GMAC_RIWT_CLOCK_HZ 500000000
+
 static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_DRAM]  = { 0x0000000000, 0x100000000 },
     [TH1520_DEV_PLIC]  = { 0xffd8000000, 0x01000000 },
@@ -569,6 +571,8 @@ static void th1520_soc_init(Object *obj)
                              TH1520_GMAC_VERSION);
         qdev_prop_set_uint32(DEVICE(&s->gmac[i]), "hw-feature",
                              TH1520_GMAC_HW_FEATURE);
+        qdev_prop_set_uint64(DEVICE(&s->gmac[i]), "riwt-clock-frequency",
+                             TH1520_GMAC_RIWT_CLOCK_HZ);
         qdev_prop_set_bit(DEVICE(&s->gmac[i]), "rx-filtering", true);
         qdev_prop_set_bit(DEVICE(&s->gmac[i]), "rx-coe-type2", true);
         qdev_prop_set_uint16(DEVICE(&s->gmac[i]), "hash-bins",

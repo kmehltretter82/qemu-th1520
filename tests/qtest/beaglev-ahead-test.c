@@ -509,9 +509,15 @@
 #define DWMAC_DMA_STATUS           0x1014
 #define DWMAC_DMA_CONTROL          0x1018
 #define DWMAC_DMA_INTR_ENA         0x101c
+#define DWMAC_DMA_RX_WATCHDOG      0x1024
 #define DWMAC_DMA_HOST_TX_DESC     0x1048
 #define DWMAC_DMA_HOST_RX_DESC     0x104c
 #define DWMAC_DMA_HW_FEATURE       0x1058
+
+#define DWMAC_DMA_STATUS_NIS       BIT(16)
+#define DWMAC_DMA_STATUS_AIS       BIT(15)
+#define DWMAC_DMA_STATUS_RWT       BIT(9)
+#define DWMAC_DMA_STATUS_RI        BIT(6)
 
 #define DWMAC_MAC_CONFIG_IPC       BIT(10)
 
@@ -563,6 +569,7 @@
 #define GMAC_TEST_DATA2_ADDR       0x00111000
 #define GMAC_ENHANCED_DESC_STRIDE  32
 #define GMAC_TEST_TIMEOUT_S        5
+#define TH1520_GMAC_RIWT_CLOCK_HZ  500000000ULL
 
 #define DWCMSHC_VENDOR_POINTER     0x0e8
 #define DWCMSHC_PHY_CNFG           0x300
@@ -4005,6 +4012,51 @@ static int gmac_wait_for_packet(QTestState *qts, uint32_t first_buffer,
     return -1;
 }
 
+static void gmac_wait_rx_desc_complete(QTestState *qts, uint32_t desc_addr,
+                                       GMACDesc *desc)
+{
+    gint64 deadline = g_get_monotonic_time() +
+                      GMAC_TEST_TIMEOUT_S * G_TIME_SPAN_SECOND;
+
+    do {
+        gmac_read_desc(qts, desc_addr, desc);
+        if (!(desc->des0 & BIT(31))) {
+            return;
+        }
+        g_usleep(1000);
+    } while (g_get_monotonic_time() < deadline);
+
+    g_assert_not_reached();
+}
+
+static void gmac_prepare_rx_desc(QTestState *qts, uint32_t desc_addr,
+                                 uint32_t buffer_addr, bool dic)
+{
+    GMACDesc desc = {
+        .des0 = BIT(31),
+        .des1 = (dic ? BIT(31) : 0) | 2048,
+        .des2 = buffer_addr,
+    };
+
+    gmac_write_desc(qts, desc_addr, &desc);
+}
+
+static void gmac_configure_rx_watchdog(QTestState *qts, uint32_t desc_addr,
+                                       uint32_t riwt)
+{
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                  BIT(31) | 0x5634);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12005452);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                  0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR, desc_addr);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                  BIT(16) | BIT(6));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_WATCHDOG, riwt);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG, BIT(2));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+}
+
 typedef struct GMACFilterRegWrite {
     uint32_t offset;
     uint32_t value;
@@ -5430,6 +5482,300 @@ static void test_gmac_enhanced_descriptors(void)
 
     qtest_quit(qts);
     close(sockets[0]);
+}
+
+static void test_gmac_rx_interrupt_watchdog(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    const uint32_t riwt = 0xa0;
+    const int64_t timeout_ns = DIV_ROUND_UP(
+        (uint64_t)riwt * 256 * 1000000000ULL,
+        TH1520_GMAC_RIWT_CLOCK_HZ);
+    const int64_t elapsed_ns = timeout_ns / 2;
+    const uint32_t ri_status = DWMAC_DMA_STATUS_NIS |
+                               DWMAC_DMA_STATUS_RI;
+    const uint32_t ri_status_mask = ri_status |
+                                    DWMAC_DMA_STATUS_AIS |
+                                    DWMAC_DMA_STATUS_RWT;
+    GMACDesc desc;
+    QTestState *qts;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    qtest_irq_intercept_out_named(qts, C900_PLIC_QOM_PATH, "sext");
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+
+    qtest_writel(qts, C900_PLIC_PRIORITY(TH1520_GMAC0_IRQ), 5);
+    c900_plic_set_enable(qts, 1, TH1520_GMAC0_IRQ, true);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_WATCHDOG,
+                  0xffffff00 | riwt);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE +
+                                DWMAC_DMA_RX_WATCHDOG), ==, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_assert_rx_frame(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         packet, sizeof(packet), 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_GMAC0_IRQ));
+    assert_no_irq(qts);
+
+    qtest_clock_step(qts, timeout_ns - 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_GMAC0_IRQ));
+    assert_no_irq(qts);
+
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, ri_status);
+    g_assert_true(c900_plic_pending(qts, TH1520_GMAC0_IRQ));
+    assert_only_irq(qts, 0);
+
+    /* Reset must lower an already asserted IRQ as well as clear RIWT. */
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_RX_WATCHDOG),
+                    ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_GMAC0_IRQ));
+    assert_no_irq(qts);
+
+    /* Reset must also cancel a watchdog which has not expired yet. */
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_system_reset(qts);
+    qtest_clock_step(qts, timeout_ns);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_RX_WATCHDOG),
+                    ==, 0);
+    g_assert_false(c900_plic_pending(qts, TH1520_GMAC0_IRQ));
+    assert_no_irq(qts);
+
+    /* Writing zero disables and cancels a pending watchdog. */
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_WATCHDOG, 0);
+    qtest_clock_step(qts, timeout_ns);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+
+    /* A later non-DIC completion sets RI immediately and cancels RIWT. */
+    qtest_system_reset(qts);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 4096);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    gmac_prepare_rx_desc(qts,
+                         GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                         GMAC_TEST_DATA2_ADDR, false);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts,
+                               GMAC_TEST_DESC_ADDR +
+                               GMAC_ENHANCED_DESC_STRIDE, &desc);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, ri_status);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS,
+                  ri_status);
+    qtest_clock_step(qts, timeout_ns);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+
+    /* RI and the normal summary are independent W1C status bits. */
+    qtest_system_reset(qts);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_clock_step(qts, timeout_ns);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, ri_status);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS,
+                  DWMAC_DMA_STATUS_RI);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, DWMAC_DMA_STATUS_NIS);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS,
+                  DWMAC_DMA_STATUS_NIS);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+
+    /* A second DIC completion must not postpone an armed deadline. */
+    qtest_system_reset(qts);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 4096);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    gmac_prepare_rx_desc(qts,
+                         GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                         GMAC_TEST_DATA2_ADDR, true);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts,
+                    GMAC_TEST_DESC_ADDR + 2 * GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_clock_step(qts, elapsed_ns);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts,
+                               GMAC_TEST_DESC_ADDR +
+                               GMAC_ENHANCED_DESC_STRIDE, &desc);
+    qtest_clock_step(qts, timeout_ns - elapsed_ns - 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, ri_status);
+
+    /* Reprogramming RIWT nonzero must not postpone an armed deadline. */
+    qtest_system_reset(qts);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_clock_step(qts, elapsed_ns);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_WATCHDOG, 0xff);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE +
+                                DWMAC_DMA_RX_WATCHDOG), ==, 0xff);
+    qtest_clock_step(qts, timeout_ns - elapsed_ns - 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, 0);
+    qtest_clock_step(qts, 1);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    ri_status_mask, ==, ri_status);
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+static void test_gmac_rx_watchdog_migration(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    const uint32_t riwt = 0xa0;
+    const int64_t timeout_ns = DIV_ROUND_UP(
+        (uint64_t)riwt * 256 * 1000000000ULL,
+        TH1520_GMAC_RIWT_CLOCK_HZ);
+    const int64_t elapsed_ns = timeout_ns / 2;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    GMACDesc desc;
+    int src_sockets[2];
+    int dst_sockets[2];
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-gmac-riwt-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, src_sockets), ==, 0);
+    src = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-nic socket,fd=%d,model=gmac0", src_sockets[1]);
+    close(src_sockets[1]);
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, dst_sockets), ==, 0);
+    dst = qtest_initf("-machine beaglev-ahead -bios none -incoming defer "
+                      "-nic socket,fd=%d,model=gmac0", dst_sockets[1]);
+    close(dst_sockets[1]);
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    qtest_memset(src, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(src, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR,
+                         true);
+    gmac_configure_rx_watchdog(src, GMAC_TEST_DESC_ADDR, riwt);
+    gmac_send_packet(src_sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(src, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(qtest_readl(src,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (BIT(16) | BIT(6)), ==, 0);
+    qtest_clock_step(src, elapsed_ns);
+    g_assert_cmpint(qtest_clock_set(dst, elapsed_ns), ==, elapsed_ns);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE +
+                                DWMAC_DMA_RX_WATCHDOG), ==, riwt);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (BIT(16) | BIT(6)), ==, 0);
+    qtest_clock_step(dst, timeout_ns - elapsed_ns - 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (BIT(16) | BIT(6)), ==, 0);
+    qtest_clock_step(dst, 1);
+    g_assert_cmphex(qtest_readl(dst,
+                                TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (BIT(16) | BIT(6)), ==, BIT(16) | BIT(6));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    close(dst_sockets[0]);
+    close(src_sockets[0]);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_gmac_rx_filter_migration(void)
@@ -11635,6 +11981,10 @@ int main(int argc, char **argv)
                        test_gmac_tx_checksum);
         qtest_add_func("/beaglev-ahead/gmac/enhanced-descriptors",
                        test_gmac_enhanced_descriptors);
+        qtest_add_func("/beaglev-ahead/gmac/rx-interrupt-watchdog",
+                       test_gmac_rx_interrupt_watchdog);
+        qtest_add_func("/beaglev-ahead/gmac/rx-watchdog-migration",
+                       test_gmac_rx_watchdog_migration);
 #endif
         qtest_add_func("/beaglev-ahead/dwcmshc/registers",
                        test_dwcmshc_registers);
