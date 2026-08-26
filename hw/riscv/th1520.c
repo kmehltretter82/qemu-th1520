@@ -1004,6 +1004,19 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
         }
     }
 
+    /*
+     * The upstream BeagleV Ahead DTS routes the RTL8211F's active-low reset
+     * and interrupt pins to GPIO3_21 and GPIO3_22.  The generic PHY leaves
+     * the interrupt deasserted until PHY interrupt sources are modeled.
+     */
+    qdev_connect_gpio_out_named(
+        DEVICE(&s->gpio[3]), "gpio-out", TH1520_GMAC_PHY_RESET_GPIO,
+        qdev_get_gpio_in_named(DEVICE(&s->gmac[0]), "phy-reset-n", 0));
+    qdev_connect_gpio_out_named(
+        DEVICE(&s->gmac[0]), "phy-irq-n", 0,
+        qdev_get_gpio_in_named(DEVICE(&s->gpio[3]), "gpio-in",
+                               TH1520_GMAC_PHY_IRQ_GPIO));
+
     for (int i = 0; i < TH1520_PADCTRL_COUNT; i++) {
         const TH1520PadCtrlInfo *info = &th1520_padctrl_info[i];
         SysBusDevice *padctrl = SYS_BUS_DEVICE(&s->padctrl[i]);
@@ -2227,6 +2240,20 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_add_subnode(ms->fdt, phy);
             qemu_fdt_setprop_cell(ms->fdt, phy, "reg",
                                   TH1520_GMAC_PHY_ADDR);
+            /* Match the upstream board DTS's active-low PHY GPIO wiring. */
+            qemu_fdt_setprop_cell(ms->fdt, phy, "interrupt-parent",
+                                  gpio_phandles[3]);
+            qemu_fdt_setprop_cells(ms->fdt, phy, "interrupts",
+                                   TH1520_GMAC_PHY_IRQ_GPIO,
+                                   TH1520_IRQ_TYPE_LEVEL_LOW);
+            qemu_fdt_setprop_cells(ms->fdt, phy, "reset-gpios",
+                                   gpio_phandles[3],
+                                   TH1520_GMAC_PHY_RESET_GPIO,
+                                   TH1520_GPIO_ACTIVE_LOW);
+            qemu_fdt_setprop_cell(ms->fdt, phy, "reset-delay-us",
+                                  TH1520_GMAC_PHY_RESET_DELAY_US);
+            qemu_fdt_setprop_cell(ms->fdt, phy, "reset-post-delay-us",
+                                  TH1520_GMAC_PHY_RESET_POST_DELAY_US);
             qemu_fdt_setprop_cell(ms->fdt, phy, "phandle", phy_phandle);
             qemu_fdt_setprop_cell(ms->fdt, name, "phy-handle", phy_phandle);
             qemu_fdt_setprop_string(ms->fdt, name, "phy-mode", "rgmii-id");

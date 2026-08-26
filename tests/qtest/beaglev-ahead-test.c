@@ -597,6 +597,12 @@
 #define TH1520_GMAC_PHY_ADDR       1
 #define TH1520_GMAC_PHY_ID1        0x001c
 #define TH1520_GMAC_PHY_ID2        0xc878
+#define TH1520_GMAC_PHY_RESET_GPIO 21
+#define TH1520_GMAC_PHY_IRQ_GPIO   22
+#define TH1520_GMAC_PHY_RESET_DELAY_US 10000
+#define TH1520_GMAC_PHY_RESET_POST_DELAY_US 50000
+#define TH1520_GPIO_ACTIVE_LOW     1
+#define TH1520_IRQ_TYPE_LEVEL_LOW  8
 
 #define GMAC_APB_CLK_EN            0x00
 #define GMAC_APB_RXCLK_DELAY       0x04
@@ -1540,7 +1546,8 @@ static void assert_pinctrl_reference(const void *fdt, const char *path,
 static void assert_gmac_fdt(const void *fdt,
                             const TH1520GMACController *controller,
                             uint32_t clock_phandle,
-                            uint32_t axi_phandle)
+                            uint32_t axi_phandle,
+                            uint32_t gpio3_phandle)
 {
     static const char *const compat[] = {
         "thead,th1520-gmac", "snps,dwmac-3.70a",
@@ -1633,6 +1640,27 @@ static void assert_gmac_fdt(const void *fdt,
         g_assert_cmpint(phy, >=, 0);
         g_assert_cmphex(fdt_prop_u32(fdt, phy, "reg"), ==,
                         TH1520_GMAC_PHY_ADDR);
+        g_assert_cmphex(fdt_prop_u32(fdt, phy, "interrupt-parent"), ==,
+                        gpio3_phandle);
+        cells = fdt_getprop(fdt, phy, "interrupts", &len);
+        g_assert_nonnull(cells);
+        g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+        g_assert_cmphex(fdt32_to_cpu(cells[0]), ==,
+                        TH1520_GMAC_PHY_IRQ_GPIO);
+        g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                        TH1520_IRQ_TYPE_LEVEL_LOW);
+        cells = fdt_getprop(fdt, phy, "reset-gpios", &len);
+        g_assert_nonnull(cells);
+        g_assert_cmpint(len, ==, 3 * sizeof(*cells));
+        g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, gpio3_phandle);
+        g_assert_cmphex(fdt32_to_cpu(cells[1]), ==,
+                        TH1520_GMAC_PHY_RESET_GPIO);
+        g_assert_cmphex(fdt32_to_cpu(cells[2]), ==,
+                        TH1520_GPIO_ACTIVE_LOW);
+        g_assert_cmphex(fdt_prop_u32(fdt, phy, "reset-delay-us"), ==,
+                        TH1520_GMAC_PHY_RESET_DELAY_US);
+        g_assert_cmphex(fdt_prop_u32(fdt, phy, "reset-post-delay-us"), ==,
+                        TH1520_GMAC_PHY_RESET_POST_DELAY_US);
         g_assert_cmphex(fdt_prop_u32(fdt, node, "phy-handle"), ==,
                         fdt_get_phandle(fdt, phy));
         text = fdt_getprop(fdt, node, "phy-mode", &len);
@@ -2553,7 +2581,8 @@ static void test_direct_boot_contract(void)
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
         assert_gmac_fdt(fdt, &th1520_gmac_controllers[i],
-                        ap_clock_phandle, stmmac_axi_phandle);
+                        ap_clock_phandle, stmmac_axi_phandle,
+                        gpio_phandles[3]);
     }
 
     qtest_quit(qts);
@@ -5187,6 +5216,95 @@ static void test_gmac_registers(void)
         assert_gmac_reset_state(qts, &th1520_gmac_controllers[i]);
     }
     qtest_quit(qts);
+}
+
+static void gmac_drive_phy_reset(QTestState *qts, bool deasserted)
+{
+    qtest_writel(qts, TH1520_GPIO3_BASE + DW_GPIO_SWPORTA_DR,
+                  deasserted ? BIT(TH1520_GMAC_PHY_RESET_GPIO) : 0);
+    qtest_writel(qts, TH1520_GPIO3_BASE + DW_GPIO_SWPORTA_DDR,
+                  BIT(TH1520_GMAC_PHY_RESET_GPIO));
+}
+
+static void assert_gmac_phy_reset_asserted(QTestState *qts)
+{
+    uint16_t bmsr = gmac_mdio_read(qts, TH1520_GMAC0_BASE,
+                                   TH1520_GMAC_PHY_ADDR, MII_BMSR);
+
+    g_assert_cmphex(gmac_mdio_read(qts, TH1520_GMAC0_BASE,
+                                  TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                    MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED1000);
+    g_assert_cmphex(bmsr & (MII_BMSR_LINK_ST | MII_BMSR_AN_COMP), ==, 0);
+}
+
+static void test_gmac_phy_gpio(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    /* The generic PHY holds the board's active-low interrupt deasserted. */
+    g_assert_true(qtest_readl(qts, TH1520_GPIO3_BASE + DW_GPIO_EXT_PORTA) &
+                  BIT(TH1520_GMAC_PHY_IRQ_GPIO));
+    assert_gmac_phy_reset_asserted(qts);
+
+    gmac_drive_phy_reset(qts, true);
+    gmac_mdio_write(qts, TH1520_GMAC0_BASE, TH1520_GMAC_PHY_ADDR,
+                    MII_BMCR, MII_BMCR_AUTOEN | MII_BMCR_FD |
+                    MII_BMCR_SPEED100);
+    g_assert_cmphex(gmac_mdio_read(qts, TH1520_GMAC0_BASE,
+                                  TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                    MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+
+    gmac_drive_phy_reset(qts, false);
+    assert_gmac_phy_reset_asserted(qts);
+
+    qtest_system_reset(qts);
+    g_assert_true(qtest_readl(qts, TH1520_GPIO3_BASE + DW_GPIO_EXT_PORTA) &
+                  BIT(TH1520_GMAC_PHY_IRQ_GPIO));
+    assert_gmac_phy_reset_asserted(qts);
+    qtest_quit(qts);
+}
+
+static void test_gmac_phy_gpio_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-gmac-phy-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    gmac_drive_phy_reset(src, true);
+    gmac_mdio_write(src, TH1520_GMAC0_BASE, TH1520_GMAC_PHY_ADDR,
+                    MII_BMCR, MII_BMCR_AUTOEN | MII_BMCR_FD |
+                    MII_BMCR_SPEED100);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_true(qtest_readl(dst, TH1520_GPIO3_BASE + DW_GPIO_EXT_PORTA) &
+                  BIT(TH1520_GMAC_PHY_IRQ_GPIO));
+    g_assert_cmphex(gmac_mdio_read(dst, TH1520_GMAC0_BASE,
+                                  TH1520_GMAC_PHY_ADDR, MII_BMCR), ==,
+                    MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED100);
+
+    gmac_drive_phy_reset(dst, false);
+    assert_gmac_phy_reset_asserted(dst);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_gmac_interrupt(gconstpointer test_data)
@@ -9149,6 +9267,8 @@ static void assert_dw_gpio_reset_state(
     QTestState *qts, const TH1520GPIOController *controller)
 {
     uint64_t base = controller->base;
+    uint32_t external_level = controller->base == TH1520_GPIO3_BASE ?
+        BIT(TH1520_GMAC_PHY_IRQ_GPIO) : 0;
 
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DR), ==, 0);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DDR), ==, 0);
@@ -9160,7 +9280,8 @@ static void assert_dw_gpio_reset_state(
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_INTSTATUS), ==, 0);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_RAW_INTSTATUS), ==, 0);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_PORTA_DEBOUNCE), ==, 0);
-    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==,
+                    external_level);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_LS_SYNC), ==, 0);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_ID_CODE), ==, 0);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_VER_ID_CODE), ==, 0);
@@ -9178,6 +9299,8 @@ static void test_dw_gpio_registers(void)
         const TH1520GPIOController *controller =
             &th1520_gpio_controllers[i];
         uint32_t mask = dw_gpio_mask(controller);
+        uint32_t external_level = controller->base == TH1520_GPIO3_BASE ?
+            BIT(TH1520_GMAC_PHY_IRQ_GPIO) : 0;
         uint64_t base = controller->base;
 
         assert_dw_gpio_reset_state(qts, controller);
@@ -9192,7 +9315,8 @@ static void test_dw_gpio_registers(void)
         g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_PORTA_DEBOUNCE),
                         ==, mask);
         g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_LS_SYNC), ==, 1);
-        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==,
+                        external_level);
 
         qtest_writel(qts, base + DW_GPIO_SWPORTA_DDR, UINT32_MAX);
         g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DDR), ==,
@@ -9239,7 +9363,8 @@ static void test_dw_gpio_interrupts(void)
             &th1520_gpio_controllers[i];
         g_autofree char *path =
             g_strdup_printf("/machine/soc/%s", controller->name);
-        uint32_t pin = controller->ngpios - 1;
+        uint32_t pin = controller->base == TH1520_GPIO3_BASE ?
+            controller->ngpios - 2 : controller->ngpios - 1;
         uint32_t bit = BIT(pin);
         uint64_t base = controller->base;
 
@@ -13958,6 +14083,10 @@ int main(int argc, char **argv)
                        test_ahead_legacy_device_vmstate);
         qtest_add_func("/beaglev-ahead/gmac/registers",
                        test_gmac_registers);
+        qtest_add_func("/beaglev-ahead/gmac/phy-gpio",
+                       test_gmac_phy_gpio);
+        qtest_add_func("/beaglev-ahead/gmac/phy-gpio-migration",
+                       test_gmac_phy_gpio_migration);
         for (size_t i = 0; i < ARRAY_SIZE(th1520_gmac_controllers); i++) {
             g_autofree char *name =
                 g_strdup_printf("/beaglev-ahead/gmac/%s-interrupt",

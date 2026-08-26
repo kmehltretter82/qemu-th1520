@@ -168,6 +168,8 @@ typedef struct DWGMACState {
 
     MemoryRegion iomem;
     qemu_irq irq;
+    /* Optional external PHY interrupt; its electrical level is active-low. */
+    qemu_irq phy_irq_n;
 
     NICState *nic;
     NICConf conf;
@@ -175,6 +177,8 @@ typedef struct DWGMACState {
     uint32_t regs[DW_GMAC_NR_REGS];
     uint16_t phy_regs[DW_GMAC_MAX_PHYS][DW_GMAC_MAX_PHY_REGS];
     QEMUTimer *rx_watchdog_timer;
+    /* Optional external PHY reset input; its electrical level is active-low. */
+    bool phy_reset_asserted;
 
     uint32_t version;
     uint32_t hw_feature;

@@ -689,9 +689,10 @@ complete DT contract and migration of distinct state in all three instances.
 Pad state does not yet produce electrical signal routing.  Mux selection does
 not redirect GPIO or peripheral lines, and pull, voltage-domain, drive-current,
 slew, Schmitt-trigger, output-enable, tri-state and contention behavior are not
-modeled.  GPIO connections to the Wi-Fi module, Ethernet PHY, card detect,
-buttons and expansion headers remain unwired until their polarity, safe power
-sequence and physical routing are validated.
+modeled.  The separately source-backed GPIO3_21 PHY reset and GPIO3_22 PHY
+interrupt wires are the only Ethernet exception; Wi-Fi, card-detect, buttons
+and expansion-header connections remain unwired until their polarity, safe
+power sequence and physical routing are validated.
 
 The three storage controllers use a reusable DesignWare MSHC wrapper around
 QEMU's SDHCI engine.  The model exposes the TH1520's 64 KiB apertures, vendor
@@ -745,6 +746,16 @@ the board routes no second PHY.  Mainline Linux binds GMAC0 as DWMAC1000 and
 observes the same user/version identity and advertised checksum/extended-
 descriptor features as a public physical boot capture.  Checkpoint
 ``1369cec4d9`` implements DMA RIWT[7:0] for Linux receive-interrupt mitigation.
+
+The generated GMAC0 PHY node carries the mainline active-low GPIO3_21 reset
+specifier, its 10 ms assertion and 50 ms recovery delays, and the active-low
+GPIO3_22 interrupt specifier.  QEMU routes those digital GPIO lines: asserted
+reset reinitializes the generic Clause-22 PHY state and clears its link status,
+while the unimplemented PHY interrupt remains deasserted (high).  The delay
+values are consumed by guest software; QEMU does not claim RTL8211F electrical
+timing, straps, vendor registers, link training or interrupt-source behavior.
+The reset state is migrated.
+
 Each unit is 256 clock cycles; TH1520 currently supplies a fixed 500 MHz
 reset/reference-rate assumption, so Linux's default ``0xa0`` expires after
 exactly 81,920 ns.  A DIC-suppressed terminal receive completion arms the
@@ -753,7 +764,7 @@ zero write or reset cancels it.  Current VMState version 2 preserves an armed
 deadline.  Older streams retain the low register byte but load unarmed because
 they contain no deadline.
 
-The complete GMAC qtest group passes 12/12.  Four clean normal/minimal
+The complete GMAC qtest group passes 14/14.  Four clean normal/minimal
 one-/four-hart Linux runs pass DHCP, 3/3 gateway pings and a 1 MiB HTTP
 SHA-256 download.  A retained contention run exposes a Linux masked-RI race:
 RIWT expires while RIE is masked, then an unrelated TX interrupt W1C-clears RI
@@ -761,8 +772,8 @@ without scheduling RX and temporarily strands three completed descriptors.
 QEMU does not hide that timing with a device-model workaround.  Programmable
 MAC/VLAN/hash filtering, complete checksum corner cases, sustained contention
 stress, dynamic RIWT clock/gate behavior, physical RIWT timing, PTP/MMC/WOL/
-EEE, flow-control timing and RTL8211F vendor pages, delays, GPIO reset and
-interrupt behavior remain incomplete.
+EEE, flow-control timing and RTL8211F vendor pages, electrical delays, straps,
+link training and interrupt-source behavior remain incomplete.
 
 The general AXI DMAC implements the four-channel software path used by the
 mainline ``dw-axi-dmac`` driver.  Direct and 64-byte-LLI memory-to-memory
@@ -819,9 +830,10 @@ device tests, an armed DWC GMAC RIWT deadline now survives current-version
 migration: a half-expired timer remains quiet through remaining time minus one
 nanosecond and expires on the next.  Pre-version-2 GMAC streams load the masked
 register value unarmed because their missing deadline cannot be reconstructed.
-The current complete board gates pass 116/116 normal, 115/115
-dependency-minimal and 115/115 ASan/UBSan.  The complete normal RISC-V TCG gate
-passes 37/37, the explicitly enumerated Ahead-specific minimal TCG gate passes
+The direct normal board gate passes 149/149.  The 115/115 dependency-minimal
+and ASan/UBSan results are retained earlier checkpoints.  The complete normal
+RISC-V TCG gate passes 37/37, and the explicitly enumerated Ahead-specific
+minimal TCG gate passes
 14/14, and all six XTheadVector firmware payloads pass directly under
 ASan/UBSan.  The preceding migration checkpoint's 114/114 board plus 14/14 CSR
 normal, 113/113 plus 7/7 minimal and 112/112 sanitizer-board totals remain

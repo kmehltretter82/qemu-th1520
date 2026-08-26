@@ -96,9 +96,10 @@ descriptor arms the one-shot timer; expiry raises RI/NIS and the GMAC PLIC
 line, while an immediate non-DIC RI, a zero write or reset cancels it.  Current
 VMState version 2 preserves an armed deadline; a pre-version-2 stream retains
 the masked low register byte but cannot reconstruct a missing deadline and is
-loaded unarmed.  The complete GMAC qtest group passes 12/12, including focused
-watchdog and migration cases, and the complete board gates pass 116/116
-normal, 115/115 dependency-minimal and 115/115 under ASan/UBSan.
+loaded unarmed.  The complete GMAC qtest group passes 14/14, including PHY
+GPIO/reset-state migration plus focused watchdog and migration cases.  The
+direct normal board gate passes 149/149; the 115/115 dependency-minimal and
+ASan/UBSan gate records predate this checkpoint.
 
 The preceding committed checkpoint fixed two RV64 scalar-index correctness
 defects in the vendor-derived XTheadVector execution engine.  Its independent
@@ -923,9 +924,10 @@ so it is only the first bounded Phase-4 checkpoint.
 At the preceding migration checkpoint the complete normal and
 dependency-minimal gates passed 114/114 board plus 14/14 CSR qtests and
 113/113 plus 7/7 respectively; its preceding complete ASan/UBSan board gate
-passed 112/112.  With the current vector and RIWT checkpoints, the
-complete board gates pass 116/116 normal, 115/115 dependency-minimal and
-115/115 ASan/UBSan.  The complete normal RISC-V TCG gate passes 37/37, the
+passed 112/112.  With the later PHY GPIO checkpoint, the direct normal board
+gate passes 149/149.  The 115/115 dependency-minimal and ASan/UBSan results
+are retained earlier checkpoints.  The complete normal RISC-V TCG gate passes
+37/37, the
 explicit Ahead-specific minimal TCG enumeration passes 14/14, and all six
 XTheadVector payloads pass directly under ASan/UBSan.  The sole conditional
 difference in the board totals is
@@ -1174,14 +1176,16 @@ still allowed, PTE precedence and physical fallback.  Normal,
 dependency-minimal and ASan/UBSan focused runs pass.  These values are test
 fixtures, not a proposed TH1520 map.
 
-Twelve GMAC-path tests cover the exact DT/clock/APB/MDIO contract, masked APB
+Fourteen GMAC-path tests cover the exact DT/clock/APB/MDIO contract, masked APB
 writes, both PLIC routes, enhanced 32-byte TX/RX descriptors, FCS,
 extension-word preservation, and socket-backed packet paths.  They include a
 deterministic positive-barrier rejection regression, a 34-case matrix for
 perfect/hash/source/broadcast/multicast/control/VLAN acceptance and descriptor
 status, a Type-2 classifier matrix plus split-descriptor boundary, and focused
 same-version migration of filter/IPC state followed by an old-address drop,
-new-address accept and post-resume RDES4 result.  The matrix covers valid and
+new-address accept and post-resume RDES4 result.  They also cover the
+source-backed PHY reset/interrupt DT binding and reset-state migration.  The
+matrix covers valid and
 bad IPv4/UDP, IPv6/TCP, truncated IPv6 extension, fragment, non-IP, C-/S-VLAN,
 truncated VLAN and IPC/ATDS-disabled controls.  A separate independent-oracle
 matrix exercises 18 transmit cases: CIC0-3, IPv4/IPv6 TCP/UDP/ICMP, options,
@@ -1649,6 +1653,20 @@ programs the Linux default ``0xa0``.  QEMU converts that value using a fixed
 500 MHz TH1520 reset/reference-rate assumption to exactly 81,920 ns; dynamic
 clock-rate and gate effects remain unmodeled and the owner's physical rate is
 not proved.
+
+The generated GMAC0 PHY node now mirrors the pinned mainline board binding:
+active-low reset on GPIO3_21 with 10 ms assertion and 50 ms post-reset delays,
+and an active-low interrupt on GPIO3_22.  QEMU wires those two GPIO lines
+digitally.  A low reset line reinitializes the generic Clause-22 PHY state and
+forces its link/autonegotiation status down; the unimplemented PHY interrupt
+source remains deasserted (high at GPIO3_22).  The DT delays are Linux-driver
+delays, not an emulation of RTL8211F electrical timing, straps, link training,
+vendor registers or interrupt status.  The reset assertion is migrated.
+After this change, the RevyOS/Alpine cross-pair again reached all four markers
+in ``validation-artifacts/beaglev-ahead-alpine-revyos-phy-gpio-20260826.log``;
+the cached Tuxboot 6.11.9 control passed both ``test_emmc_root`` and
+``test_emmc_root_smp``.  These are complementary software regressions, not
+hardware PHY validation.
 
 Four clean user-network runs complete DHCP, 3/3 gateway pings and a 1 MiB HTTP
 download with SHA-256
@@ -2195,16 +2213,21 @@ all four control-frame modes, 64-bin address hashing, C-/S-VLAN exact/VID-only/
 inverse matching, and final-descriptor DA/SA/VLAN status.  TH1520 now also
 enables Type-2 RX classification/status for bounded IPv4/IPv6, TCP/UDP/ICMP,
 one C- or enabled S-VLAN tag, checksum-error and documented bypass paths.
+The GMAC0 PHY child carries the pinned mainline active-low GPIO3_21 reset and
+GPIO3_22 interrupt binding.  QEMU resets only its generic Clause-22 state on
+the reset line and holds the unimplemented interrupt source deasserted; the
+10/50 ms DT delays and all RTL8211F-specific electrical behavior remain open.
 The shared TX engine now models TXCOESEL/TSF gates, first-descriptor CIC0-3,
 bounded IPv4/IPv6 TCP/UDP/ICMP insertion, one supported VLAN tag, split-frame
 assembly and normal/enhanced status distinctions without changing guest
 buffers.  DMA RIWT now implements the driver's DIC-based interrupt-mitigation
 timer at the fixed 500 MHz TH1520 reset/reference rate, raises RI/NIS and PLIC
 source 66 on expiry, cancels on reset/zero/immediate RI, and migrates an armed
-deadline in VMState v2.  Twelve focused GMAC qtests include a deterministic
+deadline in VMState v2.  Fourteen focused GMAC qtests include a deterministic
 rejection barrier, a 34-case filter matrix, a Type-2 matrix, an 18-case TX
-checksum matrix, split-descriptor boundaries, filter/IPC-state migration and
-exact 81,920 ns RIWT timing/current-v2 migration.  The seven-case NPCM suite,
+checksum matrix, PHY reset/interrupt GPIO wiring and reset-state migration,
+split-descriptor boundaries, filter/IPC-state migration and exact 81,920 ns
+RIWT timing/current-v2 migration.  The seven-case NPCM suite,
 successful mainline ``dwmac-thead`` probe and four clean normal/minimal
 one-/four-hart DHCP/ping/1 MiB HTTP-integrity runs remain green.  The retained
 masked-RI contention failure keeps sustained traffic and driver IRQ stress

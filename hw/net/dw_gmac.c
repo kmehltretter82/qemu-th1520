@@ -875,6 +875,46 @@ static void gmac_phy_set_link(DWGMACState *gmac, bool active)
     }
 }
 
+static void gmac_update_phy_link(DWGMACState *gmac)
+{
+    bool active = gmac->nic && !qemu_get_queue(gmac->nic)->link_down &&
+                  !gmac->phy_reset_asserted;
+
+    gmac_phy_set_link(gmac, active);
+}
+
+static void dw_gmac_reset_phy(DWGMACState *gmac)
+{
+    memset(gmac->phy_regs, 0xff, sizeof(gmac->phy_regs));
+    memcpy(gmac->phy_regs[gmac->phy_addr], phy_reg_init,
+           sizeof(phy_reg_init));
+    gmac->phy_regs[gmac->phy_addr][MII_PHYID1] = gmac->phy_id1;
+    gmac->phy_regs[gmac->phy_addr][MII_PHYID2] = gmac->phy_id2;
+}
+
+static void dw_gmac_set_phy_irq(DWGMACState *gmac, bool asserted)
+{
+    if (gmac->phy_irq_n) {
+        qemu_set_irq(gmac->phy_irq_n, !asserted);
+    }
+}
+
+static void dw_gmac_phy_reset_input(void *opaque, int n, int level)
+{
+    DWGMACState *gmac = opaque;
+    bool asserted = !level;
+
+    if (gmac->phy_reset_asserted == asserted) {
+        return;
+    }
+
+    gmac->phy_reset_asserted = asserted;
+    if (asserted) {
+        dw_gmac_reset_phy(gmac);
+    }
+    gmac_update_phy_link(gmac);
+}
+
 static bool gmac_can_receive(NetClientState *nc)
 {
     DWGMACState *gmac = DW_GMAC(qemu_get_nic_opaque(nc));
@@ -1712,7 +1752,7 @@ static void gmac_set_link(NetClientState *nc)
     DWGMACState *gmac = qemu_get_nic_opaque(nc);
 
     trace_dw_gmac_set_link(!nc->link_down);
-    gmac_phy_set_link(gmac, !nc->link_down);
+    gmac_update_phy_link(gmac);
 }
 
 static void dw_gmac_mdio_access(DWGMACState *gmac, uint16_t v)
@@ -1985,14 +2025,9 @@ static void dw_gmac_reset(DeviceState *dev)
     DWGMACState *gmac = DW_GMAC(dev);
 
     dw_gmac_soft_reset(gmac);
-    memset(gmac->phy_regs, 0xff, sizeof(gmac->phy_regs));
-    memcpy(gmac->phy_regs[gmac->phy_addr], phy_reg_init,
-           sizeof(phy_reg_init));
-    gmac->phy_regs[gmac->phy_addr][MII_PHYID1] = gmac->phy_id1;
-    gmac->phy_regs[gmac->phy_addr][MII_PHYID2] = gmac->phy_id2;
-    if (gmac->nic) {
-        gmac_phy_set_link(gmac, !qemu_get_queue(gmac->nic)->link_down);
-    }
+    dw_gmac_reset_phy(gmac);
+    gmac_update_phy_link(gmac);
+    dw_gmac_set_phy_irq(gmac, false);
     gmac_update_irq(gmac);
 
     trace_dw_gmac_reset(DEVICE(gmac)->canonical_path,
@@ -2068,6 +2103,7 @@ static void dw_gmac_realize(DeviceState *dev, Error **errp)
         (gmac->conf.macaddr.a[3] << 24) |
         (gmac->conf.macaddr.a[2] << 16) |
         (gmac->conf.macaddr.a[1] << 8) | gmac->conf.macaddr.a[0];
+    dw_gmac_set_phy_irq(gmac, false);
 }
 
 static void dw_gmac_unrealize(DeviceState *dev)
@@ -2088,6 +2124,10 @@ static int dw_gmac_post_load(void *opaque, int version_id)
     if (version_id < 2) {
         timer_del(gmac->rx_watchdog_timer);
     }
+    if (version_id < 3) {
+        gmac->phy_reset_asserted = false;
+    }
+    dw_gmac_set_phy_irq(gmac, false);
     gmac_sync_conf_mac(gmac);
     gmac_update_irq(gmac);
     return 0;
@@ -2098,12 +2138,13 @@ static const VMStateField dw_gmac_vmstate_fields[] = {
     VMSTATE_UINT16_2DARRAY_V(phy_regs, DWGMACState, DW_GMAC_MAX_PHYS,
                              DW_GMAC_MAX_PHY_REGS, 1),
     VMSTATE_TIMER_PTR_V(rx_watchdog_timer, DWGMACState, 2),
+    VMSTATE_BOOL_V(phy_reset_asserted, DWGMACState, 3),
     VMSTATE_END_OF_LIST()
 };
 
 static const VMStateDescription vmstate_dw_gmac = {
     .name = TYPE_DW_GMAC,
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 0,
     .post_load = dw_gmac_post_load,
     .fields = dw_gmac_vmstate_fields,
@@ -2134,6 +2175,16 @@ static const Property dw_gmac_properties[] = {
     DEFINE_PROP_UINT16("phy-id2", DWGMACState, phy_id2, 0x5e6a),
 };
 
+static void dw_gmac_init(Object *obj)
+{
+    DWGMACState *gmac = DW_GMAC(obj);
+
+    qdev_init_gpio_in_named(DEVICE(gmac), dw_gmac_phy_reset_input,
+                            "phy-reset-n", 1);
+    qdev_init_gpio_out_named(DEVICE(gmac), &gmac->phy_irq_n,
+                             "phy-irq-n", 1);
+}
+
 static void dw_gmac_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -2160,6 +2211,7 @@ static const TypeInfo dw_gmac_types[] = {
         .name = TYPE_DW_GMAC,
         .parent = TYPE_SYS_BUS_DEVICE,
         .instance_size = sizeof(DWGMACState),
+        .instance_init = dw_gmac_init,
         .class_init = dw_gmac_class_init,
     },
     {
