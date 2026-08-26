@@ -4199,7 +4199,8 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1, void *vs2,               \
     uint32_t vlmax = (env_archcpu(env)->cfg.vlenb << 3) / mlen;           \
     uint32_t vm = th_vm(desc);                                            \
     uint32_t vl = env->vl;                                                \
-    uint32_t index, i;                                                    \
+    uint64_t index;                                                       \
+    uint32_t i;                                                           \
                                                                           \
     VSTART_CHECK_EARLY_EXIT(env);                                         \
     for (i = env->vstart; i < vl; i++) {                                  \

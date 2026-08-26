@@ -2944,9 +2944,23 @@ GEN_OPIVX_TRANS_TH(th_vslideup_vx, slideup_check_th)
 GEN_OPIVX_TRANS_TH(th_vslide1up_vx, slideup_check_th)
 GEN_OPIVI_TRANS_TH(th_vslideup_vi, IMM_ZX, th_vslideup_vx, slideup_check_th)
 
-GEN_OPIVX_TRANS_TH(th_vslidedown_vx, opivx_check_th)
-GEN_OPIVX_TRANS_TH(th_vslide1down_vx, opivx_check_th)
-GEN_OPIVI_TRANS_TH(th_vslidedown_vi, IMM_ZX, th_vslidedown_vx, opivx_check_th)
+static bool slidedown_check_th(DisasContext *s, arg_rmrr *a)
+{
+    /*
+     * RVV 0.7.1 gives slide-down instructions an instruction-specific
+     * masked-v0 prohibition, overriding its generic LMUL=1 overlap allowance.
+     */
+    return (require_xtheadvector(s) &&
+            vext_check_isa_ill(s) &&
+            th_check_overlap_mask(s, a->rd, a->vm, true) &&
+            th_check_reg(s, a->rd, false) &&
+            th_check_reg(s, a->rs2, false));
+}
+
+GEN_OPIVX_TRANS_TH(th_vslidedown_vx, slidedown_check_th)
+GEN_OPIVX_TRANS_TH(th_vslide1down_vx, slidedown_check_th)
+GEN_OPIVI_TRANS_TH(th_vslidedown_vi, IMM_ZX, th_vslidedown_vx,
+                   slidedown_check_th)
 
 /* Vector Register Gather Instruction */
 static bool vrgather_vv_check_th(DisasContext *s, arg_rmrr *a)

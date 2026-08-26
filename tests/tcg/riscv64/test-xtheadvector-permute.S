@@ -1,9 +1,10 @@
 /*
- * XTheadVector scalar-index permutation boundary test.
+ * XTheadVector scalar- and vector-index permutation boundary test.
  *
  * Vector instructions are emitted as words so the test does not require an
  * assembler with XTheadVector support.  Independent scalar RV64 loops compute
- * every expected byte using full-width, overflow-safe index arithmetic.
+ * the expected values using full-width, overflow-safe index arithmetic.  Trap
+ * recovery checks the instruction-specific masked overlap rules.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -34,6 +35,17 @@
     .word   0x020e0127      /* th.vsb.v v2, (t3) */
     .endm
 
+    .macro EXPECT_ILLEGAL encoding, count, failure
+    li      s0, 1
+    .word   \encoding
+    li      s0, 0
+    li      t0, \count
+    beq     s1, t0, 1f
+    li      a0, \failure
+    j       exit
+1:
+    .endm
+
     .text
     .global _start
 _start:
@@ -43,6 +55,8 @@ _start:
     csrw    mtvec, t0
     li      t0, MSTATUS_VS_THEAD
     csrs    mstatus, t0
+    li      s0, 0             /* Any trap is unexpected until enabled below. */
+    li      s1, 0             /* Count accepted illegal-instruction traps. */
 
     /* Valid slide control: vd[i] = vs2[i + 2], followed by zero tail. */
     lla     a0, expected
@@ -296,6 +310,68 @@ _start:
     li      a2, 12
     call    check_16
 
+    /* Every e64 vector index bit participates in the vrgather.vv bound. */
+    lla     a0, expected
+    lla     a1, gather64_source
+    lla     a2, gather64_index
+    call    oracle_gather_vv_e64
+    li      t1, 2
+    .word   0x00c37057      /* th.vsetvli zero, t1, e64, m1 */
+    lla     t2, gather64_source
+    .word   0x0203f087      /* th.vle.v v1, (t2) */
+    lla     t2, gather64_index
+    .word   0x0203f107      /* th.vle.v v2, (t2) */
+    .word   0x321101d7      /* th.vrgather.vv v3, v1, v2 */
+    lla     t2, output
+    .word   0x0203f1a7      /* th.vse.v v3, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 14
+    call    check_16
+
+    /*
+     * RVV 0.7.1 forbids masked slide-down destinations from overlapping v0,
+     * including at LMUL=1 where its generic overlap rule would allow it.
+    */
+    LOAD_VECTORS mask_alt
+    li      t0, 1
+    csrw    0x008, t0       /* The first illegal trap must preserve vstart. */
+    EXPECT_ILLEGAL 0x3c12c057, 1, 15 /* th.vslidedown.vx v0, v1, t0, v0.t */
+
+    csrr    t0, 0x008
+    li      t1, 1
+    beq     t0, t1, 3f
+    li      a0, 16
+    j       exit
+3:
+    csrw    0x008, zero
+    li      t1, 16
+    SET_E8_M1
+    lla     t3, trap_v0_output
+    .word   0x020e0027      /* th.vsb.v v0, (t3) */
+    lla     a0, trap_v0_output
+    lla     a1, mask_alt
+    li      a2, 17
+    call    check_16
+
+    EXPECT_ILLEGAL 0x3c10b057, 2, 18 /* th.vslidedown.vi v0, v1, 1, v0.t */
+    EXPECT_ILLEGAL 0x3c12e057, 3, 19 /* th.vslide1down.vx v0, v1, t0, v0.t */
+
+    /* Unmasked v0 destinations and masked non-v0 destinations remain legal. */
+    li      t0, 1
+    .word   0x3e12c057      /* th.vslidedown.vx v0, v1, t0 */
+    .word   0x3e10b057      /* th.vslidedown.vi v0, v1, 1 */
+    .word   0x3e12e057      /* th.vslide1down.vx v0, v1, t0 */
+    .word   0x3c12c157      /* th.vslidedown.vx v2, v1, t0, v0.t */
+    .word   0x3c10b157      /* th.vslidedown.vi v2, v1, 1, v0.t */
+    .word   0x3c12e157      /* th.vslide1down.vx v2, v1, t0, v0.t */
+
+    li      t0, 3
+    beq     s1, t0, 4f
+    li      a0, 20
+    j       exit
+4:
+
     li      a0, 0
     j       exit
 
@@ -402,6 +478,28 @@ oracle_gather:
 .Lgather_done:
     ret
 
+/* a0 expected, a1 source, a2 indices.  VLMAX is 2 for e64,m1. */
+oracle_gather_vv_e64:
+    li      t0, 0
+    li      t6, 2
+.Lgather_vv_e64_loop:
+    slli    t1, t0, 3
+    add     t2, a2, t1
+    ld      t3, 0(t2)
+    bgeu    t3, t6, .Lgather_vv_e64_zero
+    slli    t3, t3, 3
+    add     t4, a1, t3
+    ld      t5, 0(t4)
+    j       .Lgather_vv_e64_store
+.Lgather_vv_e64_zero:
+    li      t5, 0
+.Lgather_vv_e64_store:
+    add     t4, a0, t1
+    sd      t5, 0(t4)
+    addi    t0, t0, 1
+    bltu    t0, t6, .Lgather_vv_e64_loop
+    ret
+
 check_16:
     li      t0, 16
 .Lcheck_loop:
@@ -418,7 +516,21 @@ check_16:
     j       exit
 
 trap:
+    csrr    t0, mcause
+    li      t1, 2
+    bne     t0, t1, .Lbad_trap_cause
+    li      t0, 1
+    bne     s0, t0, .Lunexpected_trap
+    addi    s1, s1, 1
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    mret
+.Lbad_trap_cause:
     li      a0, 90
+    j       exit
+.Lunexpected_trap:
+    li      a0, 91
     j       exit
 
 secondary_hart:
@@ -452,12 +564,19 @@ mask_all:
 mask_alt:
     .byte   1, 0, 1, 0, 1, 0, 1, 0
     .byte   1, 0, 1, 0, 1, 0, 1, 0
+    .balign 16
+gather64_source:
+    .dword  0x1122334455667788, 0x99aabbccddeeff00
+gather64_index:
+    .dword  0x0000000100000000, 1
 
     .data
     .balign 16
 expected:
     .space  16
 output:
+    .space  16
+trap_v0_output:
     .space  16
 semiargs:
     .space  16
