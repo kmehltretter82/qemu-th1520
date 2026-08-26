@@ -334,6 +334,39 @@ _start:
     li      a2, 22
     call    check_16
 
+    /* e8,m8 spans eight registers for each source, index and destination. */
+    lla     a0, expected
+    lla     a1, gather8m8_source
+    lla     a2, gather8m8_index
+    call    oracle_gather_vv_e8m8
+    li      t1, 128
+    .word   0x00337057      /* th.vsetvli zero, t1, e8, m8 */
+    lla     t2, gather8m8_source
+    .word   0x0203f407      /* th.vle.v v8, (t2) */
+    lla     t2, gather8m8_index
+    .word   0x0203f807      /* th.vle.v v16, (t2) */
+    .word   0x32880c57      /* th.vrgather.vv v24, v8, v16 */
+    lla     t2, output
+    .word   0x0203fc27      /* th.vse.v v24, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 25
+    call    check_16
+    li      a2, 26
+    call    check_16
+    li      a2, 27
+    call    check_16
+    li      a2, 28
+    call    check_16
+    li      a2, 29
+    call    check_16
+    li      a2, 30
+    call    check_16
+    li      a2, 31
+    call    check_16
+    li      a2, 32
+    call    check_16
+
     lla     a0, expected
     lla     a1, gather16_source
     lla     a2, gather16_index
@@ -580,6 +613,26 @@ oracle_gather_vv_e8m2:
     bltu    t0, t6, .Lgather_vv_e8m2_loop
     ret
 
+/* a0 expected, a1 source, a2 indices.  VLMAX is 128 for e8,m8. */
+oracle_gather_vv_e8m8:
+    li      t0, 0
+    li      t6, 128
+.Lgather_vv_e8m8_loop:
+    add     t2, a2, t0
+    lbu     t3, 0(t2)
+    bgeu    t3, t6, .Lgather_vv_e8m8_zero
+    add     t4, a1, t3
+    lbu     t5, 0(t4)
+    j       .Lgather_vv_e8m8_store
+.Lgather_vv_e8m8_zero:
+    li      t5, 0
+.Lgather_vv_e8m8_store:
+    add     t4, a0, t0
+    sb      t5, 0(t4)
+    addi    t0, t0, 1
+    bltu    t0, t6, .Lgather_vv_e8m8_loop
+    ret
+
 /* a0 expected, a1 source, a2 indices.  VLMAX is 8 for e16,m1. */
 oracle_gather_vv_e16:
     li      t0, 0
@@ -704,6 +757,20 @@ gather8m2_index:
     .byte   6, 25, 7, 24, 8, 23, 9, 22
     .byte   10, 21, 11, 20, 12, 19, 13, 18
     .balign 16
+gather8m8_source:
+    .set   gather8m8_lane, 0x80
+    .rept  128
+    .byte  gather8m8_lane
+    .set   gather8m8_lane, gather8m8_lane + 1
+    .endr
+gather8m8_index:
+    .rept  4
+    .byte  127, 0, 1, 128, 255, 15, 16, 31
+    .byte  32, 47, 48, 63, 64, 79, 80, 95
+    .byte  96, 111, 112, 126, 2, 125, 3, 124
+    .byte  4, 123, 5, 122, 6, 121, 7, 120
+    .endr
+    .balign 16
 gather16_source:
     .half   0x1122, 0x3344, 0x5566, 0x7788
     .half   0x99aa, 0xbbcc, 0xddee, 0xff00
@@ -717,9 +784,9 @@ gather32_index:
     .data
     .balign 16
 expected:
-    .space  32
+    .space  128
 output:
-    .space  32
+    .space  128
 trap_v0_output:
     .space  16
 semiargs:
