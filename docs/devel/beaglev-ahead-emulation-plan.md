@@ -1310,6 +1310,34 @@ deferred and the runtime console is unavailable; GPIO registration warnings
 also remain.  The binding split and the required hardware/stock-DTB comparison
 are tracked as ``DT-002`` in the validation ledger.
 
+### Independent Alpine userspace lane
+
+To avoid treating the small portable rootfs as the only userspace contract,
+the local disk-backed Alpine gate pins Alpine 3.24.1's official RISC-V
+minirootfs archive, SHA-256
+``7201513262d851f39105102cf95519410100259bd7996fca13bade517838d7b7``.
+It verifies that hash, builds a temporary 64 MiB ext4 filesystem, wraps it in
+the same deterministic MBR/``PARTUUID=1520a110-01`` scheme, and boots it using
+QEMU's generated DT and the portable Linux 6.11.9 Image.  The observed guest
+log records HS400 discovery, an ext4 root mount, the Alpine release check,
+execution of Alpine's musl ``apk`` binary, a root write/sync, and a read-only
+remount through these markers:
+
+```text
+ALPINE_RELEASE_3.24.1_PASS
+ALPINE_MUSL_EMMC_PASS
+ALPINE_STORAGE_PASS
+ALPINE_ROOTFS_PASS
+```
+
+This is deliberately a userspace-diversity check, not a new independent
+kernel result: the separate RevyOS vendor-kernel lane above remains the kernel
+axis.  It invokes a controlled Alpine shell rather than OpenRC, so it does not
+prove normal distro initialization, package installation, networking, an
+official BeagleBoard image or physical hardware behavior.  The gate accepts a
+separately built vendor Image as an input, but no additional
+RevyOS-plus-Alpine result is claimed here.
+
 A separate portable Linux 6.11.9 functional test wraps the pinned ext2 rootfs
 at MBR partition sector 2048 with disk signature ``0x1520a110`` and uses
 ``root=PARTUUID=1520a110-01``.  Both the ``maxcpus=1`` test and a four-hart
