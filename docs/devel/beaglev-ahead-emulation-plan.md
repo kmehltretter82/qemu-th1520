@@ -1348,11 +1348,25 @@ The focused bidirectional/reset and migration qtests pass.  This maps neither
 the rest of the TEE aperture nor a DT node, and it does not establish a
 physical alias or any unmodeled register's reset/side effects.
 
-A 15-second direct U-Boot run after that mapping emits the banner and clock
-rates with no QEMU guest-error diagnostic, but it does not reach an OS handoff.
-That is a firmware configuration checkpoint, not a boot-success claim.  The
-exact reset contents, ownership, aliases and functional effects of all these
-windows still require hardware or stronger public-source evidence.
+A bounded interrupt trace after that mapping identified the next U-Boot load
+fault at ``0xfff7f30010``.  ``light.c`` names it ISO7816 ``CONFIG`` and clears
+``MIE`` (bit 7) before PWM setup.  The pinned vendor DTS describes a disabled
+16 KiB ISO7816 controller at ``0xfff7f30000`` with PLIC source 69, and its
+driver independently names ``CONFIG.MIE`` as the global interrupt enable.
+QEMU maps only the exact four-byte ``CONFIG`` word, retains only ``MIE``, uses
+zero as a QEMU reset convention, and migrates it.  Focused mask/reset and
+migration qtests pass.  This does not model the rest of the controller, its
+IRQ, a card interface, a DT node, or physical reset state.
+
+A 15-second direct U-Boot run with that word mapped now gets past the former
+fault and reaches eMMC environment loading.  It still does not reach OS
+handoff.  The bounded QEMU diagnostic log contains repeated ``SD card voltage
+not supported: 1.800V`` and ``eMMC: CMD8 in a wrong state: idle`` messages;
+their causal relation to the stop is not established.  This remains a
+firmware configuration checkpoint, not a boot-success claim.  The exact reset
+contents, ownership, aliases and functional effects of these windows, and the
+vendor-firmware storage sequence, still require hardware or stronger
+public-source evidence.
 
 ### Independent Alpine userspace lane
 

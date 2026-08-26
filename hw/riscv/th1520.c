@@ -75,6 +75,8 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_MISCSYS] = { 0xffec02c000, 0x00001000 },
     [TH1520_DEV_VISYS] = { 0xffe4040000, 0x00001000 },
     [TH1520_DEV_VOSYS] = { 0xffef528000, 0x00001000 },
+    [TH1520_DEV_ISO7816_CONFIG] = { 0xfff7f30010,
+                                    TH1520_ISO7816_CONFIG_MMIO_SIZE },
     [TH1520_DEV_USB_DRD] = { 0xffec03f000, 0x00001000 },
     [TH1520_DEV_USB_CORE] = { 0xffe7040000, 0x00010000 },
     [TH1520_DEV_UART0] = { 0xffe7014000, 0x00000100 },
@@ -597,6 +599,8 @@ static void th1520_soc_init(Object *obj)
     object_initialize_child(obj, "vosys", &s->vosys,
                             TYPE_TH1520_VIDEO_SYSREG);
     qdev_prop_set_bit(DEVICE(&s->vosys), "vosys", true);
+    object_initialize_child(obj, "iso7816-config", &s->iso7816_config,
+                            TYPE_TH1520_ISO7816_CONFIG);
     object_initialize_child(obj, "pvt", &s->pvt, TYPE_MR75203);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "ts-count", TH1520_PVT_TS_COUNT);
     qdev_prop_set_uint8(DEVICE(&s->pvt), "pd-count", TH1520_PVT_PD_COUNT);
@@ -773,6 +777,12 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->vosys), 0,
                     th1520_memmap[TH1520_DEV_VOSYS].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->iso7816_config), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->iso7816_config), 0,
+                    th1520_memmap[TH1520_DEV_ISO7816_CONFIG].base);
 
     object_property_set_link(OBJECT(&s->usb), "dma", OBJECT(system_memory),
                              &error_abort);

@@ -16,6 +16,7 @@
 #include "hw/intc/thead_c900_plic.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_iopmp.h"
+#include "hw/misc/th1520_iso7816.h"
 #include "hw/misc/th1520_mbox.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_pinctrl.h"
@@ -61,6 +62,7 @@ struct TH1520SoCState {
     MemoryRegion tee_miscsys_usb_clock_alias;
     TH1520VideoSysRegState visys;
     TH1520VideoSysRegState vosys;
+    TH1520ISO7816ConfigState iso7816_config;
     TH1520USBState usb;
     TH1520MboxState mbox;
     TH1520IOPMPState iopmp[TH1520_IOPMP_COUNT];
@@ -108,6 +110,7 @@ enum {
     TH1520_DEV_MISCSYS,
     TH1520_DEV_VISYS,
     TH1520_DEV_VOSYS,
+    TH1520_DEV_ISO7816_CONFIG,
     TH1520_DEV_USB_DRD,
     TH1520_DEV_USB_CORE,
     TH1520_DEV_UART0,

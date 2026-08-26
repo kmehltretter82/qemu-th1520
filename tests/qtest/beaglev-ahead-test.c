@@ -11,6 +11,7 @@
 #include "qemu/units.h"
 #include "hw/misc/th1520_cpr.h"
 #include "hw/misc/th1520_iopmp.h"
+#include "hw/misc/th1520_iso7816.h"
 #include "hw/misc/th1520_miscsys.h"
 #include "hw/misc/th1520_video_sysreg.h"
 #include "hw/net/mii.h"
@@ -34,6 +35,7 @@
 #define TH1520_MISCSYS_BASE        0xffec02c000ULL
 #define TH1520_VISYS_BASE          0xffe4040000ULL
 #define TH1520_VOSYS_BASE          0xffef528000ULL
+#define TH1520_ISO7816_CONFIG_BASE 0xfff7f30010ULL
 #define TH1520_USB_DRD_BASE        0xffec03f000ULL
 #define TH1520_USB_CORE_BASE       0xffe7040000ULL
 #define TH1520_UART0_BASE          0xffe7014000ULL
@@ -3589,6 +3591,65 @@ static void test_th1520_video_sysreg_migration(void)
 
     qtest_system_reset(dst);
     assert_th1520_video_sysreg_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void assert_th1520_iso7816_config_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readl(qts, TH1520_ISO7816_CONFIG_BASE), ==, 0);
+}
+
+static void test_th1520_iso7816_config_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_iso7816_config_reset_state(qts);
+    qtest_writel(qts, TH1520_ISO7816_CONFIG_BASE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_ISO7816_CONFIG_BASE), ==,
+                    TH1520_ISO7816_CONFIG_MIE);
+    qtest_writel(qts, TH1520_ISO7816_CONFIG_BASE, 0);
+    assert_th1520_iso7816_config_reset_state(qts);
+
+    qtest_writel(qts, TH1520_ISO7816_CONFIG_BASE,
+                 TH1520_ISO7816_CONFIG_MIE);
+    qtest_system_reset(qts);
+    assert_th1520_iso7816_config_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_iso7816_config_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-iso7816-config-XXXXXX", &path,
+                         NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_writel(src, TH1520_ISO7816_CONFIG_BASE,
+                 TH1520_ISO7816_CONFIG_MIE);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_ISO7816_CONFIG_BASE), ==,
+                    TH1520_ISO7816_CONFIG_MIE);
+    qtest_system_reset(dst);
+    assert_th1520_iso7816_config_reset_state(dst);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -12843,6 +12904,10 @@ int main(int argc, char **argv)
                        test_th1520_video_sysreg_registers);
         qtest_add_func("/beaglev-ahead/th1520-video-sysreg/migration",
                        test_th1520_video_sysreg_migration);
+        qtest_add_func("/beaglev-ahead/th1520-iso7816-config/registers",
+                       test_th1520_iso7816_config_registers);
+        qtest_add_func("/beaglev-ahead/th1520-iso7816-config/migration",
+                       test_th1520_iso7816_config_migration);
         qtest_add_func("/beaglev-ahead/mr75203/registers",
                        test_mr75203_registers);
         qtest_add_func("/beaglev-ahead/mr75203/migration",
