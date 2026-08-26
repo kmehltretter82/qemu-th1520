@@ -259,7 +259,14 @@ static bool dw_apb_uart_access_valid(void *opaque, hwaddr addr,
                                      unsigned size, bool is_write,
                                      MemTxAttrs attrs)
 {
-    return size == 4 && !(addr & 3);
+    /*
+     * Mainline Linux uses the 32-bit register accesses described by the
+     * TH1520 DT, but BeagleBoard's vendor U-Boot uses aligned byte accesses
+     * for the same DW APB UART registers.  Support both established forms.
+     * There is no corresponding evidence for halfword accesses, so keep
+     * those faulting rather than silently widening the hardware contract.
+     */
+    return (size == 1 || size == 4) && !(addr & 3);
 }
 
 static const MemoryRegionOps dw_apb_uart_ops = {
@@ -267,13 +274,13 @@ static const MemoryRegionOps dw_apb_uart_ops = {
     .write = dw_apb_uart_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
-        .min_access_size = 4,
+        .min_access_size = 1,
         .max_access_size = 4,
         .unaligned = false,
         .accepts = dw_apb_uart_access_valid,
     },
     .impl = {
-        .min_access_size = 4,
+        .min_access_size = 1,
         .max_access_size = 4,
     },
 };

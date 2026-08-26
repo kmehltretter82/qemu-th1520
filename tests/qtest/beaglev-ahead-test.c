@@ -6802,6 +6802,12 @@ static void test_dw_uart_registers(void)
 
     assert_dw_uart_reset_state(qts);
 
+    /* Vendor U-Boot uses aligned byte accesses despite reg-io-width = <4>. */
+    qtest_writeb(qts, DW_UART_SCR, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, DW_UART_SCR), ==, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, DW_UART_LSR), ==,
+                    UART_LSR_THRE | UART_LSR_TEMT);
+
     qtest_writel(qts, DW_UART_SCR, 0x123456a5);
     g_assert_cmphex(qtest_readl(qts, DW_UART_SCR), ==, 0xa5);
 

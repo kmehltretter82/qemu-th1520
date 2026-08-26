@@ -68,10 +68,20 @@ _start:
     csrw    mtvec, t0
     li      s0, DW_UART_BASE
 
-    /* The TH1520 integration rejects subword APB transactions. */
-    check_load_fault lb
+    /*
+     * BeagleBoard's vendor U-Boot uses aligned byte loads/stores for the
+     * UART even though the Linux DT advertises reg-io-width = <4>.
+     */
+    lbu     t2, DW_UART_LSR(s0)
+    li      t1, UART_LSR_THRE_TEMT
+    bne     t2, t1, fail_access_width
+    li      t0, 0xa5
+    sb      t0, DW_UART_SCR(s0)
+    lbu     t2, DW_UART_SCR(s0)
+    bne     t2, t0, fail_access_width
+
+    /* Halfword access has no established TH1520 firmware evidence. */
     check_load_fault lh
-    check_store_fault sb
     check_store_fault sh
 
     /*
