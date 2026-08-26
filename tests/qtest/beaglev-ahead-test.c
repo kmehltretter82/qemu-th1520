@@ -8920,6 +8920,144 @@ static void test_th1520_usb_host_dma_irq(void)
     qtest_quit(qts);
 }
 
+static void test_th1520_usb_pending_irq_migration(void)
+{
+    uint32_t erst[4] = {
+        cpu_to_le32(TH1520_USB_EVENT_RING_ADDR),
+        0,
+        cpu_to_le32(TH1520_USB_EVENT_RING_TRBS),
+        0,
+    };
+    uint32_t command[8] = {
+        0,
+        0,
+        0,
+        cpu_to_le32((TH1520_USB_CR_NOOP << TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE),
+    };
+    uint32_t event[4] = { 0 };
+    uint8_t empty_ring[TH1520_USB_EVENT_RING_TRBS * 16] = { 0 };
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-usb-pending-irq-XXXXXX", &path,
+                         NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_irq_intercept_out_named(src, C900_PLIC_QOM_PATH, "sext");
+    qtest_irq_intercept_out_named(dst, C900_PLIC_QOM_PATH, "sext");
+    qtest_writel(src, C900_PLIC_PRIORITY(TH1520_USB_IRQ), 5);
+    c900_plic_set_enable(src, 1, TH1520_USB_IRQ, true);
+    qtest_writel(src,
+                  TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    qtest_memwrite(src, TH1520_USB_ERST_ADDR, erst, sizeof(erst));
+    qtest_memwrite(src, TH1520_USB_EVENT_RING_ADDR, empty_ring,
+                   sizeof(empty_ring));
+    qtest_memwrite(src, TH1520_USB_COMMAND_RING_ADDR, command,
+                   sizeof(command));
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTSZ, 1);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA,
+                  TH1520_USB_ERST_ADDR);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA + 4, 0);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                  TH1520_USB_EVENT_RING_ADDR);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP + 4, 0);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_IMAN,
+                  TH1520_USB_XHCI_IMAN_IE);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CRCR,
+                  TH1520_USB_COMMAND_RING_ADDR | TH1520_USB_TRB_CYCLE);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CRCR + 4, 0);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USBCMD,
+                  TH1520_USB_XHCI_USBCMD_RS |
+                  TH1520_USB_XHCI_USBCMD_INTE);
+    qtest_writel(src, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL, 0);
+
+    qtest_memread(src, TH1520_USB_EVENT_RING_ADDR, event, sizeof(event));
+    for (size_t i = 0; i < ARRAY_SIZE(event); i++) {
+        event[i] = le32_to_cpu(event[i]);
+    }
+    g_assert_cmphex(event[0], ==, TH1520_USB_COMMAND_RING_ADDR);
+    g_assert_cmphex(event[2], ==, TH1520_USB_CC_SUCCESS << 24);
+    g_assert_cmphex(event[3], ==,
+                    (TH1520_USB_ER_CMD_COMPLETE <<
+                     TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE);
+    g_assert_true(c900_plic_pending(src, TH1520_USB_IRQ));
+    assert_only_irq(src, 0);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    qtest_memread(dst, TH1520_USB_EVENT_RING_ADDR, event, sizeof(event));
+    for (size_t i = 0; i < ARRAY_SIZE(event); i++) {
+        event[i] = le32_to_cpu(event[i]);
+    }
+    g_assert_cmphex(event[0], ==, TH1520_USB_COMMAND_RING_ADDR);
+    g_assert_cmphex(event[2], ==, TH1520_USB_CC_SUCCESS << 24);
+    g_assert_cmphex(event[3], ==,
+                    (TH1520_USB_ER_CMD_COMPLETE <<
+                     TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE);
+    g_assert_true(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                              TH1520_USB_XHCI_USBSTS) &
+                  TH1520_USB_XHCI_USBSTS_EINT);
+    g_assert_cmphex(qtest_readl(dst, TH1520_USB_CORE_BASE +
+                                TH1520_USB_XHCI_IMAN), ==,
+                    TH1520_USB_XHCI_IMAN_IP | TH1520_USB_XHCI_IMAN_IE);
+    g_assert_true(c900_plic_pending(dst, TH1520_USB_IRQ));
+    assert_only_irq(dst, 0);
+
+    g_assert_cmphex(qtest_readl(dst, C900_PLIC_CLAIM(1)), ==,
+                    TH1520_USB_IRQ);
+    qtest_writel(dst, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_IMAN,
+                  TH1520_USB_XHCI_IMAN_IP | TH1520_USB_XHCI_IMAN_IE);
+    qtest_writel(dst, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                  (TH1520_USB_EVENT_RING_ADDR + 16) |
+                  TH1520_USB_XHCI_ERDP_EHB);
+    qtest_writel(dst, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USBSTS,
+                  TH1520_USB_XHCI_USBSTS_EINT);
+    qtest_writel(dst, C900_PLIC_CLAIM(1), TH1520_USB_IRQ);
+    g_assert_false(c900_plic_pending(dst, TH1520_USB_IRQ));
+    assert_no_irq(dst);
+
+    /* The migrated command and event-ring producer cursors must advance. */
+    command[7] = cpu_to_le32(
+        (TH1520_USB_CR_NOOP << TH1520_USB_TRB_TYPE_SHIFT) |
+        TH1520_USB_TRB_CYCLE);
+    qtest_memwrite(dst, TH1520_USB_COMMAND_RING_ADDR + 16, command + 4,
+                   16);
+    qtest_writel(dst, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL, 0);
+    qtest_memread(dst, TH1520_USB_EVENT_RING_ADDR + 16, event,
+                  sizeof(event));
+    for (size_t i = 0; i < ARRAY_SIZE(event); i++) {
+        event[i] = le32_to_cpu(event[i]);
+    }
+    g_assert_cmphex(event[0], ==, TH1520_USB_COMMAND_RING_ADDR + 16);
+    g_assert_cmphex(event[2], ==, TH1520_USB_CC_SUCCESS << 24);
+    g_assert_cmphex(event[3], ==,
+                    (TH1520_USB_ER_CMD_COMPLETE <<
+                     TH1520_USB_TRB_TYPE_SHIFT) |
+                    TH1520_USB_TRB_CYCLE);
+    g_assert_true(c900_plic_pending(dst, TH1520_USB_IRQ));
+    assert_only_irq(dst, 0);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
 static void test_th1520_usb_hid_hotplug(void)
 {
     uint32_t erst[4] = {
@@ -12287,6 +12425,8 @@ int main(int argc, char **argv)
                        test_th1520_usb_reset_outputs);
         qtest_add_func("/beaglev-ahead/usb/host-dma-irq",
                        test_th1520_usb_host_dma_irq);
+        qtest_add_func("/beaglev-ahead/usb/pending-irq-migration",
+                       test_th1520_usb_pending_irq_migration);
         if (qtest_has_device("usb-kbd")) {
             qtest_add_func("/beaglev-ahead/usb/hid-hotplug",
                            test_th1520_usb_hid_hotplug);
