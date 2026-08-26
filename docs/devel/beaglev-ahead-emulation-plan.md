@@ -1487,37 +1487,40 @@ behavior.  PMIC defaults, rail effects, address strapping, bus topology,
 controller timing and STOP semantics remain recorded open items in
 ``beaglev-ahead-hardware-validation.md``.
 
-### Vendor SPL DDR PLL configuration checkpoint
+### Vendor SPL DDR controller/PHY virtual checkpoint
 
-The public LPDDR4 source defines DDR SYSREG at ``0xffff005000`` and generated
-register descriptions identify ``DDR_CFG0`` at offset ``0x0``,
-``DDR_PLL_CFG0``/``DDR_PLL_CFG1`` at ``0x8``/``0xc``, and ``DDR_PLL_STS`` at
-``0x18``.  CFG0 resets to zero and reserves bits 2--3; QEMU maps only that
-four-byte word with its source-derived writable mask (``0xfffffff3``), plus
-the three PLL words.  The firmware's staged CFG0 writes are preserved as
-software-visible state, with no reset, rail, clock, controller, PHY, DFI or
-DRAM consequence.  Its 3733 MT/s path asserts CFG1's reset bit, writes CFG0,
-releases the reset bit, polls lock, then writes bit 16, which that source
-comments as core-clock gating.  Clearing the reset bit makes the virtual lock
-bit visible immediately; that deterministic transition is an emulator
-convention for the public firmware poll, not a claim about PLL frequency, lock
-time or clock-tree behavior.
+The public LPDDR4 source defines DDR SYSREG at ``0xffff005000``.  Its generated
+headers identify CFG0/CFG1 at offsets ``0x0``/``0x4`` and the PLL words at
+``0x8``/``0xc``/``0x18``.  QEMU maps only those source-used SYSREG words.  CFG0
+and CFG1 retain their generated masks (``0xfffffff3`` and ``0x003f011f``) and
+reset values; the PLL's virtual lock transition remains only a deterministic
+answer to the firmware poll.  They do not imply a physical clock, reset, rail
+or DDR side effect.
 
-Focused CFG0 register/reset and migration qtests, the PLL qtests, and
-whole-machine migration pass.  An unchanged public SPL again reaches the
-LPDDR banner.  To expose the next fault, a debugger changed only that guest
-instance's generic U-Boot trap ``ebreak`` into a no-op; no source or QEMU model
-byte was changed.  The next captured exception is a store/AMO access fault
-from the SPL's generic ``wr()`` helper at ``0xffff000304`` (source name
-``DBG1`` at offset ``0x304`` of the DesignWare uMCTL2 controller aperture).
-That controller aperture intentionally remains unmapped.  Modeling it from
-this one access would turn an observed boundary into an invented DRAM-success
-path.
+For the selected 3733 single-rank LPDDR4X path, QEMU also maps a bounded
+``0x3000`` DesignWare controller window at ``0xffff000000`` and two bounded
+``0x200000`` PHY CSR windows at ``0xfffd000000`` and ``0xfffe000000``.  The
+PHY windows retain the source's 16-bit CSR writes.  After its documented
+microcontroller trigger sequence, each returns the source's success mailbox
+value ``0x7``; after both virtual completions, controller DFI-complete and
+normal-mode polls progress.  This is a firmware-compatibility convention, not
+execution of PHY firmware or analog LPDDR training.
 
-This checkpoint does not model DDR PLL timing or output frequency, CFG0 reset
-effects, the DDR controller or PHY, DFI traffic, training, DRAM contents,
-rank/width/topology, refresh, retention, rail coupling, warm-reset state or
-an OS handoff.  Those open items are retained as ``DDR-001`` in
+Focused CFG0/CFG1, controller/PHY and whole-machine migration qtests pass.  An
+unchanged public SPL now executes through the controller/PHY sequence and its
+auto-self-refresh SYSREG write.  Its serial log contains no intermediate
+progress marker, so a debugger replaced only that disposable guest's generic
+U-Boot diagnostic ``ebreak`` with a no-op.  The next captured exception is a
+store access fault at ``setup_ddr_pmp+18``: ``mcause=7``,
+``mepc=0xffe00006ea``, ``mtval=0xffdc020104``.  Public source defines this as
+``PMP_BASE_ADDR + 0x104`` with ``PMP_BASE_ADDR=0xffdc020000``.  It is a later
+SPL security/control boundary, not evidence that physical DRAM initialized.
+
+This checkpoint does not model DDR PLL timing or output frequency, physical
+reset/rail effects, DFI traffic, PHY firmware execution, analog training,
+DRAM contents, rank/width/topology, refresh, retention, warm-reset behavior,
+the vendor-named PMP aperture or OS handoff.  These limits and the safe
+hardware validation needed before any expansion remain in
 ``beaglev-ahead-hardware-validation.md``.
 
 ### Independent Alpine userspace lane

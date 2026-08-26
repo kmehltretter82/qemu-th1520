@@ -80,41 +80,38 @@ rails or widen the controller rule until those observations are available.
 
 Public vendor U-Boot commit ``bbf3994802d4ce64a22ccf795bc6dfe4bb9205da``
 defines DDR SYSREG at ``0xffff005000``.  Its generated LPDDR4 headers name
-``DDR_CFG0`` at offset ``0x0`` and ``DDR_PLL_CFG0``/``DDR_PLL_CFG1`` at
-``0x8``/``0xc``, plus ``DDR_PLL_STS`` at ``0x18``.  CFG0 resets to zero;
-bits 2--3 are reserved and its other bits form the firmware's reset-release
-control field.  The selected 3733 path asserts and releases CFG1 bit 30,
-polls status bit 0, and writes status bit 16 (commented as core-clock gating
-by that source).  This is public-firmware source evidence, not an observation
-of the owner's unpowered board.
+CFG0/CFG1 at ``0x0``/``0x4``, the PLL words at ``0x8``/``0xc``/``0x18``, and
+their reset fields and writable masks.  The selected 3733 LPDDR4X path writes
+those SYSREG words, a DesignWare controller at ``0xffff000000``, and two PHY
+CSR regions at ``0xfffd000000`` and ``0xfffe000000``.  This is public-source
+evidence, not an observation of the owner's unpowered board.
 
-QEMU maps CFG0 as a single four-byte control word, with its generated reset
-value and writable mask (``0xfffffff3``), and maps the three PLL words.  The
-public SPL stages CFG0 values including ``0x40``, ``0xc0`` and ``0xd0`` for
-power-good, PHY-reset and APB-reset release.  QEMU preserves that
-software-visible CFG0 state, but gives those writes no reset, rail, clock,
-controller, PHY, DFI or DRAM effect.  It treats release of CFG1's reset bit as
-an immediate virtual lock transition so the public polling loop can progress.
-Register/reset and migration qtests cover both contracts.  The convention
-does not establish a physical reset value, PLL frequency or lock delay, clock
-output, clock gating, or any DDR functional effect.
+QEMU maps CFG0/CFG1 with source-derived masks and reset values, the PLL words,
+a bounded ``0x3000`` controller window, and the source-used ``0x200000``
+portion of each PHY aperture.  PHY CSR state is 16-bit and migrates.  The
+documented microcontroller trigger sequence produces a virtual mailbox
+success ``0x7``; after both PHYs do so, QEMU exposes the DFI-complete and
+normal-mode controller states that this SPL polls.  Focused register/reset
+and migration qtests cover CFG0/CFG1 and the controller/PHY flow, and the
+existing whole-machine migration qtest still passes.  These are explicitly
+virtual compatibility semantics: no PHY firmware executes, and no analog
+training, DRAM timing, reset/rail effect or physical DFI protocol is modeled.
 
-An unchanged public SPL reaches its LPDDR banner under QEMU.  A debugger-only
-guest-memory change replacing U-Boot's diagnostic trap ``ebreak`` with a
-no-op then exposed a store/AMO access fault from its generic ``wr()`` helper:
-``mcause=7``, ``mepc=0xffe0004150``, and ``mtval=0xffff000304`` (with the
-stored value ``1``).  The public controller header names that address
-``DBG1``, at offset ``0x304`` in the DesignWare uMCTL2 controller aperture.
-QEMU deliberately leaves that controller aperture unmapped.  This shows the
-next firmware boundary, not a controller reset value or DRAM-training result.
+An unchanged public SPL reaches its LPDDR banner and executes through that
+virtual sequence.  Because it has no intermediate progress print, a debugger
+changed only the disposable guest instance's diagnostic ``ebreak`` to a
+no-op.  The next fault is ``mcause=7``, ``mepc=0xffe00006ea``
+(``setup_ddr_pmp+18``), ``mtval=0xffdc020104``: the first zero write to the
+source-defined ``PMP_BASE_ADDR + 0x104`` after DDR setup.  This is a later
+firmware boundary, not proof of DDR initialization or a reason to invent a
+PMP/security model.
 
-Before expanding this model, capture a recoverable stock-firmware boot on the
-owner's board and record the exact accesses, reset class, readback values,
-lock timing and clock rates.  Establish the DDR controller/PHY reset polarity,
-DBG1 semantics, DFI/training status, DRAM part topology/rank/width, rails and
-voltage timing, retention and warm-reset behavior.  Do not map a broad DDR
-aperture, connect the virtual PMIC to rails, or claim DRAM
-initialization/OS handoff until those facts are independently supported.
+Before expanding either model, capture a recoverable stock-firmware boot on
+the owner's board and record exact accesses, reset class, readbacks, lock and
+training timing, clock rates, controller/PHY reset polarity, DRAM topology,
+rails, retention and the vendor-named PMP aperture's ownership and semantics.
+Do not map broad DDR/PMP apertures, connect virtual PMIC state to rails, or
+claim DRAM initialization or OS handoff until independently supported.
 
 ## Safe hardware workflow
 
@@ -203,6 +200,7 @@ version-12 minimum because that version introduced KVM MP-state migration.
 | CPU-014 | OPEN-DOC | What Linux ELF HWCAP/hwprobe and userspace ABI contract prevents ratified-RVV code from running on an XTheadVector-only C910? | During AXI-DMAC validation, a statically linked helper from the host RISC-V glibc/toolchain trapped on an instruction before reaching `main`, while the same helper rebuilt as freestanding scalar `rv64imafdc` code ran correctly. The booted kernel reported base ISA and ELF capabilities `acdfim`, without ratified `v`, so the observation is not yet enough to assign the fault to QEMU, Linux, glibc, compiler defaults or an IFUNC/hwprobe path. It is recorded rather than weakening the C910's required XTheadVector identity. | Preserve the fault PC/instruction, ELF attributes, compiler/linker command, auxv and `riscv_hwprobe` results; identify the selecting libc routine and reproduce with a minimal binary. Run the same binaries on the owner's board and its stock userspace before changing `misa.V`, DT ISA strings, Linux exposure or toolchain flags. |
 | CPU-015 | OPEN-HW | Exact XTheadBa/XTheadCmo availability, privilege and UCME behavior, especially U-mode `th.dcache.cva`? | The frozen XTheadBa/XTheadCmo specifications and published C910 manual require THEADISAEE for the extension instructions, define all four `th.addsl` immediates, make only `th.dcache.civa`, `th.dcache.cval1` and `th.icache.iva` U-capable, and gate those three on UCME. QEMU now follows that contract, including dynamic TB selection after MXSTATUS writes. A freestanding test covers all four addsl forms and all 21 CMOs across M/S/U, UCME set/clear and THEADISAEE set/clear, with 64 exact illegal traps; a second configuration disables XTheadBa while retaining XTheadCmo and checks four more traps. Pinned openC910 RTL commit `b91c90914c19f114d35c8f6b73408eb241ed847c` conflicts with both architectural documents for one operation: its LSU appears to allow U-mode `th.dcache.cva` when UCME is set, while still rejecting `th.dcache.iva`. This may be an RTL revision, documentation, integration or silicon difference and is not silently treated as settled hardware behavior. | Run the exact freestanding payload on every physical hart from reviewed disposable RAM, never from a live OS because it executes whole-cache operations. Record `mcause`, `mtval`, destination values and status-bit readback for both UCME values, especially `dcache.cva`, `dcache.iva` and the three documented U forms. If the owner's silicon agrees with the RTL rather than the manual/spec, add an explicit C910/stepping quirk instead of weakening generic XTheadCmo. |
 | CPU-016 | OPEN-HW | Does the TH1520-integrated C910 implement openC910 FXCR 0x800 exactly, including FS access, DQNaN polarity and FE event semantics; does QEMU preserve that contract across reset and migration? | Pinned official openC910 RTL commit `b91c90914c19f114d35c8f6b73408eb241ed847c` defines FXCR as a 64-bit user read/write CSR, makes access illegal with FS Off and marks FS Dirty after a legal write. It resets to zero and exposes mask `0x0780003f`: bits 26:24 alias FRM; bit 23 is DQNaN, where zero selects the default/canonical NaN and one propagates a source NaN; bit 5 is directly writable and otherwise sticky-ORs an FP exception event; and bits 4:0 alias FFLAGS. Reserved bits are zero. The RTL updates FRM/FFLAGS through FXCR writes, forwards DQNaN to scalar/vector FP datapaths and does not imply that a direct software FFLAGS write is itself an exception event. The local implementation models those fields and aliases, tracks SoftFloat exception events separately from architectural FFLAGS, marks FS Dirty, and has reset handling plus version-3 migration fields and version-specific v1/v2 defaults. The main M/S/U execution guest covers FS gates, aliases, scalar H/S/D and XTheadVector DQNaN behavior, all IEEE exception classes, direct flag writes and repeated already-sticky events. A dedicated TCG qtest migrates a stopped Ahead machine from `DQNaN|NX` into a destination deliberately poisoned with DQNaN clear, FE set and event tracking disabled. Without touching FXCR after load, the destination guest proves qNaN payload propagation and that a new already-sticky NX event sets FE. It then uses retained RAM to select a post-system-reset phase, verifies FS Off, seeds standard FFLAGS.NV without accessing FXCR, executes quiet-NaN `flt.s`, requires FS Dirty, and only then observes `FXCR=FE|NV`. QEMU classifies this host-requested system reset as cold while leaving guest RAM intact; the test proves the emulator reset contract, not physical TH1520 warm-reset or retention behavior. Two additional qtests convert all four C910 CSR subsections in a current sequential savevm stream to synthetic, descriptor-exact v1 53-byte or v2 61-byte layouts, then load poisoned four-hart destinations. The v1 transformation also reproduces parent CPU version 11, accepted only under TCG; KVM retains its version-12 floor. Both retain core CSR, CPUID and standard FRM state. Version 1 defaults its absent PMU interrupt-enable/overflow fields to zero before recomputing and deasserting the vendor cause-17 pending bit; version 2 retains those fields and reconstructs pending state. Both pre-v3 forms default DQNaN, FE and vendor FFLAGS to zero, reconstruct canonical-NaN mode and rearm exception-event tracking before the resumed hart-0 guest's first FXCR access. Pinned genuine four-hart v1/v2 historical streams confirm the respective 53-byte and 61-byte wire layouts. Ahead-scoped, load-only board-device compatibility now lets both streams load completely, and direct qtest reads validate every seeded, version-applicable CSR, CPUID and PMU field on all four harts. The dedicated CPU migration regressions pass in normal, dependency-minimal and ASan/UBSan builds; complete rolling gate totals are recorded above. The generic SoftFloat quick suite passes 17/17, and the slow `fp-test-mulAdd` FMA test passes for f16/f32/f64/f128. Existing fast-path and raised-event mutations fail firmware stages 45 and 46. Three restored current-stream mutations prove post-load NaN reconstruction, post-load event rearming and reset-time event rearming. Four further mutations prove the legacy tests detect missing v1 PMU defaults, missing pre-v3 FXCR defaults, missing post-load NaN reconstruction and missing post-load event rearming. Restoring the parent CPU minimum to 12 makes the synthetic v1 test reject incoming version 11, proving the TCG compatibility path. A dedicated poison gate for a stale SoftFloat raised-event accumulator remains open. Physical capture is untested, and the owner's TH1520 stepping is unidentified, so the pinned RTL remains implementation evidence rather than a silicon measurement. | Add a focused hook/unit gate for the stale raised-event accumulator. Then run the same safe CSR and FP payload on every physical hart. Record reset class and retention separately, silicon/PCB stepping, raw NaN payloads, flags and traps, and add an explicit stepping quirk if the board differs from the pinned RTL. |
+| PMP-001 | OPEN-DOC | What is the vendor-named ``PMP_BASE_ADDR`` MMIO portal at ``0xffdc020000``: ownership, entry layout, reset state, lock behavior and relation to CPU PMP/TEE? | The public SPL clears five words at offsets 0x104, 0x100, 0x10c, 0x108 and 0x000 after its DDR sequence.  Its first write faults in QEMU because the current CLINT mapping ends before this address.  This portal is distinct from the CPU PMP contract tracked by CPU-007; its name and one firmware write sequence do not establish its physical function. | On a recoverable board, first take aligned read-only snapshots before and after stock firmware.  Establish owner, security and reset effects before writing; then replay only the public sequence with a console/JTAG recovery path and compare all affected access controls. |
 | MEM-001 | OPEN-DOC | Exact 4 GiB DRAM usable map, aliases, reserved/secure carveouts and top-of-RAM behavior? | Board DT declares 0x0–0xffffffff, while the SoC exposes a larger DDR aperture and firmware may reserve regions. | Parse stock DT/reserved-memory, boot logs and page tables; safe RAM boundary test from removable boot. |
 | MEM-002 | OPEN-HW | On-chip SRAM/retention RAM size, reset contents, aliases and retention across reset classes? | Manual address map gives regions, but board/silicon behavior and ECC initialization need observation. | Pattern test only in firmware-declared free regions across subsystem, warm and cold reset. |
 | BOOT-001 | OPEN-HW | Exact reset PC, initial hart states, Core0 TEE mode and secondary-hart release sequence? | Manual says C910 starts first and Core0 defaults to TEE; C906/E902 are woken later. QEMU's default direct-boot path sends all four C910 harts through one mask-ROM-aperture trampoline, requests FW_DYNAMIC relocation on hart 0, and adds an `opensbi,config` cold-boot allow-list containing only CPU0 so OpenSBI's second lottery is deterministic. A guest payload proves harts 0-3 reach the common path and emits `0123\n`; repeated Linux boots select hart 0 and bring up four CPUs. The opt-in user-ROM path removes the QEMU trampoline and executes raw bytes at `0xffffd00000`; a synthetic ROM parks harts 1-3 and emits a hart-0 UART marker before and after QEMU reset. QEMU still initially releases all four harts in both modes. These are emulator contracts and do not prove the physical reset PC, TEE state, initially released harts or real release controller. | Capture reset with JTAG if safe and instrument earliest boot code; trace mailbox/reset-vector writes. Compare the same legally held user ROM under emulation and on the owner board without redistributing it. Replace the all-hart convention only after a legally sourced BootROM/reset-controller contract and repeat the payloads across cold, warm and per-core reset. |

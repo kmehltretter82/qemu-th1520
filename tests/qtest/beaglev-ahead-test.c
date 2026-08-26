@@ -12,6 +12,7 @@
 #include "hw/misc/th1520_aon_reset.h"
 #include "hw/misc/th1520_bootsel.h"
 #include "hw/misc/th1520_cpr.h"
+#include "hw/misc/th1520_ddr.h"
 #include "hw/misc/th1520_ddr_control.h"
 #include "hw/misc/th1520_ddr_pll.h"
 #include "hw/misc/th1520_iopmp.h"
@@ -36,7 +37,11 @@
 #define TH1520_PLIC_BASE           0xffd8000000ULL
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
+#define TH1520_DDR_CONTROLLER_BASE 0xffff000000ULL
+#define TH1520_DDR_PHY0_BASE       0xfffd000000ULL
+#define TH1520_DDR_PHY1_BASE       0xfffe000000ULL
 #define TH1520_DDR_CFG0_BASE       0xffff005000ULL
+#define TH1520_DDR_CFG1_BASE       0xffff005004ULL
 #define TH1520_DDR_PLL_CFG0_BASE   0xffff005008ULL
 #define TH1520_DDR_PLL_CFG1_BASE   0xffff00500cULL
 #define TH1520_DDR_PLL_STS_BASE    0xffff005018ULL
@@ -3739,6 +3744,8 @@ static void assert_th1520_ddr_control_reset_state(QTestState *qts)
 {
     g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG0_BASE), ==,
                     TH1520_DDR_CFG0_RESET);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG1_BASE), ==,
+                    TH1520_DDR_CFG1_RESET);
 }
 
 static void test_th1520_ddr_control_registers(void)
@@ -3754,6 +3761,14 @@ static void test_th1520_ddr_control_registers(void)
     qtest_writel(qts, TH1520_DDR_CFG0_BASE, 0x000000d0);
     g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG0_BASE), ==,
                     0x000000d0);
+
+    qtest_writel(qts, TH1520_DDR_CFG1_BASE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG1_BASE), ==,
+                    TH1520_DDR_CFG1_WRITABLE_MASK);
+
+    qtest_writel(qts, TH1520_DDR_CFG1_BASE, 0x000a0000);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CFG1_BASE), ==,
+                    0x000a0000);
 
     qtest_system_reset(qts);
     assert_th1520_ddr_control_reset_state(qts);
@@ -3777,6 +3792,7 @@ static void test_th1520_ddr_control_migration(void)
     dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
 
     qtest_writel(src, TH1520_DDR_CFG0_BASE, 0x000000d0);
+    qtest_writel(src, TH1520_DDR_CFG1_BASE, 0x000a0000);
 
     qtest_qmp_assert_success(src,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -3788,9 +3804,132 @@ static void test_th1520_ddr_control_migration(void)
 
     g_assert_cmphex(qtest_readl(dst, TH1520_DDR_CFG0_BASE), ==,
                     0x000000d0);
+    g_assert_cmphex(qtest_readl(dst, TH1520_DDR_CFG1_BASE), ==,
+                    0x000a0000);
 
     qtest_system_reset(dst);
     assert_th1520_ddr_control_reset_state(dst);
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+}
+
+static void th1520_ddr_phy_complete_training(QTestState *qts, uint64_t base)
+{
+    qtest_writew(qts, base + TH1520_DDR_PHY_TRAINING_TRIGGER, 0x9);
+    qtest_writew(qts, base + TH1520_DDR_PHY_TRAINING_TRIGGER, 0x1);
+    qtest_writew(qts, base + TH1520_DDR_PHY_TRAINING_TRIGGER, 0x0);
+    g_assert_cmphex(qtest_readw(qts, base + TH1520_DDR_PHY_MAILBOX_STATUS),
+                    ==, 0);
+    g_assert_cmphex(qtest_readw(qts, base + TH1520_DDR_PHY_MAILBOX_MSG0),
+                    ==, 0x7);
+    g_assert_cmphex(qtest_readw(qts, base + TH1520_DDR_PHY_MAILBOX_MSG1),
+                    ==, 0);
+    qtest_writew(qts, base + TH1520_DDR_PHY_MAILBOX_ACK, 0);
+    g_assert_cmphex(qtest_readw(qts, base + TH1520_DDR_PHY_MAILBOX_STATUS),
+                    ==, 1);
+}
+
+static void assert_th1520_ddr_reset_state(QTestState *qts)
+{
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_STAT), ==, 0);
+    g_assert_cmphex(qtest_readl(qts,
+                                TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DFISTAT), ==, 0);
+    g_assert_cmphex(qtest_readw(qts,
+                                TH1520_DDR_PHY0_BASE +
+                                TH1520_DDR_PHY_MAILBOX_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readw(qts,
+                                TH1520_DDR_PHY1_BASE +
+                                TH1520_DDR_PHY_MAILBOX_STATUS), ==, 1);
+}
+
+static void test_th1520_ddr_registers(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    assert_th1520_ddr_reset_state(qts);
+
+    qtest_writel(qts, TH1520_DDR_CONTROLLER_BASE + 0x304, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE + 0x304),
+                    ==, 1);
+    qtest_writew(qts, TH1520_DDR_PHY0_BASE + (0x1005f * 2), 0x55f);
+    g_assert_cmphex(qtest_readw(qts,
+                                TH1520_DDR_PHY0_BASE + (0x1005f * 2)),
+                    ==, 0x55f);
+
+    qtest_writel(qts, TH1520_DDR_CONTROLLER_BASE +
+                 TH1520_DDR_CTRL_DFIMISC, 0x30);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DFISTAT), ==, 0);
+    th1520_ddr_phy_complete_training(qts, TH1520_DDR_PHY0_BASE);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DFISTAT), ==, 0);
+    th1520_ddr_phy_complete_training(qts, TH1520_DDR_PHY1_BASE);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DFISTAT), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DCH1_DFISTAT), ==, 1);
+
+    qtest_writel(qts, TH1520_DDR_CONTROLLER_BASE +
+                 TH1520_DDR_CTRL_DFIMISC, 0x11);
+    qtest_writel(qts, TH1520_DDR_CONTROLLER_BASE +
+                 TH1520_DDR_CTRL_SWCTL, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_SWSTAT), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_STAT), ==, 1);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DCH1_STAT), ==, 1);
+
+    qtest_system_reset(qts);
+    assert_th1520_ddr_reset_state(qts);
+    qtest_quit(qts);
+}
+
+static void test_th1520_ddr_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-ddr-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    qtest_writel(src, TH1520_DDR_CONTROLLER_BASE + 0x304, 1);
+    qtest_writew(src, TH1520_DDR_PHY0_BASE + (0x1005f * 2), 0x55f);
+    th1520_ddr_phy_complete_training(src, TH1520_DDR_PHY0_BASE);
+    th1520_ddr_phy_complete_training(src, TH1520_DDR_PHY1_BASE);
+    qtest_writel(src, TH1520_DDR_CONTROLLER_BASE +
+                 TH1520_DDR_CTRL_DFIMISC, 0x30);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmphex(qtest_readl(dst, TH1520_DDR_CONTROLLER_BASE + 0x304),
+                    ==, 1);
+    g_assert_cmphex(qtest_readw(dst,
+                                TH1520_DDR_PHY0_BASE + (0x1005f * 2)),
+                    ==, 0x55f);
+    g_assert_cmphex(qtest_readl(dst, TH1520_DDR_CONTROLLER_BASE +
+                                TH1520_DDR_CTRL_DFISTAT), ==, 1);
+
+    qtest_system_reset(dst);
+    assert_th1520_ddr_reset_state(dst);
     qtest_quit(dst);
     qtest_quit(src);
     g_assert_cmpint(g_unlink(path), ==, 0);
@@ -13645,6 +13784,10 @@ int main(int argc, char **argv)
                        test_th1520_ddr_control_registers);
         qtest_add_func("/beaglev-ahead/ddr-control/migration",
                        test_th1520_ddr_control_migration);
+        qtest_add_func("/beaglev-ahead/ddr/registers",
+                       test_th1520_ddr_registers);
+        qtest_add_func("/beaglev-ahead/ddr/migration",
+                       test_th1520_ddr_migration);
         qtest_add_func("/beaglev-ahead/miscsys/clock-outputs",
                        test_miscsys_clock_outputs);
         qtest_add_func("/beaglev-ahead/miscsys/clock-migration",

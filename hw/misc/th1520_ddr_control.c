@@ -22,7 +22,14 @@ static uint64_t th1520_ddr_control_read(void *opaque, hwaddr offset,
 {
     TH1520DDRControlState *s = opaque;
 
-    return s->cfg0;
+    switch (offset) {
+    case TH1520_DDR_CFG0_OFFSET:
+        return s->cfg0;
+    case TH1520_DDR_CFG1_OFFSET:
+        return s->cfg1;
+    default:
+        g_assert_not_reached();
+    }
 }
 
 static void th1520_ddr_control_write(void *opaque, hwaddr offset,
@@ -30,7 +37,16 @@ static void th1520_ddr_control_write(void *opaque, hwaddr offset,
 {
     TH1520DDRControlState *s = opaque;
 
-    s->cfg0 = value & TH1520_DDR_CFG0_WRITABLE_MASK;
+    switch (offset) {
+    case TH1520_DDR_CFG0_OFFSET:
+        s->cfg0 = value & TH1520_DDR_CFG0_WRITABLE_MASK;
+        break;
+    case TH1520_DDR_CFG1_OFFSET:
+        s->cfg1 = value & TH1520_DDR_CFG1_WRITABLE_MASK;
+        break;
+    default:
+        g_assert_not_reached();
+    }
 }
 
 static const MemoryRegionOps th1520_ddr_control_ops = {
@@ -54,14 +70,28 @@ static void th1520_ddr_control_reset(DeviceState *dev)
     TH1520DDRControlState *s = TH1520_DDR_CONTROL(dev);
 
     s->cfg0 = TH1520_DDR_CFG0_RESET;
+    s->cfg1 = TH1520_DDR_CFG1_RESET;
+}
+
+static int th1520_ddr_control_post_load(void *opaque, int version_id)
+{
+    TH1520DDRControlState *s = opaque;
+
+    if (version_id < 2) {
+        s->cfg1 = TH1520_DDR_CFG1_RESET;
+    }
+
+    return 0;
 }
 
 static const VMStateDescription vmstate_th1520_ddr_control = {
     .name = TYPE_TH1520_DDR_CONTROL,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
+    .post_load = th1520_ddr_control_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(cfg0, TH1520DDRControlState),
+        VMSTATE_UINT32_V(cfg1, TH1520DDRControlState, 2),
         VMSTATE_END_OF_LIST(),
     },
 };

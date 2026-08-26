@@ -86,6 +86,10 @@ static const MemMapEntry th1520_memmap[] = {
     [TH1520_DEV_CLINT] = { 0xffdc000000, 0x00010000 },
     [TH1520_DEV_SRAM]  = { 0xffe0000000, 0x00180000 },
     [TH1520_DEV_AP_CLOCK] = { 0xffef010000, 0x00001000 },
+    [TH1520_DEV_DDR_CONTROLLER] = { 0xffff000000,
+                                     TH1520_DDR_CONTROLLER_MMIO_SIZE },
+    [TH1520_DEV_DDR_PHY0] = { 0xfffd000000, TH1520_DDR_PHY_MMIO_SIZE },
+    [TH1520_DEV_DDR_PHY1] = { 0xfffe000000, TH1520_DDR_PHY_MMIO_SIZE },
     [TH1520_DEV_DDR_CFG0] = { 0xffff005000,
                                TH1520_DDR_CONTROL_MMIO_SIZE },
     [TH1520_DEV_DDR_PLL_CFG0] = { 0xffff005008,
@@ -562,6 +566,14 @@ static void th1520_soc_init(Object *obj)
                             TYPE_THEAD_C900_PLIC);
     object_initialize_child(obj, "ap-clock", &s->ap_clock,
                             TYPE_TH1520_AP_CLOCK);
+    object_initialize_child(obj, "ddr-phy0", &s->ddr_phy[0],
+                            TYPE_TH1520_DDR_PHY);
+    object_initialize_child(obj, "ddr-phy1", &s->ddr_phy[1],
+                            TYPE_TH1520_DDR_PHY);
+    object_initialize_child(obj, "ddr-controller", &s->ddr_controller,
+                            TYPE_TH1520_DDR_CONTROLLER);
+    s->ddr_controller.phy[0] = &s->ddr_phy[0];
+    s->ddr_controller.phy[1] = &s->ddr_phy[1];
     object_initialize_child(obj, "ddr-control", &s->ddr_control,
                             TYPE_TH1520_DDR_CONTROL);
     object_initialize_child(obj, "ddr-pll", &s->ddr_pll,
@@ -806,6 +818,20 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                                 TH1520_VENDOR_UBOOT_AP_CLOCK_BASE,
                                 &s->ap_clock_vendor_alias);
 
+    for (int i = 0; i < ARRAY_SIZE(s->ddr_phy); i++) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_phy[i]), errp)) {
+            return;
+        }
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_phy[i]), 0,
+                        th1520_memmap[TH1520_DEV_DDR_PHY0 + i].base);
+    }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_controller), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_controller), 0,
+                    th1520_memmap[TH1520_DEV_DDR_CONTROLLER].base);
+
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_control), errp)) {
         return;
     }
@@ -813,9 +839,9 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
                     th1520_memmap[TH1520_DEV_DDR_CFG0].base);
 
     /*
-     * The public vendor SPL accesses only these DDR SYSREG words while it
-     * configures the PLL.  They deliberately have no DT node and no modeled
-     * DDR clock or training side effect.
+     * Only generated DDR SYSREG fields used by the current public SPL are
+     * mapped.  They deliberately have no DT node or physical DDR-clock,
+     * reset, rail or training side effect.
      */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_pll), errp)) {
         return;
