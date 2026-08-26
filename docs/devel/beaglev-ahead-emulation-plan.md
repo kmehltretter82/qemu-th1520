@@ -1426,6 +1426,14 @@ single vendor image or a succession of equivalent Linux root filesystems:
 | Portable control | Tuxboot Linux 6.11.9 | Deterministic small ext2 root | Narrow regression and storage control |
 | Vendor firmware checkpoint | Public vendor U-Boot | No OS handoff claimed yet | Firmware configuration progress only |
 
+For a change that can affect direct Linux boot, acceptance requires the first
+two lanes, not a second run of either one.  A firmware-only change instead
+requires the vendor-U-Boot checkpoint plus focused device tests; it must not
+be described as OS boot until it reaches a kernel.  A third distribution is
+useful only when its artifact is pinned and it answers a different question
+(for example glibc/service-startup coverage); it will supplement, not replace,
+these two lanes.
+
 The first row now passes.  A fresh local build of the vendor configuration
 reported Linux ``6.6.141-ga092d5564927`` and Image SHA-256
 ``62393b7b372f354945e20ed9f98fa07b7a4a3953c9b12d137b53c23378ba676e``.
