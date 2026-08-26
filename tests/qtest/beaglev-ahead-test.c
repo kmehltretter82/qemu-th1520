@@ -662,8 +662,14 @@
 #define DMAC_CTL_SRC_INCREMENT_SHIFT    4
 #define DMAC_CTL_DST_INCREMENT_SHIFT    6
 #define DMAC_CTL_SRC_WIDTH_SHIFT        8
+#define DMAC_CTL_DST_WIDTH_SHIFT        11
 #define DMAC_CTL_INCREMENT_NO_CHANGE    1
+#define DMAC_CTL_WIDTH_8                0
 #define DMAC_CTL_WIDTH_16               1
+#define DMAC_CTL_WIDTH_32               2
+#define DMAC_CTL_WIDTH_64               3
+#define DMAC_CTL_WIDTH_128              4
+#define DMAC_CTL_WIDTH_256              5
 #define DMAC_CTL_LLI_LAST          BIT(30)
 #define DMAC_CTL_LLI_VALID         BIT(31)
 #define DMAC_IRQ_BLOCK_TRANSFER    BIT(0)
@@ -3715,6 +3721,137 @@ static void test_dmac_width_and_fixed_address(void)
                     FIXED_DESTINATION_TRANSFERS);
     g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
                                 DMAC_CH_DAR(2)), ==, fixed_destination_addr);
+
+    qtest_quit(qts);
+}
+
+static void test_dmac_advertised_widths(void)
+{
+    enum {
+        E64_TRANSFERS = 6,
+        E64_BYTES = E64_TRANSFERS * 8,
+        E128_TRANSFERS = 257,
+        E128_BYTES = E128_TRANSFERS * 16,
+    };
+    const uint64_t e64_source_addr = DMAC_TEST_SOURCE_ADDR + 0x1000;
+    const uint64_t e64_destination_addr = DMAC_TEST_DEST_ADDR + 0x1000;
+    const uint64_t e128_source_addr = DMAC_TEST_SOURCE_ADDR + 0x3000;
+    const uint64_t e128_destination_addr = DMAC_TEST_DEST_ADDR + 0x3000;
+    const uint64_t invalid_source_addr = DMAC_TEST_SOURCE_ADDR + 0x5000;
+    const uint64_t invalid_destination_addr = DMAC_TEST_DEST_ADDR + 0x5000;
+    uint8_t e64_source[E64_BYTES];
+    uint8_t e64_destination[E64_BYTES];
+    uint8_t e128_source[E128_BYTES];
+    uint8_t e128_destination[E128_BYTES];
+    uint8_t invalid_source[32];
+    uint8_t invalid_destination[32];
+    uint8_t invalid_expected[32];
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+
+    for (unsigned i = 0; i < E64_BYTES; i++) {
+        e64_source[i] = i * 37 + 11;
+    }
+    for (unsigned i = 0; i < E128_BYTES; i++) {
+        e128_source[i] = i * 19 + 7;
+    }
+    memset(e64_destination, 0, sizeof(e64_destination));
+    memset(e128_destination, 0, sizeof(e128_destination));
+    memset(invalid_source, 0x3c, sizeof(invalid_source));
+    memset(invalid_destination, 0xa5, sizeof(invalid_destination));
+    memset(invalid_expected, 0xa5, sizeof(invalid_expected));
+
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CFG, DMAC_CFG_ENABLE);
+
+    /* BLOCK_TS counts source transfers, even when the destination is wider. */
+    qtest_memwrite(qts, e64_source_addr, e64_source, sizeof(e64_source));
+    qtest_memwrite(qts, e64_destination_addr, e64_destination,
+                   sizeof(e64_destination));
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(0), e64_source_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(0),
+                  e64_destination_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(0),
+                  E64_TRANSFERS - 1);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(0),
+                  (uint64_t)DMAC_CTL_WIDTH_64 <<
+                  DMAC_CTL_SRC_WIDTH_SHIFT |
+                  (uint64_t)DMAC_CTL_WIDTH_128 <<
+                  DMAC_CTL_DST_WIDTH_SHIFT);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(0) | DMAC_CH_ENABLE_WE(0));
+    qtest_memread(qts, e64_destination_addr, e64_destination,
+                  sizeof(e64_destination));
+    g_assert_cmpmem(e64_destination, sizeof(e64_destination), e64_source,
+                    sizeof(e64_source));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(0)), ==,
+                    e64_source_addr + sizeof(e64_source));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(0)), ==,
+                    e64_destination_addr + sizeof(e64_destination));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_STATUS(0)), ==,
+                    E64_TRANSFERS - 1);
+
+    /* The advertised 128-bit mode must preserve a transfer after 4 KiB. */
+    qtest_memwrite(qts, e128_source_addr, e128_source, sizeof(e128_source));
+    qtest_memwrite(qts, e128_destination_addr, e128_destination,
+                   sizeof(e128_destination));
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(1), e128_source_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(1),
+                  e128_destination_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(1),
+                  E128_TRANSFERS - 1);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(1),
+                  (uint64_t)DMAC_CTL_WIDTH_128 <<
+                  DMAC_CTL_SRC_WIDTH_SHIFT |
+                  (uint64_t)DMAC_CTL_WIDTH_128 <<
+                  DMAC_CTL_DST_WIDTH_SHIFT);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(1) | DMAC_CH_ENABLE_WE(1));
+    qtest_memread(qts, e128_destination_addr, e128_destination,
+                  sizeof(e128_destination));
+    g_assert_cmpmem(e128_destination, sizeof(e128_destination), e128_source,
+                    sizeof(e128_source));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(1)), ==,
+                    e128_source_addr + sizeof(e128_source));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(1)), ==,
+                    e128_destination_addr + sizeof(e128_destination));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_STATUS(1)), ==,
+                    E128_TRANSFERS - 1);
+
+    /* DT code 4 makes the next width code invalid for this controller. */
+    qtest_memwrite(qts, invalid_source_addr, invalid_source,
+                   sizeof(invalid_source));
+    qtest_memwrite(qts, invalid_destination_addr, invalid_destination,
+                   sizeof(invalid_destination));
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_SAR(2),
+                  invalid_source_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_DAR(2),
+                  invalid_destination_addr);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_BLOCK_TS(2), 0);
+    qtest_writeq(qts, TH1520_DMAC0_BASE + DMAC_CH_CTL(2),
+                  (uint64_t)DMAC_CTL_WIDTH_256 <<
+                  DMAC_CTL_SRC_WIDTH_SHIFT |
+                  (uint64_t)DMAC_CTL_WIDTH_256 <<
+                  DMAC_CTL_DST_WIDTH_SHIFT);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CH_INTSTATUS_EN(2),
+                  DMAC_IRQ_INVALID_ERROR);
+    qtest_writel(qts, TH1520_DMAC0_BASE + DMAC_CHEN,
+                  DMAC_CH_ENABLE(2) | DMAC_CH_ENABLE_WE(2));
+    qtest_memread(qts, invalid_destination_addr, invalid_destination,
+                  sizeof(invalid_destination));
+    g_assert_cmpmem(invalid_destination, sizeof(invalid_destination),
+                    invalid_expected, sizeof(invalid_expected));
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_SAR(2)), ==, invalid_source_addr);
+    g_assert_cmphex(qtest_readq(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_DAR(2)), ==, invalid_destination_addr);
+    g_assert_cmphex(qtest_readl(qts, TH1520_DMAC0_BASE +
+                                DMAC_CH_INTSTATUS(2)), ==,
+                    DMAC_IRQ_INVALID_ERROR);
 
     qtest_quit(qts);
 }
@@ -12082,6 +12219,8 @@ int main(int argc, char **argv)
                        test_dmac_direct_transfer);
         qtest_add_func("/beaglev-ahead/dmac/width-fixed-address",
                        test_dmac_width_and_fixed_address);
+        qtest_add_func("/beaglev-ahead/dmac/advertised-widths",
+                       test_dmac_advertised_widths);
         qtest_add_func("/beaglev-ahead/dmac/linked-list",
                        test_dmac_linked_list);
         qtest_add_func("/beaglev-ahead/dmac/migration",
