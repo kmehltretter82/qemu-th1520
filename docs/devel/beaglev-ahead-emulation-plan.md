@@ -758,8 +758,10 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   implements Auto CMD23 and 128-bit 64-address ADMA2 descriptors, and restores
   its interrupt output after migration.  The Ahead eMMC alone enables a
   synthetic eMMC 5.1 profile with 1.8 V HS200/HS400, legal CMD6 transitions,
-  standard four-bit/eight-bit CMD21 data and SDHCI Execute Tuning consumption;
-  generic eMMC behavior is unchanged.  Its focused migration test now carries
+  standard four-bit/eight-bit CMD21 data, SDHCI Execute Tuning consumption and
+  acceptance of the controller's V18 selection.  That voltage acceptance is
+  limited to this opt-in profile; generic eMMC behavior is unchanged.  Its
+  focused migration test now carries
   completed tuning with ``RBUFRDY`` pending, checks the status and enable
   words plus quiescent HS200 sampled-clock state, and proves direct eMMC IRQ
   reconstruction and data-reset deassertion before a final HS400 migration.
@@ -1360,13 +1362,18 @@ IRQ, a card interface, a DT node, or physical reset state.
 
 A 15-second direct U-Boot run with that word mapped now gets past the former
 fault and reaches eMMC environment loading.  It still does not reach OS
-handoff.  The bounded QEMU diagnostic log contains repeated ``SD card voltage
-not supported: 1.800V`` and ``eMMC: CMD8 in a wrong state: idle`` messages;
-their causal relation to the stop is not established.  This remains a
-firmware configuration checkpoint, not a boot-success claim.  The exact reset
-contents, ownership, aliases and functional effects of these windows, and the
-vendor-firmware storage sequence, still require hardware or stronger
-public-source evidence.
+handoff.  Its retained pre-fix diagnostic log contained repeated ``SD card
+voltage not supported: 1.800V`` messages despite the Ahead-only eMMC profile
+already advertising 1.8 V HS200/HS400 support.  QEMU now accepts the SDHCI
+V18 selection for that profile alone, and the focused ``emmc-v18`` qtest
+asserts that it no longer emits that false guest error.  This removes an
+internal QEMU profile mismatch; it neither attributes the old ``eMMC: CMD8 in
+a wrong state: idle`` diagnostic nor establishes a causal relation to the
+firmware stop.  It remains a firmware configuration checkpoint, not a
+boot-success claim.  The exact reset contents, ownership, aliases and
+functional effects of these windows, the vendor-firmware storage sequence and
+physical voltage switching still require hardware or stronger public-source
+evidence.
 
 The same public TH1520 System User Manual identifies the REE system-control
 base as ``0xffef018000`` and ``BOOT_SEL`` as its offset ``0x10``.  Its low
@@ -1518,6 +1525,14 @@ four ``ALPINE_*_PASS`` markers in
 ``validation-artifacts/beaglev-ahead-alpine-revyos.log``.  That cross-pair is
 now the preferred validation lane: it exercises vendor TH1520 drivers without
 letting a vendor userspace hide a matching assumption.
+
+After the profile's V18 correction, this vendor-kernel/Alpine lane again
+reached all four ``ALPINE_*_PASS`` markers in
+``validation-artifacts/beaglev-ahead-alpine-revyos-v18.log``.  The independent
+Tuxboot/ext2 ``test_emmc_root`` control again reached
+``EMMC_PROCESS_REOPEN_PASS``.  These reruns validate the storage change across
+the two chosen lanes; they do not add a third OS claim or establish physical
+voltage behavior.
 
 It is still not a stock RevyOS image or normal Alpine boot: the test launches
 ``/bin/sh`` directly and retains known GPIO registration and missing

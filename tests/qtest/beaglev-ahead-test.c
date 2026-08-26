@@ -9382,6 +9382,41 @@ static void test_dwcmshc_emmc_hs400_profile(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+static void test_dwcmshc_emmc_v18(void)
+{
+    const uint64_t base = TH1520_EMMC_BASE;
+    g_autofree char *image = dwcmshc_create_image(NULL, 0);
+    g_autofree char *log_path = NULL;
+    g_autofree char *log = NULL;
+    g_autoptr(GError) error = NULL;
+    QTestState *qts;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-emmc-v18-XXXXXX", &log_path,
+                         &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+
+    qts = qtest_initf(
+        "-machine beaglev-ahead -bios none "
+        "-drive if=sd,index=0,file=%s,format=raw,auto-read-only=off "
+        "-d guest_errors -D %s",
+        image, log_path);
+    qtest_writew(qts, base + SDHC_HOSTCTL2,
+                 R_SDHC_HOSTCTL2_V18_ENA_MASK);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_HOSTCTL2) &
+                    R_SDHC_HOSTCTL2_V18_ENA_MASK, ==,
+                    R_SDHC_HOSTCTL2_V18_ENA_MASK);
+    qtest_quit(qts);
+
+    g_assert_true(g_file_get_contents(log_path, &log, NULL, &error));
+    g_assert_no_error(error);
+    g_assert_null(strstr(log, "SD card voltage not supported"));
+    g_assert_cmpint(g_unlink(log_path), ==, 0);
+    g_assert_cmpint(g_unlink(image), ==, 0);
+}
+
 static void dwcmshc_write_adma_address(QTestState *qts, uint64_t base,
                                         uint64_t address)
 {
@@ -13410,6 +13445,8 @@ int main(int argc, char **argv)
                        test_dwcmshc_sd_tuning);
         qtest_add_func("/beaglev-ahead/dwcmshc/emmc-hs400-profile",
                        test_dwcmshc_emmc_hs400_profile);
+        qtest_add_func("/beaglev-ahead/dwcmshc/emmc-v18",
+                       test_dwcmshc_emmc_v18);
         qtest_add_func("/beaglev-ahead/dwcmshc/emmc-tuning-migration",
                        test_dwcmshc_emmc_tuning_migration);
         qtest_add_func("/beaglev-ahead/dwcmshc/v4-64bit-adma",

@@ -426,6 +426,17 @@ timing or behavior of the owner's silicon.
 
 ## Portable Linux eMMC-root checkpoint
 
+### 1.8 V eMMC modeling boundary
+
+The Ahead-only synthetic eMMC profile advertises HS200/HS400 at 1.8 V and now
+accepts the SDHCI V18 selection for that profile instead of emitting a false
+unsupported-voltage diagnostic.  The focused ``emmc-v18`` qtest verifies that
+digital capability acknowledgement.  It does not model a PMIC, rail control,
+voltage-switch timing, pad/level-shifter behavior, eMMC identity or the
+owner's board; those remain open under ``SD-001`` and ``SD-002``.  The retained
+vendor-U-Boot trace's later CMD8 diagnostic and lack of OS handoff are not
+attributed to voltage by this change.
+
 The ``SD-001`` software gate additionally pins these non-official assets:
 
 * Linux 6.11.9 RISC-V ``Image`` from

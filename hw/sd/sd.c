@@ -336,6 +336,18 @@ static void sd_set_voltage(SDState *sd, uint16_t millivolts)
     trace_sdcard_set_voltage(millivolts);
 
     switch (millivolts) {
+    case 1700 ... 1950: /* SD_VOLTAGE_1_8V */
+        /*
+         * This opt-in eMMC profile advertises HS200/HS400 at 1.8 V through
+         * EXT_CSD.  Keep the generic SD/MMC voltage rejection unchanged.
+         */
+        if (sd->emmc_5_1_hs400_1_8v) {
+            break;
+        }
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "SD card voltage not supported: %.3fV",
+                      millivolts / 1000.f);
+        return;
     case 3001 ... 3600: /* SD_VOLTAGE_3_3V */
     case 2001 ... 3000: /* SD_VOLTAGE_3_0V */
         break;
