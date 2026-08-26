@@ -33,6 +33,7 @@
 #define TH1520_SRAM_BASE           0xffe0000000ULL
 #define TH1520_AP_CLOCK_BASE       0xffef010000ULL
 #define TH1520_VENDOR_UBOOT_AP_CLOCK_BASE 0xffff011000ULL
+#define TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE 0xffff0151b0ULL
 #define TH1520_VENDOR_UBOOT_USB_CLOCK_BASE 0xfffc02d104ULL
 #define TH1520_TEE_MISCSYS_CLOCK_BASE 0xfffc02d120ULL
 #define TH1520_AON_AUDIO_RESET_BASE  0xfffff4403cULL
@@ -3139,6 +3140,8 @@ static void test_ap_reset_registers(void)
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x070), ==, 0x3);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x14c), ==, 0x3);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x1b0), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE),
+                    ==, 0);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x204), ==, 0xf);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0x8);
 
@@ -3150,11 +3153,20 @@ static void test_ap_reset_registers(void)
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x0cc), ==, 0x2);
     qtest_writel(qts, TH1520_AP_RESET_BASE + 0x220, UINT32_MAX);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0xf);
+    qtest_writel(qts, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE, UINT32_MAX);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x1b0), ==, 1);
+    qtest_writel(qts, TH1520_AP_RESET_BASE + 0x1b0, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE),
+                    ==, 0);
+    qtest_writel(qts, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE, 1);
 
     qtest_system_reset(qts);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x004), ==, 0x3);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x0cc), ==, 0x2);
     g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x220), ==, 0x8);
+    g_assert_cmphex(qtest_readl(qts, TH1520_AP_RESET_BASE + 0x1b0), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE),
+                    ==, 0);
     qtest_quit(qts);
 }
 
@@ -11174,7 +11186,7 @@ static void test_ap_cpr_migration(void)
                     unlocked);
     qtest_writel(src, TH1520_AP_CLOCK_BASE + TH1520_PERI_CLK_CFG, 0);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x004, 0x1f);
-    qtest_writel(src, TH1520_AP_RESET_BASE + 0x1b0, 1);
+    qtest_writel(src, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE, 1);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x0c0, 0x2);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x084, 0x2);
     qtest_writel(src, TH1520_AP_RESET_BASE + 0x208, 0x2);
@@ -11196,6 +11208,8 @@ static void test_ap_cpr_migration(void)
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x004), ==,
                     0x1f);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x1b0), ==, 1);
+    g_assert_cmphex(qtest_readl(dst, TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE),
+                    ==, 1);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x0c0), ==, 2);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x084), ==, 2);
     g_assert_cmphex(qtest_readl(dst, TH1520_AP_RESET_BASE + 0x208), ==, 2);

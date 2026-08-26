@@ -1415,10 +1415,16 @@ them to zero and migrates them; it creates no complete AON aperture or reset
 outputs.  Focused mask/reset and migration qtests pass.
 
 With the word present, the same trace reaches ``light_post_reset_config()``
-and next writes ``0xffff0151b0``, a source-labelled AP reset-generator entry.
-That is a new bounded compatibility question, not proof that the staged
-firmware reaches serial output, loads U-Boot successfully or matches physical
-hardware reset effects.
+and writes ``0xffff0151b0``, its source-labelled NPU AP-reset entry.  The
+generated DT exposes the same AP-reset word at ``0xffef0141b0``.  QEMU maps
+only the exact four-byte vendor address as a shared-state compatibility alias;
+focused bidirectional/reset and migration qtests pass.  It does not map a
+fullmask reset aperture, create a DT node or connect an NPU reset output.
+
+The bounded trace now advances to the following source-labelled DSP sysreg
+write at ``0xffff041028``.  That is the next compatibility question, not
+proof that the staged firmware reaches serial output, loads U-Boot
+successfully or matches physical hardware reset effects.
 
 ### Independent Alpine userspace lane
 

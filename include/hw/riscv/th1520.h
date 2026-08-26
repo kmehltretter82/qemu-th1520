@@ -61,6 +61,7 @@ struct TH1520SoCState {
     TH1520APClockState ap_clock;
     MemoryRegion ap_clock_vendor_alias;
     TH1520APResetState ap_reset;
+    MemoryRegion ap_reset_vendor_npu_alias;
     TH1520AONResetState aon_reset;
     TH1520MiscSysState miscsys;
     MemoryRegion tee_miscsys_usb_clock_alias;

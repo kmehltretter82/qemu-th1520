@@ -57,6 +57,17 @@
 #define TH1520_VENDOR_UBOOT_AP_CLOCK_BASE 0xffff011000ULL
 
 /*
+ * Vendor SPL writes the NPU reset-generator word through this fullmask
+ * address, while the generated DT exposes the AP reset block at
+ * 0xffef014000.  Map only this source-backed word as a shared compatibility
+ * alias until hardware establishes its aperture, aliasing and reset effects.
+ * It deliberately has no DT node and no NPU reset output.
+ */
+#define TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE 0xffff0151b0ULL
+#define TH1520_VENDOR_UBOOT_AP_RESET_NPU_OFFSET 0x1b0
+#define TH1520_VENDOR_UBOOT_AP_RESET_NPU_SIZE 0x4
+
+/*
  * Vendor U-Boot enables the four USB gates through this TEE-misc address,
  * whereas vendor Linux describes the gate register at REE misc-system +
  * 0x104.  Keep the precise compatibility access shared with the REE state;
@@ -761,6 +772,15 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->ap_reset), 0,
                     th1520_memmap[TH1520_DEV_AP_RESET].base);
+    memory_region_init_alias(&s->ap_reset_vendor_npu_alias, OBJECT(dev),
+                             "th1520.ap-reset-vendor-npu-alias",
+                             sysbus_mmio_get_region(
+                                 SYS_BUS_DEVICE(&s->ap_reset), 0),
+                             TH1520_VENDOR_UBOOT_AP_RESET_NPU_OFFSET,
+                             TH1520_VENDOR_UBOOT_AP_RESET_NPU_SIZE);
+    memory_region_add_subregion(system_memory,
+                                TH1520_VENDOR_UBOOT_AP_RESET_NPU_BASE,
+                                &s->ap_reset_vendor_npu_alias);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->aon_reset), errp)) {
         return;
