@@ -310,6 +310,66 @@ _start:
     li      a2, 12
     call    check_16
 
+    /*
+     * Exercise vector-index gather at every supported element width.  The
+     * e8,m2 case also requires VLMAX to scale across a register group.
+     */
+    lla     a0, expected
+    lla     a1, gather8m2_source
+    lla     a2, gather8m2_index
+    call    oracle_gather_vv_e8m2
+    li      t1, 32
+    .word   0x00137057      /* th.vsetvli zero, t1, e8, m2 */
+    lla     t2, gather8m2_source
+    .word   0x0203f107      /* th.vle.v v2, (t2) */
+    lla     t2, gather8m2_index
+    .word   0x0203f207      /* th.vle.v v4, (t2) */
+    .word   0x32220357      /* th.vrgather.vv v6, v2, v4 */
+    lla     t2, output
+    .word   0x0203f327      /* th.vse.v v6, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 21
+    call    check_16
+    li      a2, 22
+    call    check_16
+
+    lla     a0, expected
+    lla     a1, gather16_source
+    lla     a2, gather16_index
+    call    oracle_gather_vv_e16
+    li      t1, 8
+    .word   0x00437057      /* th.vsetvli zero, t1, e16, m1 */
+    lla     t2, gather16_source
+    .word   0x0203f087      /* th.vle.v v1, (t2) */
+    lla     t2, gather16_index
+    .word   0x0203f107      /* th.vle.v v2, (t2) */
+    .word   0x321101d7      /* th.vrgather.vv v3, v1, v2 */
+    lla     t2, output
+    .word   0x0203f1a7      /* th.vse.v v3, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 23
+    call    check_16
+
+    lla     a0, expected
+    lla     a1, gather32_source
+    lla     a2, gather32_index
+    call    oracle_gather_vv_e32
+    li      t1, 4
+    .word   0x00837057      /* th.vsetvli zero, t1, e32, m1 */
+    lla     t2, gather32_source
+    .word   0x0203f087      /* th.vle.v v1, (t2) */
+    lla     t2, gather32_index
+    .word   0x0203f107      /* th.vle.v v2, (t2) */
+    .word   0x321101d7      /* th.vrgather.vv v3, v1, v2 */
+    lla     t2, output
+    .word   0x0203f1a7      /* th.vse.v v3, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 24
+    call    check_16
+
     /* Every e64 vector index bit participates in the vrgather.vv bound. */
     lla     a0, expected
     lla     a1, gather64_source
@@ -500,6 +560,70 @@ oracle_gather_vv_e64:
     bltu    t0, t6, .Lgather_vv_e64_loop
     ret
 
+/* a0 expected, a1 source, a2 indices.  VLMAX is 32 for e8,m2. */
+oracle_gather_vv_e8m2:
+    li      t0, 0
+    li      t6, 32
+.Lgather_vv_e8m2_loop:
+    add     t2, a2, t0
+    lbu     t3, 0(t2)
+    bgeu    t3, t6, .Lgather_vv_e8m2_zero
+    add     t4, a1, t3
+    lbu     t5, 0(t4)
+    j       .Lgather_vv_e8m2_store
+.Lgather_vv_e8m2_zero:
+    li      t5, 0
+.Lgather_vv_e8m2_store:
+    add     t4, a0, t0
+    sb      t5, 0(t4)
+    addi    t0, t0, 1
+    bltu    t0, t6, .Lgather_vv_e8m2_loop
+    ret
+
+/* a0 expected, a1 source, a2 indices.  VLMAX is 8 for e16,m1. */
+oracle_gather_vv_e16:
+    li      t0, 0
+    li      t6, 8
+.Lgather_vv_e16_loop:
+    slli    t1, t0, 1
+    add     t2, a2, t1
+    lhu     t3, 0(t2)
+    bgeu    t3, t6, .Lgather_vv_e16_zero
+    slli    t3, t3, 1
+    add     t4, a1, t3
+    lhu     t5, 0(t4)
+    j       .Lgather_vv_e16_store
+.Lgather_vv_e16_zero:
+    li      t5, 0
+.Lgather_vv_e16_store:
+    add     t4, a0, t1
+    sh      t5, 0(t4)
+    addi    t0, t0, 1
+    bltu    t0, t6, .Lgather_vv_e16_loop
+    ret
+
+/* a0 expected, a1 source, a2 indices.  VLMAX is 4 for e32,m1. */
+oracle_gather_vv_e32:
+    li      t0, 0
+    li      t6, 4
+.Lgather_vv_e32_loop:
+    slli    t1, t0, 2
+    add     t2, a2, t1
+    lwu     t3, 0(t2)
+    bgeu    t3, t6, .Lgather_vv_e32_zero
+    slli    t3, t3, 2
+    add     t4, a1, t3
+    lw      t5, 0(t4)
+    j       .Lgather_vv_e32_store
+.Lgather_vv_e32_zero:
+    li      t5, 0
+.Lgather_vv_e32_store:
+    add     t4, a0, t1
+    sw      t5, 0(t4)
+    addi    t0, t0, 1
+    bltu    t0, t6, .Lgather_vv_e32_loop
+    ret
+
 check_16:
     li      t0, 16
 .Lcheck_loop:
@@ -569,13 +693,33 @@ gather64_source:
     .dword  0x1122334455667788, 0x99aabbccddeeff00
 gather64_index:
     .dword  0x0000000100000000, 1
+gather8m2_source:
+    .byte   0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47
+    .byte   0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+    .byte   0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57
+    .byte   0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f
+gather8m2_index:
+    .byte   31, 0, 1, 32, 0xff, 15, 16, 30
+    .byte   2, 29, 3, 28, 4, 27, 5, 26
+    .byte   6, 25, 7, 24, 8, 23, 9, 22
+    .byte   10, 21, 11, 20, 12, 19, 13, 18
+    .balign 16
+gather16_source:
+    .half   0x1122, 0x3344, 0x5566, 0x7788
+    .half   0x99aa, 0xbbcc, 0xddee, 0xff00
+gather16_index:
+    .half   7, 0, 8, 0xffff, 1, 6, 2, 5
+gather32_source:
+    .word   0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00
+gather32_index:
+    .word   3, 0, 4, 0xffffffff
 
     .data
     .balign 16
 expected:
-    .space  16
+    .space  32
 output:
-    .space  16
+    .space  32
 trap_v0_output:
     .space  16
 semiargs:
