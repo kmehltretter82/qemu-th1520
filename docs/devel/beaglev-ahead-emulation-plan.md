@@ -1282,6 +1282,34 @@ explicitly skips CMD21 during HS400 preparation, so this gate proves EXT_CSD
 negotiation, CMD6 transitions and HS400 block discovery, not QEMU's tuning
 data or IRQ path.
 
+### Independent vendor-kernel lane
+
+To avoid treating the portable Linux test as the only software contract, the
+workspace also builds RevyOS's ``th1520-lts`` kernel at
+``a092d55649279e1c9bcda2769b8f6b4370fa2c94`` with its TH1520 configuration.
+The resulting ``Image`` SHA-256 is
+``fd205e1d5fb19d69276bf233ec8a44eba7301f95a43280f5f5329e828561e086``.
+With QEMU's generated DT and the deterministic eMMC test image, it enumerates
+the HS400 card, mounts ext2 root and emits
+``REVYOS_VENDOR_EMMC_ROOT_PASS``.  The existing 6.11.9 Tuxboot kernel reaches
+the same checkpoint with ``MAINLINE_EMMC_ROOT_PASS``.
+
+The generated MSHC nodes list both the older
+``xuantie,th1520-dwcmshc`` and upstream ``thead,th1520-dwcmshc`` compatibles.
+They use a dedicated fixed 198 MHz ``mshc-input`` clock.  This avoids claiming
+either the vendor AP clock-provider ID space or the upstream one for a QEMU
+device whose input is currently fixed; it also avoids colliding with the
+upstream provider's ``emmc-sdio`` output name.  The AP clock-controller node
+remains the upstream one-parent ``thead,th1520-clk-ap`` binding.  RevyOS's
+three-parent XuanTie AP-clock ABI is therefore deliberately not claimed by the
+generated DT.
+
+This is a kernel-diversity storage check, not an official image, normal distro
+init or hardware comparison.  In the vendor boot, non-storage devices remain
+deferred and the runtime console is unavailable; GPIO registration warnings
+also remain.  The binding split and the required hardware/stock-DTB comparison
+are tracked as ``DT-002`` in the validation ledger.
+
 A separate portable Linux 6.11.9 functional test wraps the pinned ext2 rootfs
 at MBR partition sector 2048 with disk signature ``0x1520a110`` and uses
 ``root=PARTUUID=1520a110-01``.  Both the ``maxcpus=1`` test and a four-hart

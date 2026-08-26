@@ -1191,6 +1191,10 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const i2c_compat[] = {
         "thead,th1520-i2c", "snps,designware-i2c"
     };
+    static const char *const mshc_compat[] = {
+        /* The vendor kernel retained the older XuanTie binding spelling. */
+        "xuantie,th1520-dwcmshc", "thead,th1520-dwcmshc"
+    };
     static const char *const dmac_clock_names[] = {
         "core-clk", "cfgr-clk"
     };
@@ -1231,6 +1235,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
     uint32_t rtc_clock_phandle;
+    uint32_t mshc_clock_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[TH1520_PADCTRL_COUNT];
@@ -1372,6 +1377,24 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                             "clock-output-names", "rtc_clk");
     qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "phandle",
                           rtc_clock_phandle);
+
+    /*
+     * The vendor and mainline TH1520 clock controllers use incompatible
+     * clock-ID namespaces.  QEMU's DWC MSHC model currently has a fixed
+     * 198 MHz input, so describe that input directly rather than claiming an
+     * AP-clock-controller ID.  This does not model runtime AP clock gating.
+     */
+    mshc_clock_phandle = phandle++;
+    qemu_fdt_add_subnode(ms->fdt, "/mshc-clock");
+    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "#clock-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "clock-frequency",
+                          TH1520_MSHC_INPUT_FREQ);
+    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "clock-output-names",
+                            "mshc-input");
+    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "phandle",
+                          mshc_clock_phandle);
 
     ap_clock_phandle = phandle++;
     qemu_fdt_add_subnode(ms->fdt,
@@ -1802,14 +1825,15 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         char alias[8];
 
         qemu_fdt_add_subnode(ms->fdt, name);
-        qemu_fdt_setprop_string(ms->fdt, name, "compatible",
-                                "thead,th1520-dwcmshc");
+        qemu_fdt_setprop_string_array(ms->fdt, name, "compatible",
+                                      (char **)&mshc_compat,
+                                      ARRAY_SIZE(mshc_compat));
         qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
                                      2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
                                th1520_mshc_irqs[i], 4);
-        qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
-                               ap_clock_phandle, TH1520_CLK_EMMC_SDIO);
+        qemu_fdt_setprop_cell(ms->fdt, name, "clocks",
+                              mshc_clock_phandle);
         qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "core");
         qemu_fdt_setprop_cell(ms->fdt, name, "max-frequency",
                               TH1520_MSHC_INPUT_FREQ);

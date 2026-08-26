@@ -1552,8 +1552,11 @@ static void assert_gmac_fdt(const void *fdt,
 
 static void assert_dwcmshc_fdt(const void *fdt,
                                const DWCMSHCController *controller,
-                               uint32_t clock_phandle)
+                               uint32_t mshc_clock_phandle)
 {
+    static const char *const compat[] = {
+        "xuantie,th1520-dwcmshc", "thead,th1520-dwcmshc",
+    };
     g_autofree char *path =
         g_strdup_printf("/soc/mmc@%" PRIx64, controller->base);
     const fdt32_t *cells;
@@ -1567,7 +1570,8 @@ static void assert_dwcmshc_fdt(const void *fdt,
 
     text = fdt_getprop(fdt, node, "compatible", &len);
     g_assert_nonnull(text);
-    g_assert_cmpstr(text, ==, "thead,th1520-dwcmshc");
+    assert_fdt_stringlist(fdt, node, "compatible", compat,
+                          ARRAY_SIZE(compat));
     text = fdt_getprop(fdt, node, "status", &len);
     g_assert_nonnull(text);
     g_assert_cmpstr(text, ==, "okay");
@@ -1592,9 +1596,8 @@ static void assert_dwcmshc_fdt(const void *fdt,
 
     cells = fdt_getprop(fdt, node, "clocks", &len);
     g_assert_nonnull(cells);
-    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
-    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, clock_phandle);
-    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, TH1520_CLK_EMMC_SDIO);
+    g_assert_cmpint(len, ==, sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, mshc_clock_phandle);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "max-frequency"), ==,
                     198000000);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "bus-width"), ==,
@@ -2253,6 +2256,7 @@ static void test_direct_boot_contract(void)
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
     uint32_t rtc_clock_phandle;
+    uint32_t mshc_clock_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[ARRAY_SIZE(th1520_padctrls)];
@@ -2339,6 +2343,21 @@ static void test_direct_boot_contract(void)
     rtc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
     g_assert_cmphex(rtc_clock_phandle, !=, 0);
 
+    clock_offset = fdt_path_offset(fdt, "/mshc-clock");
+    g_assert_cmpint(clock_offset, >=, 0);
+    compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "fixed-clock");
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==,
+                    0);
+    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
+                    198000000);
+    compatible = fdt_getprop(fdt, clock_offset, "clock-output-names", &len);
+    g_assert_nonnull(compatible);
+    g_assert_cmpstr(compatible, ==, "mshc-input");
+    mshc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
+    g_assert_cmphex(mshc_clock_phandle, !=, 0);
+
     clock_offset = fdt_path_offset(fdt,
                                    "/soc/clock-controller@ffef010000");
     g_assert_cmpint(clock_offset, >=, 0);
@@ -2376,7 +2395,7 @@ static void test_direct_boot_contract(void)
 
     for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
         assert_dwcmshc_fdt(fdt, &dwcmshc_controllers[i],
-                           ap_clock_phandle);
+                           mshc_clock_phandle);
     }
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
@@ -2420,8 +2439,6 @@ static void test_direct_boot_contract(void)
                              gmac0_pins_phandle);
 
     g_assert_cmpint(fdt_path_offset(fdt, "/dmac-clock"), ==,
-                    -FDT_ERR_NOTFOUND);
-    g_assert_cmpint(fdt_path_offset(fdt, "/mshc-clock"), ==,
                     -FDT_ERR_NOTFOUND);
     g_assert_cmpint(fdt_path_offset(fdt, "/gmac-axi-clock"), ==,
                     -FDT_ERR_NOTFOUND);
