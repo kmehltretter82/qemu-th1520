@@ -90,6 +90,9 @@ static const MemMapEntry th1520_memmap[] = {
                                         TH1520_TEE_MISCSYS_CLOCK_MMIO_SIZE },
     [TH1520_DEV_TEE_DSP_RESET] = { 0xffff041028,
                                     TH1520_TEE_DSP_RESET_MMIO_SIZE },
+    [TH1520_DEV_TEE_VOSYS_DPU_RESET] = {
+        0xffff529004, TH1520_TEE_VOSYS_DPU_RESET_MMIO_SIZE
+    },
     [TH1520_DEV_VISYS] = { 0xffe4040000, 0x00001000 },
     [TH1520_DEV_VOSYS] = { 0xffef528000, 0x00001000 },
     [TH1520_DEV_ISO7816_CONFIG] = { 0xfff7f30010,
@@ -529,6 +532,8 @@ static void th1520_soc_init(Object *obj)
                             TYPE_TH1520_TEE_MISCSYS_CLOCK);
     object_initialize_child(obj, "tee-dsp-reset", &s->tee_dsp_reset,
                             TYPE_TH1520_TEE_DSP_RESET);
+    object_initialize_child(obj, "tee-vosys-dpu-reset", &s->tee_vosys_dpu_reset,
+                            TYPE_TH1520_TEE_VOSYS_DPU_RESET);
     object_initialize_child(obj, "usb", &s->usb, TYPE_TH1520_USB);
     for (int i = 0; i < TH1520_UART_COUNT; i++) {
         object_initialize_child(obj, uart_names[i], &s->uart[i],
@@ -818,6 +823,12 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->tee_dsp_reset), 0,
                     th1520_memmap[TH1520_DEV_TEE_DSP_RESET].base);
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->tee_vosys_dpu_reset), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->tee_vosys_dpu_reset), 0,
+                    th1520_memmap[TH1520_DEV_TEE_VOSYS_DPU_RESET].base);
 
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->visys), errp)) {
         return;

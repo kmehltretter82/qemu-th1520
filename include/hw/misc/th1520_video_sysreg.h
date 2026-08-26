@@ -23,10 +23,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(TH1520VideoSysRegState, TH1520_VIDEO_SYSREG)
 #define TH1520_VISYS_MIPI_CSI0_PIXELCLK 0x030
 #define TH1520_VISYS_CLK_DIV_MASK       0x0000001f
 
-/* Vendor U-Boot's documented VOSYS configuration registers. */
+/* Vendor U-Boot's documented VOSYS configuration/reset registers. */
+#define TH1520_VOSYS_GPU_RST_CFG        0x000
 #define TH1520_VOSYS_CLK_GATE           0x050
 #define TH1520_VOSYS_CLK_GATE1          0x054
 #define TH1520_VOSYS_DPU_CCLK_CFG       0x064
+#define TH1520_VOSYS_GPU_RST_CFG_MASK   0x00000003
 #define TH1520_VOSYS_CLK_GATE_MASK      0xfbfffff9
 #define TH1520_VOSYS_CLK_GATE1_MASK     0x00000001
 #define TH1520_VOSYS_DPU_CCLK_MASK      0x0000001f

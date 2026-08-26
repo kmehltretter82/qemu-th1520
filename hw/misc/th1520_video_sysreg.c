@@ -1,8 +1,8 @@
 /*
  * T-Head TH1520 video/vision system-register apertures
  *
- * Public vendor U-Boot configures the four VISYS dividers and three VOSYS
- * registers below before it attempts any video initialization.  Vendor Linux
+ * Public vendor U-Boot configures the four VISYS dividers and four VOSYS
+ * registers below before it attempts any video initialization. Vendor Linux
  * independently describes both 4 KiB syscon apertures and the VOSYS gate
  * bits.  This models only that software-visible configuration state.  It
  * deliberately does not create clock outputs, alter video devices, or claim
@@ -33,6 +33,7 @@ static const TH1520VideoSysRegInfo th1520_visys_regs[] = {
 };
 
 static const TH1520VideoSysRegInfo th1520_vosys_regs[] = {
+    { TH1520_VOSYS_GPU_RST_CFG,  3, TH1520_VOSYS_GPU_RST_CFG_MASK },
     { TH1520_VOSYS_CLK_GATE,     0, TH1520_VOSYS_CLK_GATE_MASK },
     { TH1520_VOSYS_CLK_GATE1,    1, TH1520_VOSYS_CLK_GATE1_MASK },
     { TH1520_VOSYS_DPU_CCLK_CFG, 2, TH1520_VOSYS_DPU_CCLK_MASK },

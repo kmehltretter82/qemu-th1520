@@ -1429,12 +1429,17 @@ reset and migration.  It does not model DSP cores, reset effects, clocks,
 IOPMP behavior or a DSP system-register aperture.  Focused qtests and
 whole-machine migration pass.
 
-The trace now reaches the source-labelled VOSYS GPU reset word at
-``0xffef528000`` (writes ``0x2`` then ``0x3``), which is already a mapped but
-currently unimplemented VOSYS register, and then its final listed TEE DPU
-reset word at ``0xffff529004`` (write ``0x7``).  Those are distinct bounded
-reset questions, not proof that the staged firmware reaches serial output,
-loads U-Boot successfully or matches physical hardware reset effects.
+The next source-labelled accesses are VOSYS GPU reset at ``0xffef528000``
+(writes ``0x2`` then ``0x3``) and TEE VOSYS DPU reset at ``0xffff529004``
+(write ``0x7``).  QEMU now retains the documented low two GPU reset bits in
+the existing REE VOSYS state and maps the documented low three TEE DPU reset
+bits as a separate four-byte word.  Both reset to zero and migrate; no
+GPU/DPU engine, clock, IOPMP, reset effect, full TEE aperture or physical
+alias is inferred.  Focused register/migration qtests and the whole-machine
+migration test pass.  The staged trace reaches ``preloader_console_init()``
+after the complete public post-reset list and emits the U-Boot SPL banner.  It
+is not proof of subsequent U-Boot payload loading, OS handoff or physical
+hardware behavior.
 
 ### Independent Alpine userspace lane
 

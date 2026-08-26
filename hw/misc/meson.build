@@ -184,6 +184,7 @@ system_ss.add(when: 'CONFIG_TH1520_ISO7816_CONFIG', if_true: files('th1520_iso78
 system_ss.add(when: 'CONFIG_TH1520_BOOTSEL', if_true: files('th1520_bootsel.c'))
 system_ss.add(when: 'CONFIG_TH1520_TEE_MISCSYS_CLOCK', if_true: files('th1520_tee_miscsys_clock.c'))
 system_ss.add(when: 'CONFIG_TH1520_TEE_DSP_RESET', if_true: files('th1520_tee_dsp_reset.c'))
+system_ss.add(when: 'CONFIG_TH1520_TEE_VOSYS_DPU_RESET', if_true: files('th1520_tee_vosys_dpu_reset.c'))
 system_ss.add(when: 'CONFIG_TH1520_AON_RESET', if_true: files('th1520_aon_reset.c'))
 system_ss.add(when: 'CONFIG_TH1520_PINCTRL', if_true: files('th1520_pinctrl.c'))
 system_ss.add(when: 'CONFIG_TH1520_MISCSYS', if_true: files('th1520_miscsys.c'))

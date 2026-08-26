@@ -215,9 +215,14 @@ reset state.
 
 The next public SPL list entries write GPU reset values ``0x2`` and ``0x3``
 at the REE VOSYS base ``0xffef528000``, then write DPU reset value ``0x7`` to
-the TEE VOSYS address ``0xffff529004``.  These must be treated as separate
-REE/TEE register contracts; do not infer a fullmask aperture or GPU/DPU
-behavior from that short configuration sequence.
+the TEE VOSYS address ``0xffff529004``.  The manual documents the REE GPU
+word's active-low bits 1:0 and the TEE DPU word's active-low bits 2:0, both
+reset to zero.  QEMU retains those precise words and migrates them, but does
+not create reset outputs, a full TEE aperture or GPU/DPU device behavior.
+These remain separate REE/TEE contracts; the short configuration sequence
+does not establish a physical alias, reset ordering/effect or retention.  A
+bounded staged run reaches the post-list SPL console banner, but that does not
+establish subsequent payload/OS handoff or physical reset behavior.
 
 On hardware, preserve a pre-write register dump and use a recovery-aware DSP
 or display reset procedure before toggling any bit.  Determine isolation,
