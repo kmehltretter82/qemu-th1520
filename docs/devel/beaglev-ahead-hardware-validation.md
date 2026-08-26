@@ -431,6 +431,21 @@ peripheral endpoint or physical DMA timing.  Peripheral request routing,
 handshakes, packing, flow control, suspend/abort timing, noncoherent cache
 effects and physical controller synthesis remain open.
 
+## AXI-DMAC advertised-width checkpoint
+
+Checkpoint ``d22d37ec8d`` extends that qtest against the board-generated
+``snps,data-width = <4>`` limit.  It checks an e64-source/e128-destination
+direct copy, then an e128 direct copy whose final transfer lies beyond the
+model's 4 KiB staging chunk.  In both successful cases it checks copied bytes,
+final SAR/DAR and channel status.  It also programs the next e256 width code
+and checks invalid-error status with SAR, DAR and destination bytes unchanged.
+Normal, dependency-minimal and ASan/UBSan builds pass the new test.
+
+This bounds QEMU's synchronous M2M width handling only.  It does not establish
+physical width conversion/packing, alignment restrictions, burst behavior,
+peripheral endpoint semantics, controller timing or any real-board result;
+``DMA-001`` remains open for those observations.
+
 ## GMAC-001 Type-2 receive-status checkpoint
 
 Local checkpoint ``46df230d5d`` enables Type-2 receive status only for the

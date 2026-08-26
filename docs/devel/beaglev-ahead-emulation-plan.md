@@ -42,6 +42,8 @@ XTheadVector m8 gather checkpoint: 4f9c7e9893
 
 AXI DMAC width/address checkpoint: f92e2e624c
 
+AXI DMAC advertised-width checkpoint: d22d37ec8d
+
 GMAC receive-interrupt-watchdog checkpoint: 1369cec4d9
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
@@ -401,6 +403,14 @@ memory-to-memory model's e16-source/e8-destination transfer and both fixed
 source and fixed destination modes, including final SAR/DAR values.  It does
 not add a peripheral endpoint, request routing, timing or physical behavior.
 
+The follow-up advertised-width checkpoint validates the generated-DT
+``snps,data-width = <4>`` limit in the same memory-to-memory model: an e64
+source/e128 destination transfer, an e128 transfer which crosses its 4 KiB
+copy chunk, and rejection of the next (e256) width code without a destination
+write.  It checks bytes, final SAR/DAR and status for the successful paths.
+It does not establish physical packing, throughput, alignment, peripheral
+request routing or timing behavior.
+
 The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
 miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
 hotplug, migration and upstream-Linux keyboard enumeration work.  Its remaining
@@ -551,7 +561,7 @@ validation.
 | APB timers | A reusable four-counter DesignWare model and both TH1520 components now provide eight 125 MHz countdown channels, PLIC sources 16-23, local/aggregate EOI and status, reset and VMState.  Four named toggle outputs per component change at expiry; user-defined PWM mode alternates ``LoadCount`` low intervals with ``LoadCount2`` high intervals, including live second-load updates.  Their two AP leaf gates freeze and resume the corresponding enabled count and output phase, and migration preserves the active half-cycle; either known APB/core reset bit immediately resets its component.  The outputs remain test-only and all eight upstream-DT nodes remain board-disabled | Validate component synthesis, physical clock/gate semantics, access widths, initial/reload/zero/enable edges, optional 0%/100% mode, cascade and physical output/reset-domain routing on hardware |
 | PVT/thermal/voltage | A reusable MR75203 model maps the exact TH1520 common, temperature, process and voltage apertures, synthesis identity, 2 temperature sensors, 11 process detectors and 16 voltage channels.  It implements the Linux SDIF programming path, deterministic QOM environment inputs, reset and VMState; pinned Linux binds and reads all advertised temperature and voltage channels | Validate physical samples and calibration across temperature/voltage, conversion latency and DONE behavior, sample-counter edges, alarm/timer/register semantics, any interrupt route, access widths, clock/reset coupling and actual rail-to-channel names on the owner board |
 | RTC/watchdog | A reusable X-Gene-compatible RTC model provides counter/match/delayed-load, interrupt/mask/EOI, wrap, optional prescaler, reset and VMState at the TH1520 address with a 32.768 kHz input and PLIC source 74.  Its disabled DT node and a test-only prescaler-aware module let pinned Linux set/read at 1 Hz and receive an alarm.  A reusable fixed-TOP Synopsys DW APB watchdog model and both TH1520 AP instances provide countdown/restart, direct and two-stage interrupt/reset behavior, PLIC sources 24/25, independent AP resets, gated 125 MHz/zero QEMU clock links, VMState and conservative disabled DT nodes; gating freezes and re-enabling resumes a running count.  Pinned Linux binds, starts, pings and reset-stops both through an external enabling DT.  AO/audio watchdogs remain absent | Validate RTC component identity, exact prescaler/CPCVR/wrap/load edges, calibration, wake and battery/reset retention; establish a mainline TH1520 RTC compatible/driver contract.  Validate watchdog identities, physical clock/gate and reset scope plus edge behavior, and add remaining watchdog domains from public or measured evidence |
-| AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; a focused qtest checks e16-source/e8-destination movement plus fixed source/destination address modes and final SAR/DAR values.  The TH1520 general instance has exact mainline-DT and AP reset-pair wiring, and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential/reset-scope validation |
+| AXI DMAC | A reusable DW AXI DMAC 1.01a model now provides four-channel direct and linked-list memory-to-memory DMA, descriptor writeback, error/IRQ state, reset and VMState; focused qtests check e16-source/e8-destination movement, fixed source/destination modes, e64-source/e128-destination packing, an e128 copy across the 4 KiB model chunk and rejection of e256 beyond generated-DT data-width code 4.  The TH1520 general instance has exact mainline-DT and AP reset-pair wiring, and the Linux driver plus `dmatest` exercise all channels | Add peripheral request/handshake wiring, secure/TEE instance, contiguous/reload/shadow/cyclic and dynamic-LLI modes, detailed fault/suspend/timing behavior, noncoherent cache effects and physical differential/reset-scope validation |
 | Mailbox/system control | A bounded TH1520 mailbox model maps the four upstream-Linux resources, CPU-visible channel data/generate registers, local status/clear/mask, PLIC source 28, system reset and VMState; it deliberately has no remote CPU or firmware response | Validate the register/pulse/reset/gate behavior and add E902/C906/C910R/DSP endpoints plus their documented handoff/control protocols |
 | GPU/DPU/HDMI/DSI | Matching models missing | New software-visible register/queue/display pipelines |
 | NPU/camera/codec/ISP | Missing | New functional command/data-path models |
@@ -1160,11 +1170,13 @@ headers, terminal status and guest-buffer preservation.  The seven-case NPCM
 suite separately covers normal-descriptor CIC3 IPv4/UDP compatibility and
 retains its legacy Type-2 receive contract.  The two additional GMAC tests
 cover exact RIWT masking/timing/IRQ/reset/cancellation and a half-expired
-current-v2 deadline across migration.  Five DMAC tests cover reset/masks, a
+current-v2 deadline across migration.  Six DMAC tests cover reset/masks, a
 direct copy and PLIC route, e16-to-e8 and fixed-address memory-to-memory
-transfers, a two-item LLI chain above 4 GiB, invalid-descriptor failure and
-completed-state/IRQ migration; the direct-boot test also checks the complete
-generated binding and AP clock-provider IDs.
+transfers, e64-to-e128 packing, an e128 copy beyond the 4 KiB model chunk,
+rejection of e256 beyond the advertised width, a two-item LLI chain above
+4 GiB, invalid-descriptor failure and completed-state/IRQ migration; the
+direct-boot test also checks the complete generated binding and AP
+clock-provider IDs.
 Nine AP clock/reset tests cover reset values, writable masks, all 28 exported
 reset groups, per-device reset/isolation, asserted-line migration, PLL restart
 and lock delay, calibration self-clear, all 33 AP leaf-gate outputs, functional
