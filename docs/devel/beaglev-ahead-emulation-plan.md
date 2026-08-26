@@ -1534,6 +1534,13 @@ Tuxboot/ext2 ``test_emmc_root`` control again reached
 the two chosen lanes; they do not add a third OS claim or establish physical
 voltage behavior.
 
+The current workspace rerun retains that split: the RevyOS/Alpine cross-pair
+recorded its four markers in
+``validation-artifacts/beaglev-ahead-alpine-revyos-choice-20260826.log``, and
+the Tuxboot/ext2 ``test_emmc_root`` control passed.  Keep these as the required
+pair for direct-Linux changes rather than substituting another similar Linux
+image for either one.
+
 It is still not a stock RevyOS image or normal Alpine boot: the test launches
 ``/bin/sh`` directly and retains known GPIO registration and missing
 ``regulatory.db`` warnings.  A Debian/glibc or another independent distro is
