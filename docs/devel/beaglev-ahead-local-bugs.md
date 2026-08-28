@@ -154,10 +154,10 @@ accurate, so only the board-gate number changed: ``riscv-csr-test`` passes
 ``make check-tcg`` cannot be used for the dependency-minimal or sanitizer
 builds, because they provide only the ``beaglev-ahead`` machine and the
 ``virt``-based payloads abort with ``unsupported machine type: "virt"``; the
-Ahead-machine targets must be named explicitly.  With the slide-up payload
-added below those totals are now 38/38 normal and 15/15 for the enumerated
-Ahead-specific subset, and all seven XTheadVector payloads pass under
-ASan/UBSan when run directly on the ``beaglev-ahead`` machine with
+Ahead-machine targets must be named explicitly.  With the two permutation
+payloads added below those totals are now 39/39 normal and 16/16 for the
+enumerated Ahead-specific subset, and all eight XTheadVector payloads pass
+under ASan/UBSan when run directly on the ``beaglev-ahead`` machine with
 ``detect_leaks=0``.
 
 ### Current XTheadVector slide-up checkpoint
@@ -186,7 +186,30 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
 
-``th.vrgather.vi`` and ``th.vcompress.vm`` remain without dynamic coverage.
+### Current XTheadVector gather-immediate and compress checkpoint
+
+An eighth payload, ``tests/tcg/riscv64/test-xtheadvector-compress.S``, closes
+the last two permutation forms.  All ten now have dynamic coverage at RV64
+e8,m1.
+
+``th.vrgather.vi`` is checked with a valid index, an out-of-range index, a
+masked body and a nonzero ``vstart`` through the helper path, then with vl
+equal to VLMAX so the translator takes its optimised broadcast path instead.
+An immediate of exactly VLMAX is included deliberately: the far out-of-range
+case cannot separate the translator's ``>=`` test from a ``>`` test.
+
+``th.vcompress.vm`` is the only permutation form whose written length is
+decided by its mask rather than by vl.  The payload checks an alternating
+mask, an all-ones mask and an all-zero mask, confirming that the clear starts
+at the compacted count rather than at vl, and that a zero mask leaves nothing
+of the previous destination.  Its legality cases cover the destination
+overlapping either source and the zero-``vstart`` requirement.
+
+Again no defect was found, and again the payload is mutation-sensitive.
+Clearing from ``vl`` instead of the compacted count fails at exit 5, removing
+``s->vstart_eq_zero`` from ``vcompress_vm_check_th`` fails at exit 24, and
+relaxing the gather-immediate range test to ``>`` fails at exit 10.  All three
+mutations were applied to a scratch copy and reverted.
 
 ### Current focused FXCR/MMC-alias checkpoint
 

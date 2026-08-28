@@ -847,9 +847,9 @@ nanosecond and expires on the next.  Pre-version-2 GMAC streams load the masked
 register value unarmed because their missing deadline cannot be reconstructed.
 The board gate passes 153/153 normal, 152/152 dependency-minimal and
 152/152 ASan/UBSan.  The complete normal
-RISC-V TCG gate passes 38/38, and the explicitly enumerated Ahead-specific
+RISC-V TCG gate passes 39/39, and the explicitly enumerated Ahead-specific
 minimal TCG gate passes
-15/15, and all seven XTheadVector firmware payloads pass directly under
+16/16, and all eight XTheadVector firmware payloads pass directly under
 ASan/UBSan.  The preceding migration checkpoint's 114/114 board plus 14/14 CSR
 normal, 113/113 plus 7/7 minimal and 112/112 sanitizer-board totals remain
 historical evidence.  The 48-stage C910 FXCR guest passes in all three
