@@ -9373,12 +9373,36 @@ static uint32_t dw_gpio_mask(const TH1520GPIOController *controller)
            BIT(controller->ngpios) - 1;
 }
 
+/*
+ * Board peers drive three GPIO inputs from reset: the GMAC0 PHY holds its
+ * active-low interrupt deasserted on GPIO3_22, and the AP6203BM module holds
+ * WL_HW_OOB and HOST_WAKE_BT low on GPIO2_25 and GPIO2_29.  The controller
+ * model lets an external driver win over the internal one, so a bank with
+ * externally driven pins does not read back everything the guest drives.
+ */
+static uint32_t dw_gpio_external_driven(
+    const TH1520GPIOController *controller)
+{
+    if (controller->base == TH1520_GPIO2_BASE) {
+        return AP6203BM_HOST_WAKE_MASK;
+    }
+    if (controller->base == TH1520_GPIO3_BASE) {
+        return BIT(TH1520_GMAC_PHY_IRQ_GPIO);
+    }
+    return 0;
+}
+
+static uint32_t dw_gpio_external_level(const TH1520GPIOController *controller)
+{
+    return controller->base == TH1520_GPIO3_BASE ?
+           BIT(TH1520_GMAC_PHY_IRQ_GPIO) : 0;
+}
+
 static void assert_dw_gpio_reset_state(
     QTestState *qts, const TH1520GPIOController *controller)
 {
     uint64_t base = controller->base;
-    uint32_t external_level = controller->base == TH1520_GPIO3_BASE ?
-        BIT(TH1520_GMAC_PHY_IRQ_GPIO) : 0;
+    uint32_t external_level = dw_gpio_external_level(controller);
 
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DR), ==, 0);
     g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DDR), ==, 0);
@@ -9409,8 +9433,8 @@ static void test_dw_gpio_registers(void)
         const TH1520GPIOController *controller =
             &th1520_gpio_controllers[i];
         uint32_t mask = dw_gpio_mask(controller);
-        uint32_t external_level = controller->base == TH1520_GPIO3_BASE ?
-            BIT(TH1520_GMAC_PHY_IRQ_GPIO) : 0;
+        uint32_t external_driven = dw_gpio_external_driven(controller);
+        uint32_t external_level = dw_gpio_external_level(controller);
         uint64_t base = controller->base;
 
         assert_dw_gpio_reset_state(qts, controller);
@@ -9432,7 +9456,7 @@ static void test_dw_gpio_registers(void)
         g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_SWPORTA_DDR), ==,
                         mask);
         g_assert_cmphex(qtest_readl(qts, base + DW_GPIO_EXT_PORTA), ==,
-                        mask);
+                        (mask & ~external_driven) | external_level);
 
         qtest_writel(qts, base + DW_GPIO_SWPORTA_DDR, 0);
         qtest_writel(qts, base + DW_GPIO_SWPORTA_DR, 0);
