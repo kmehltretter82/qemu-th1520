@@ -114,6 +114,12 @@ typedef enum BeagleVAheadBootMode {
     BEAGLEV_AHEAD_BOOT_MASK_ROM,
 } BeagleVAheadBootMode;
 
+/* Which Linux clock binding the generated device tree describes. */
+typedef enum TH1520ClockAbi {
+    TH1520_CLOCK_ABI_UPSTREAM,
+    TH1520_CLOCK_ABI_VENDOR,
+} TH1520ClockAbi;
+
 struct BeagleVAheadState {
     MachineState parent_obj;
 
@@ -121,6 +127,7 @@ struct BeagleVAheadState {
     TH1520AP6203BMState ap6203bm;
     Notifier machine_done;
     BeagleVAheadBootMode boot_mode;
+    TH1520ClockAbi clock_abi;
     uint8_t boot_sel;
 };
 
@@ -288,6 +295,46 @@ enum {
 #define TH1520_CLK_MBOX1 73
 #define TH1520_CLK_MBOX2 74
 #define TH1520_CLK_MBOX3 75
+
+/*
+ * RevyOS clock IDs (vendor include/dt-bindings/clock/th1520-fm-ap-clock.h)
+ * of the "xuantie,th1520-fm-ree-clk" provider, emitted with
+ * -machine beaglev-ahead,clock-abi=vendor.  The vendor tree binds the UARTs,
+ * timers, mailbox and PWM to root fixed clocks rather than to this provider;
+ * those rates are the ones th1520-beaglev-ahead.dts assigns.
+ */
+#define TH1520_VCLK_GPIO2_DBCLK 2
+#define TH1520_VCLK_GMAC0_CCLK 4
+#define TH1520_VCLK_SPI_PCLK 5
+#define TH1520_VCLK_I2C3_PCLK 61
+#define TH1520_VCLK_WDT0_PCLK 79
+#define TH1520_VCLK_GMAC_AXI_ACLK 86
+#define TH1520_VCLK_I2C4_PCLK 97
+#define TH1520_VCLK_DMAC_CPUSYS_ACLK 104
+#define TH1520_VCLK_GPIO2_PCLK 112
+#define TH1520_VCLK_GMAC1_CCLK 113
+#define TH1520_VCLK_EMMC_SDIO_REF_CLK 122
+#define TH1520_VCLK_I2C1_PCLK 141
+#define TH1520_VCLK_GPIO3_DBCLK 179
+#define TH1520_VCLK_PADCTRL0_APSYS_PCLK 202
+#define TH1520_VCLK_GPIO3_PCLK 227
+#define TH1520_VCLK_PADCTRL1_APSYS_PCLK 271
+#define TH1520_VCLK_GMAC_AXI_PCLK 290
+#define TH1520_VCLK_GPIO0_PCLK 303
+#define TH1520_VCLK_I2C5_PCLK 329
+#define TH1520_VCLK_SPI_SSI_CLK 340
+#define TH1520_VCLK_GMAC1_PCLK 349
+#define TH1520_VCLK_GMAC0_PCLK 359
+#define TH1520_VCLK_GPIO1_DBCLK 372
+#define TH1520_VCLK_GPIO1_PCLK 385
+#define TH1520_VCLK_I2C2_PCLK 438
+#define TH1520_VCLK_DMAC_CPUSYS_HCLK 447
+#define TH1520_VCLK_WDT1_PCLK 454
+#define TH1520_VCLK_I2C0_PCLK 460
+#define TH1520_VCLK_GPIO0_DBCLK 479
+#define TH1520_VENDOR_RC_24M_FREQ 24000000
+#define TH1520_VENDOR_APB_CLK_FREQ 62500000
+#define TH1520_VENDOR_UART_SCLK_FREQ 100000000
 
 #define TH1520_PVT_INPUT_FREQ 73728000
 #define TH1520_PVT_COMPONENT_ID 0x9b487060

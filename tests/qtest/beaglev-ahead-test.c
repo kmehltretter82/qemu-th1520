@@ -1714,7 +1714,8 @@ static void assert_gmac_fdt(const void *fdt,
 
 static void assert_dwcmshc_fdt(const void *fdt,
                                const DWCMSHCController *controller,
-                               uint32_t mshc_clock_phandle)
+                               uint32_t ap_clock_phandle,
+                               uint32_t core_clock_id)
 {
     static const char *const compat[] = {
         "xuantie,th1520-dwcmshc", "thead,th1520-dwcmshc",
@@ -1758,8 +1759,9 @@ static void assert_dwcmshc_fdt(const void *fdt,
 
     cells = fdt_getprop(fdt, node, "clocks", &len);
     g_assert_nonnull(cells);
-    g_assert_cmpint(len, ==, sizeof(*cells));
-    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, mshc_clock_phandle);
+    g_assert_cmpint(len, ==, 2 * sizeof(*cells));
+    g_assert_cmphex(fdt32_to_cpu(cells[0]), ==, ap_clock_phandle);
+    g_assert_cmphex(fdt32_to_cpu(cells[1]), ==, core_clock_id);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "max-frequency"), ==,
                     198000000);
     g_assert_cmphex(fdt_prop_u32(fdt, node, "bus-width"), ==,
@@ -2418,7 +2420,6 @@ static void test_direct_boot_contract(void)
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
     uint32_t rtc_clock_phandle;
-    uint32_t mshc_clock_phandle;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[ARRAY_SIZE(th1520_padctrls)];
@@ -2505,21 +2506,6 @@ static void test_direct_boot_contract(void)
     rtc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
     g_assert_cmphex(rtc_clock_phandle, !=, 0);
 
-    clock_offset = fdt_path_offset(fdt, "/mshc-clock");
-    g_assert_cmpint(clock_offset, >=, 0);
-    compatible = fdt_getprop(fdt, clock_offset, "compatible", &len);
-    g_assert_nonnull(compatible);
-    g_assert_cmpstr(compatible, ==, "fixed-clock");
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "#clock-cells"), ==,
-                    0);
-    g_assert_cmphex(fdt_prop_u32(fdt, clock_offset, "clock-frequency"), ==,
-                    198000000);
-    compatible = fdt_getprop(fdt, clock_offset, "clock-output-names", &len);
-    g_assert_nonnull(compatible);
-    g_assert_cmpstr(compatible, ==, "mshc-input");
-    mshc_clock_phandle = fdt_get_phandle(fdt, clock_offset);
-    g_assert_cmphex(mshc_clock_phandle, !=, 0);
-
     clock_offset = fdt_path_offset(fdt,
                                    "/soc/clock-controller@ffef010000");
     g_assert_cmpint(clock_offset, >=, 0);
@@ -2557,7 +2543,7 @@ static void test_direct_boot_contract(void)
 
     for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
         assert_dwcmshc_fdt(fdt, &dwcmshc_controllers[i],
-                           mshc_clock_phandle);
+                           ap_clock_phandle, TH1520_CLK_EMMC_SDIO);
     }
 
     for (size_t i = 0; i < ARRAY_SIZE(th1520_uart_controllers); i++) {
@@ -2817,6 +2803,200 @@ static void assert_qemu_start_fails(const char *const arguments[],
     g_assert_no_error(error);
     g_assert_cmpint(status, !=, 0);
     g_assert_nonnull(strstr(stderr_text, message));
+}
+
+static uint8_t *read_direct_boot_fdt(QTestState *qts)
+{
+    uint64_t fdt_addr = qtest_readq(qts, BROM_RESET_FDT_ADDR);
+    struct fdt_header header;
+    uint8_t *fdt;
+    int fdt_size;
+
+    qtest_memread(qts, fdt_addr, &header, sizeof(header));
+    g_assert_cmpint(fdt_check_header(&header), ==, 0);
+    fdt_size = fdt_totalsize(&header);
+    fdt = g_malloc(fdt_size);
+    qtest_memread(qts, fdt_addr, fdt, fdt_size);
+    g_assert_cmpint(fdt_check_header(fdt), ==, 0);
+    return fdt;
+}
+
+static uint32_t assert_fixed_clock_fdt(const void *fdt, const char *path,
+                                       const char *output_name, uint32_t hz)
+{
+    int node = fdt_path_offset(fdt, path);
+    const char *text;
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "fixed-clock");
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#clock-cells"), ==, 0);
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "clock-frequency"), ==, hz);
+    text = fdt_getprop(fdt, node, "clock-output-names", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, output_name);
+    g_assert_cmphex(fdt_get_phandle(fdt, node), !=, 0);
+    return fdt_get_phandle(fdt, node);
+}
+
+static void assert_clocks_fdt(const void *fdt, const char *path,
+                              const uint32_t *cells, size_t count,
+                              const char *const *names, size_t names_count)
+{
+    int node = fdt_path_offset(fdt, path);
+    const fdt32_t *prop;
+    int len;
+
+    g_assert_cmpint(node, >=, 0);
+    prop = fdt_getprop(fdt, node, "clocks", &len);
+    g_assert_nonnull(prop);
+    g_assert_cmpint(len, ==, count * sizeof(*prop));
+    for (size_t i = 0; i < count; i++) {
+        g_assert_cmphex(fdt32_to_cpu(prop[i]), ==, cells[i]);
+    }
+    if (names_count) {
+        assert_fdt_stringlist(fdt, node, "clock-names", names, names_count);
+    } else {
+        g_assert_null(fdt_getprop(fdt, node, "clock-names", &len));
+    }
+}
+
+/*
+ * clock-abi=vendor describes the RevyOS clock binding: the vendor provider
+ * fed by three root oscillators, its th1520-fm-ap-clock.h IDs on every
+ * provider consumer, and root fixed clocks where the vendor tree uses them.
+ */
+static void test_vendor_clock_abi_contract(void)
+{
+    QTestState *qts =
+        qtest_init("-machine beaglev-ahead,clock-abi=vendor -bios none");
+    g_autofree uint8_t *fdt = read_direct_boot_fdt(qts);
+    static const char *const parent_names[] = {
+        "osc_32k", "osc_24m", "rc_24m"
+    };
+    static const char *const pclk_name[] = { "pclk" };
+    static const char *const tclk_name[] = { "tclk" };
+    static const char *const timer_name[] = { "timer" };
+    static const char *const ipg_name[] = { "ipg" };
+    static const char *const gpio_names[] = { "bus", "db" };
+    static const char *const spi_names[] = { "sclk", "pclk" };
+    static const char *const dmac_names[] = { "core-clk", "cfgr-clk" };
+    static const char *const gmac_names[] = {
+        "stmmaceth", "pclk", "axi_aclk", "axi_pclk"
+    };
+    uint32_t osc, osc_32k, rc_24m, apb, uart_sclk, clk;
+    const char *text;
+    int node;
+    int len;
+
+    g_assert_cmpint(fdt_path_offset(fdt, "/mshc-clock"), <, 0);
+    osc = assert_fixed_clock_fdt(fdt, "/oscillator", "osc_24m", 24000000);
+    osc_32k = assert_fixed_clock_fdt(fdt, "/32k-oscillator", "osc_32k",
+                                     32768);
+    rc_24m = assert_fixed_clock_fdt(fdt, "/clock-rc-24m", "rc_24m",
+                                    24000000);
+    apb = assert_fixed_clock_fdt(fdt, "/apb-clk-clock", "apb_clk",
+                                 62500000);
+    uart_sclk = assert_fixed_clock_fdt(fdt, "/uart-sclk-clock", "uart_sclk",
+                                       100000000);
+
+    node = fdt_path_offset(fdt, "/soc/clock-controller@ffef010000");
+    g_assert_cmpint(node, >=, 0);
+    text = fdt_getprop(fdt, node, "compatible", &len);
+    g_assert_nonnull(text);
+    g_assert_cmpstr(text, ==, "xuantie,th1520-fm-ree-clk");
+    g_assert_cmphex(fdt_prop_u32(fdt, node, "#clock-cells"), ==, 1);
+    assert_fdt_mmio(fdt, node, TH1520_AP_CLOCK_BASE, 0x1000);
+    clk = fdt_get_phandle(fdt, node);
+    g_assert_cmphex(clk, !=, 0);
+    {
+        const uint32_t parents[] = { osc_32k, osc, rc_24m };
+
+        assert_clocks_fdt(fdt, "/soc/clock-controller@ffef010000", parents,
+                          ARRAY_SIZE(parents), parent_names,
+                          ARRAY_SIZE(parent_names));
+    }
+
+    /* Vendor IDs are CLKGEN_* values from RevyOS th1520-fm-ap-clock.h. */
+    for (size_t i = 0; i < ARRAY_SIZE(dwcmshc_controllers); i++) {
+        assert_dwcmshc_fdt(fdt, &dwcmshc_controllers[i], clk, 122);
+    }
+    {
+        const uint32_t gmac0[] = { clk, 4, clk, 359, clk, 86, clk, 290 };
+        const uint32_t gmac1[] = { clk, 113, clk, 349, clk, 86, clk, 290 };
+        const uint32_t dmac[] = { clk, 104, clk, 447 };
+        const uint32_t gpio0[] = { clk, 303, clk, 479 };
+        const uint32_t gpio3[] = { clk, 227, clk, 179 };
+        const uint32_t i2c0[] = { clk, 460 };
+        const uint32_t i2c5[] = { clk, 329 };
+        const uint32_t spi0[] = { clk, 340, clk, 5 };
+        const uint32_t padctrl1[] = { clk, 271 };
+        const uint32_t padctrl0[] = { clk, 202 };
+        const uint32_t wdt0[] = { clk, 79 };
+        const uint32_t wdt1[] = { clk, 454 };
+        const uint32_t pwm[] = { osc };
+        const uint32_t timer[] = { apb };
+        const uint32_t uart[] = { uart_sclk };
+        const uint32_t mbox[] = { apb };
+
+        assert_clocks_fdt(fdt, "/soc/ethernet@ffe7070000", gmac0,
+                          ARRAY_SIZE(gmac0), gmac_names,
+                          ARRAY_SIZE(gmac_names));
+        assert_clocks_fdt(fdt, "/soc/ethernet@ffe7060000", gmac1,
+                          ARRAY_SIZE(gmac1), gmac_names,
+                          ARRAY_SIZE(gmac_names));
+        assert_clocks_fdt(fdt, "/soc/dma-controller@ffefc00000", dmac,
+                          ARRAY_SIZE(dmac), dmac_names,
+                          ARRAY_SIZE(dmac_names));
+        assert_clocks_fdt(fdt, "/soc/gpio@ffec005000", gpio0,
+                          ARRAY_SIZE(gpio0), gpio_names,
+                          ARRAY_SIZE(gpio_names));
+        assert_clocks_fdt(fdt, "/soc/gpio@ffe7f38000", gpio3,
+                          ARRAY_SIZE(gpio3), gpio_names,
+                          ARRAY_SIZE(gpio_names));
+        assert_clocks_fdt(fdt, "/soc/i2c@ffe7f20000", i2c0,
+                          ARRAY_SIZE(i2c0), pclk_name, 1);
+        assert_clocks_fdt(fdt, "/soc/i2c@fff7f2c000", i2c5,
+                          ARRAY_SIZE(i2c5), pclk_name, 1);
+        assert_clocks_fdt(fdt, "/soc/spi@ffe700c000", spi0,
+                          ARRAY_SIZE(spi0), spi_names,
+                          ARRAY_SIZE(spi_names));
+        assert_clocks_fdt(fdt, "/soc/pinctrl@ffe7f3c000", padctrl1,
+                          ARRAY_SIZE(padctrl1), pclk_name, 1);
+        assert_clocks_fdt(fdt, "/soc/pinctrl@ffec007000", padctrl0,
+                          ARRAY_SIZE(padctrl0), pclk_name, 1);
+        assert_clocks_fdt(fdt, "/soc/watchdog@ffefc30000", wdt0,
+                          ARRAY_SIZE(wdt0), tclk_name, 1);
+        assert_clocks_fdt(fdt, "/soc/watchdog@ffefc31000", wdt1,
+                          ARRAY_SIZE(wdt1), tclk_name, 1);
+        assert_clocks_fdt(fdt, "/soc/pwm@ffec01c000", pwm,
+                          ARRAY_SIZE(pwm), NULL, 0);
+        assert_clocks_fdt(fdt, "/soc/timer@ffefc32000", timer,
+                          ARRAY_SIZE(timer), timer_name, 1);
+        assert_clocks_fdt(fdt, "/soc/timer@ffffc33000", timer,
+                          ARRAY_SIZE(timer), timer_name, 1);
+        assert_clocks_fdt(fdt, "/soc/serial@ffe7014000", uart,
+                          ARRAY_SIZE(uart), NULL, 0);
+        assert_clocks_fdt(fdt, "/soc/serial@fff7f0c000", uart,
+                          ARRAY_SIZE(uart), NULL, 0);
+        assert_clocks_fdt(fdt, "/soc/mailbox@ffffc38000", mbox,
+                          ARRAY_SIZE(mbox), ipg_name, 1);
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_clock_abi_errors(void)
+{
+    const char *const bogus[] = {
+        "-machine", "beaglev-ahead,clock-abi=bogus",
+        "-display", "none", NULL,
+    };
+
+    assert_qemu_start_fails(bogus,
+                            "unsupported BeagleV Ahead clock ABI 'bogus'");
 }
 
 static void test_mask_rom_errors(void)
@@ -15254,6 +15434,10 @@ int main(int argc, char **argv)
     if (qtest_has_machine("beaglev-ahead")) {
         qtest_add_func("/beaglev-ahead/boot/direct-contract",
                        test_direct_boot_contract);
+        qtest_add_func("/beaglev-ahead/boot/vendor-clock-abi-contract",
+                       test_vendor_clock_abi_contract);
+        qtest_add_func("/beaglev-ahead/boot/clock-abi-errors",
+                       test_clock_abi_errors);
         qtest_add_func("/beaglev-ahead/boot/mask-rom-contract",
                        test_mask_rom_contract);
         qtest_add_func("/beaglev-ahead/boot/mask-rom-execution-reset",

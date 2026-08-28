@@ -226,21 +226,27 @@ typedef struct TH1520GPIOInfo {
         uint8_t pin_offset;
         uint8_t count;
     } ranges[2];
+    int16_t vendor_pclk_id;
+    int16_t vendor_dbclk_id;
 } TH1520GPIOInfo;
 
 static const TH1520GPIOInfo th1520_gpio_info[TH1520_GPIO_COUNT] = {
     { "gpio0",  TH1520_DEV_GPIO0,  TH1520_GPIO0_IRQ,  32,
-      TH1520_CLK_GPIO0, 2, 1, { { 0, 0, 32 } } },
+      TH1520_CLK_GPIO0, 2, 1, { { 0, 0, 32 } },
+      TH1520_VCLK_GPIO0_PCLK, TH1520_VCLK_GPIO0_DBCLK },
     { "gpio1",  TH1520_DEV_GPIO1,  TH1520_GPIO1_IRQ,  31,
-      TH1520_CLK_GPIO1, 2, 1, { { 0, 32, 31 } } },
+      TH1520_CLK_GPIO1, 2, 1, { { 0, 32, 31 } },
+      TH1520_VCLK_GPIO1_PCLK, TH1520_VCLK_GPIO1_DBCLK },
     { "gpio2",  TH1520_DEV_GPIO2,  TH1520_GPIO2_IRQ,  32,
-      TH1520_CLK_GPIO2, 3, 1, { { 0, 0, 32 } } },
+      TH1520_CLK_GPIO2, 3, 1, { { 0, 0, 32 } },
+      TH1520_VCLK_GPIO2_PCLK, TH1520_VCLK_GPIO2_DBCLK },
     { "gpio3",  TH1520_DEV_GPIO3,  TH1520_GPIO3_IRQ,  23,
-      TH1520_CLK_GPIO3, 3, 1, { { 0, 32, 23 } } },
+      TH1520_CLK_GPIO3, 3, 1, { { 0, 32, 23 } },
+      TH1520_VCLK_GPIO3_PCLK, TH1520_VCLK_GPIO3_DBCLK },
     { "gpio4",  TH1520_DEV_GPIO4,  TH1520_GPIO4_IRQ,  23, -1,
-      1, 2, { { 0, 25, 22 }, { 22, 7, 1 } } },
+      1, 2, { { 0, 25, 22 }, { 22, 7, 1 } }, -1, -1 },
     { "aogpio", TH1520_DEV_AOGPIO, TH1520_AOGPIO_IRQ, 16, -1,
-      1, 1, { { 0, 9, 16 } } },
+      1, 1, { { 0, 9, 16 } }, -1, -1 },
 };
 
 typedef struct TH1520PadCtrlInfo {
@@ -248,15 +254,16 @@ typedef struct TH1520PadCtrlInfo {
     int memmap;
     uint8_t group;
     int16_t clock_id;
+    int16_t vendor_clock_id;
 } TH1520PadCtrlInfo;
 
 static const TH1520PadCtrlInfo
 th1520_padctrl_info[TH1520_PADCTRL_COUNT] = {
-    { "padctrl-aosys",  TH1520_DEV_PADCTRL_AOSYS,  1, -1 },
+    { "padctrl-aosys",  TH1520_DEV_PADCTRL_AOSYS,  1, -1, -1 },
     { "padctrl1-apsys", TH1520_DEV_PADCTRL1_APSYS, 2,
-      TH1520_CLK_PADCTRL1 },
+      TH1520_CLK_PADCTRL1, TH1520_VCLK_PADCTRL1_APSYS_PCLK },
     { "padctrl0-apsys", TH1520_DEV_PADCTRL0_APSYS, 3,
-      TH1520_CLK_PADCTRL0 },
+      TH1520_CLK_PADCTRL0, TH1520_VCLK_PADCTRL0_APSYS_PCLK },
 };
 
 typedef struct TH1520I2CInfo {
@@ -264,15 +271,22 @@ typedef struct TH1520I2CInfo {
     int memmap;
     uint32_t irq;
     uint32_t clock_id;
+    uint32_t vendor_clock_id;
 } TH1520I2CInfo;
 
 static const TH1520I2CInfo th1520_i2c_info[TH1520_I2C_COUNT] = {
-    { "i2c0", TH1520_DEV_I2C0, TH1520_I2C0_IRQ, TH1520_CLK_I2C0 },
-    { "i2c1", TH1520_DEV_I2C1, TH1520_I2C1_IRQ, TH1520_CLK_I2C1 },
-    { "i2c2", TH1520_DEV_I2C2, TH1520_I2C2_IRQ, TH1520_CLK_I2C2 },
-    { "i2c3", TH1520_DEV_I2C3, TH1520_I2C3_IRQ, TH1520_CLK_I2C3 },
-    { "i2c4", TH1520_DEV_I2C4, TH1520_I2C4_IRQ, TH1520_CLK_I2C4 },
-    { "i2c5", TH1520_DEV_I2C5, TH1520_I2C5_IRQ, TH1520_CLK_I2C5 },
+    { "i2c0", TH1520_DEV_I2C0, TH1520_I2C0_IRQ, TH1520_CLK_I2C0,
+      TH1520_VCLK_I2C0_PCLK },
+    { "i2c1", TH1520_DEV_I2C1, TH1520_I2C1_IRQ, TH1520_CLK_I2C1,
+      TH1520_VCLK_I2C1_PCLK },
+    { "i2c2", TH1520_DEV_I2C2, TH1520_I2C2_IRQ, TH1520_CLK_I2C2,
+      TH1520_VCLK_I2C2_PCLK },
+    { "i2c3", TH1520_DEV_I2C3, TH1520_I2C3_IRQ, TH1520_CLK_I2C3,
+      TH1520_VCLK_I2C3_PCLK },
+    { "i2c4", TH1520_DEV_I2C4, TH1520_I2C4_IRQ, TH1520_CLK_I2C4,
+      TH1520_VCLK_I2C4_PCLK },
+    { "i2c5", TH1520_DEV_I2C5, TH1520_I2C5_IRQ, TH1520_CLK_I2C5,
+      TH1520_VCLK_I2C5_PCLK },
 };
 
 static void th1520_i2c_configure(DeviceState *i2c)
@@ -315,6 +329,7 @@ typedef struct TH1520WDTInfo {
     uint32_t clock_id;
     uint32_t reset_id;
     unsigned int reset_output;
+    uint32_t vendor_clock_id;
 } TH1520WDTInfo;
 
 typedef struct TH1520SPIInfo {
@@ -322,6 +337,8 @@ typedef struct TH1520SPIInfo {
     int memmap;
     uint32_t irq;
     uint32_t clock_id;
+    uint32_t vendor_sclk_id;
+    uint32_t vendor_pclk_id;
 } TH1520SPIInfo;
 
 typedef struct TH1520IOPMPInfo {
@@ -337,13 +354,16 @@ th1520_timer_info[TH1520_TIMER_GROUP_COUNT] = {
 
 static const TH1520WDTInfo th1520_wdt_info[TH1520_WDT_COUNT] = {
     { "wdt0", TH1520_DEV_WDT0, TH1520_WDT0_IRQ, TH1520_CLK_WDT0,
-      TH1520_RESET_ID_WDT0, TH1520_AP_RESET_WDT0 },
+      TH1520_RESET_ID_WDT0, TH1520_AP_RESET_WDT0,
+      TH1520_VCLK_WDT0_PCLK },
     { "wdt1", TH1520_DEV_WDT1, TH1520_WDT1_IRQ, TH1520_CLK_WDT1,
-      TH1520_RESET_ID_WDT1, TH1520_AP_RESET_WDT1 },
+      TH1520_RESET_ID_WDT1, TH1520_AP_RESET_WDT1,
+      TH1520_VCLK_WDT1_PCLK },
 };
 
 static const TH1520SPIInfo th1520_spi_info[TH1520_SPI_COUNT] = {
-    { "spi0", TH1520_DEV_SPI0, TH1520_SPI0_IRQ, TH1520_CLK_SPI },
+    { "spi0", TH1520_DEV_SPI0, TH1520_SPI0_IRQ, TH1520_CLK_SPI,
+      TH1520_VCLK_SPI_SSI_CLK, TH1520_VCLK_SPI_PCLK },
 };
 
 /*
@@ -1455,8 +1475,21 @@ static uint32_t th1520_create_pin_group_fdt(
     return group_phandle;
 }
 
+static void th1520_fdt_add_fixed_clock(void *fdt, const char *path,
+                                       const char *output_name, uint32_t hz,
+                                       uint32_t phandle)
+{
+    qemu_fdt_add_subnode(fdt, path);
+    qemu_fdt_setprop_string(fdt, path, "compatible", "fixed-clock");
+    qemu_fdt_setprop_cell(fdt, path, "#clock-cells", 0);
+    qemu_fdt_setprop_cell(fdt, path, "clock-frequency", hz);
+    qemu_fdt_setprop_string(fdt, path, "clock-output-names", output_name);
+    qemu_fdt_setprop_cell(fdt, path, "phandle", phandle);
+}
+
 static void th1520_create_pinctrl_fdt(
-    void *fdt, uint32_t ap_clock_phandle, uint32_t aonsys_clock_phandle,
+    void *fdt, bool vendor, uint32_t ap_clock_phandle,
+    uint32_t aonsys_clock_phandle,
     uint32_t *phandle, uint32_t padctrl_phandles[TH1520_PADCTRL_COUNT],
     uint32_t *led_phandle, uint32_t *gmac0_phandle,
     uint32_t *uart0_phandle, uint32_t *wifi_phandle)
@@ -1492,6 +1525,10 @@ static void th1520_create_pinctrl_fdt(
         if (info->clock_id < 0) {
             qemu_fdt_setprop_cell(fdt, name, "clocks",
                                   aonsys_clock_phandle);
+        } else if (vendor) {
+            qemu_fdt_setprop_cells(fdt, name, "clocks",
+                                   ap_clock_phandle, info->vendor_clock_id);
+            qemu_fdt_setprop_string(fdt, name, "clock-names", "pclk");
         } else {
             qemu_fdt_setprop_cells(fdt, name, "clocks",
                                    ap_clock_phandle, info->clock_id);
@@ -1532,6 +1569,16 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     static const char *const uart_clock_names[] = {
         "baudclk", "apb_pclk"
     };
+    static const char ap_clock_node[] = "/soc/clock-controller@ffef010000";
+    static const char *const vendor_ap_clock_parents[] = {
+        "osc_32k", "osc_24m", "rc_24m"
+    };
+    static const char *const vendor_gpio_clock_names[] = { "bus", "db" };
+    static const char *const vendor_spi_clock_names[] = { "sclk", "pclk" };
+    static const char *const vendor_gmac_clock_names[] = {
+        "stmmaceth", "pclk", "axi_aclk", "axi_pclk"
+    };
+    const bool vendor = s->clock_abi == TH1520_CLOCK_ABI_VENDOR;
     static const char *const i2c_compat[] = {
         "thead,th1520-i2c", "snps,designware-i2c"
     };
@@ -1579,7 +1626,10 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     uint32_t osc_phandle;
     uint32_t aonsys_clock_phandle;
     uint32_t rtc_clock_phandle;
-    uint32_t mshc_clock_phandle;
+    uint32_t osc_32k_phandle = 0;
+    uint32_t rc_24m_phandle = 0;
+    uint32_t apb_clock_phandle = 0;
+    uint32_t uart_sclk_phandle = 0;
     uint32_t ap_clock_phandle;
     uint32_t ap_reset_phandle;
     uint32_t padctrl_phandles[TH1520_PADCTRL_COUNT];
@@ -1688,76 +1738,59 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                   ARRAY_SIZE(clint_compat));
 
     osc_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/oscillator");
-    qemu_fdt_setprop_string(ms->fdt, "/oscillator", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "clock-frequency",
-                          TH1520_OSC_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/oscillator", "clock-output-names",
-                            "osc_24m");
-    qemu_fdt_setprop_cell(ms->fdt, "/oscillator", "phandle", osc_phandle);
+    th1520_fdt_add_fixed_clock(ms->fdt, "/oscillator", "osc_24m",
+                               TH1520_OSC_FREQ, osc_phandle);
 
     aonsys_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/clock-73728000");
-    qemu_fdt_setprop_string(ms->fdt, "/clock-73728000", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "clock-frequency",
-                          73728000);
-    qemu_fdt_setprop_string(ms->fdt, "/clock-73728000",
-                            "clock-output-names", "aonsys_clk");
-    qemu_fdt_setprop_cell(ms->fdt, "/clock-73728000", "phandle",
-                          aonsys_clock_phandle);
+    th1520_fdt_add_fixed_clock(ms->fdt, "/clock-73728000", "aonsys_clk",
+                               73728000, aonsys_clock_phandle);
 
     rtc_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/clock-32768");
-    qemu_fdt_setprop_string(ms->fdt, "/clock-32768", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "clock-frequency",
-                          TH1520_RTC_INPUT_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/clock-32768",
-                            "clock-output-names", "rtc_clk");
-    qemu_fdt_setprop_cell(ms->fdt, "/clock-32768", "phandle",
-                          rtc_clock_phandle);
+    th1520_fdt_add_fixed_clock(ms->fdt, "/clock-32768", "rtc_clk",
+                               TH1520_RTC_INPUT_FREQ, rtc_clock_phandle);
 
-    /*
-     * The vendor and mainline TH1520 clock controllers use incompatible
-     * clock-ID namespaces.  QEMU's DWC MSHC model currently has a fixed
-     * 198 MHz input, so describe that input directly rather than claiming an
-     * AP-clock-controller ID.  This does not model runtime AP clock gating.
-     */
-    mshc_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt, "/mshc-clock");
-    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "compatible",
-                            "fixed-clock");
-    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "#clock-cells", 0);
-    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "clock-frequency",
-                          TH1520_MSHC_INPUT_FREQ);
-    qemu_fdt_setprop_string(ms->fdt, "/mshc-clock", "clock-output-names",
-                            "mshc-input");
-    qemu_fdt_setprop_cell(ms->fdt, "/mshc-clock", "phandle",
-                          mshc_clock_phandle);
+    if (vendor) {
+        /*
+         * The vendor tree feeds the AP clock controller from three root
+         * oscillators and binds the UARTs, timers and mailbox to root
+         * fixed clocks instead of provider IDs; the rates are the ones the
+         * vendor th1520-beaglev-ahead.dts assigns.
+         */
+        osc_32k_phandle = phandle++;
+        th1520_fdt_add_fixed_clock(ms->fdt, "/32k-oscillator", "osc_32k",
+                                   TH1520_RTC_INPUT_FREQ, osc_32k_phandle);
+        rc_24m_phandle = phandle++;
+        th1520_fdt_add_fixed_clock(ms->fdt, "/clock-rc-24m", "rc_24m",
+                                   TH1520_VENDOR_RC_24M_FREQ, rc_24m_phandle);
+        apb_clock_phandle = phandle++;
+        th1520_fdt_add_fixed_clock(ms->fdt, "/apb-clk-clock", "apb_clk",
+                                   TH1520_VENDOR_APB_CLK_FREQ,
+                                   apb_clock_phandle);
+        uart_sclk_phandle = phandle++;
+        th1520_fdt_add_fixed_clock(ms->fdt, "/uart-sclk-clock", "uart_sclk",
+                                   TH1520_VENDOR_UART_SCLK_FREQ,
+                                   uart_sclk_phandle);
+    }
 
     ap_clock_phandle = phandle++;
-    qemu_fdt_add_subnode(ms->fdt,
-                         "/soc/clock-controller@ffef010000");
-    qemu_fdt_setprop_string(ms->fdt,
-                            "/soc/clock-controller@ffef010000", "compatible",
-                            "thead,th1520-clk-ap");
-    qemu_fdt_setprop_sized_cells(ms->fdt,
-                                 "/soc/clock-controller@ffef010000", "reg",
+    qemu_fdt_add_subnode(ms->fdt, ap_clock_node);
+    qemu_fdt_setprop_string(ms->fdt, ap_clock_node, "compatible",
+                            vendor ? "xuantie,th1520-fm-ree-clk"
+                                   : "thead,th1520-clk-ap");
+    qemu_fdt_setprop_sized_cells(ms->fdt, ap_clock_node, "reg",
                                  2, th1520_memmap[TH1520_DEV_AP_CLOCK].base,
                                  2, th1520_memmap[TH1520_DEV_AP_CLOCK].size);
-    qemu_fdt_setprop_cell(ms->fdt,
-                          "/soc/clock-controller@ffef010000", "clocks",
-                          osc_phandle);
-    qemu_fdt_setprop_cell(ms->fdt,
-                          "/soc/clock-controller@ffef010000", "#clock-cells",
-                          1);
-    qemu_fdt_setprop_cell(ms->fdt,
-                          "/soc/clock-controller@ffef010000", "phandle",
+    if (vendor) {
+        qemu_fdt_setprop_cells(ms->fdt, ap_clock_node, "clocks",
+                               osc_32k_phandle, osc_phandle, rc_24m_phandle);
+        qemu_fdt_setprop_string_array(ms->fdt, ap_clock_node, "clock-names",
+                                      (char **)&vendor_ap_clock_parents,
+                                      ARRAY_SIZE(vendor_ap_clock_parents));
+    } else {
+        qemu_fdt_setprop_cell(ms->fdt, ap_clock_node, "clocks", osc_phandle);
+    }
+    qemu_fdt_setprop_cell(ms->fdt, ap_clock_node, "#clock-cells", 1);
+    qemu_fdt_setprop_cell(ms->fdt, ap_clock_node, "phandle",
                           ap_clock_phandle);
 
     ap_reset_phandle = phandle++;
@@ -1777,7 +1810,7 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                           "/soc/reset-controller@ffef014000", "phandle",
                           ap_reset_phandle);
 
-    th1520_create_pinctrl_fdt(ms->fdt, ap_clock_phandle,
+    th1520_create_pinctrl_fdt(ms->fdt, vendor, ap_clock_phandle,
                               aonsys_clock_phandle, &phandle,
                               padctrl_phandles, &led_pins_phandle,
                               &gmac0_pins_phandle, &uart0_pins_phandle,
@@ -1855,7 +1888,14 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                      2, map->size);
         qemu_fdt_setprop_cell(ms->fdt, name, "#address-cells", 1);
         qemu_fdt_setprop_cell(ms->fdt, name, "#size-cells", 0);
-        if (info->clock_id >= 0) {
+        if (info->clock_id >= 0 && vendor) {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle, info->vendor_pclk_id,
+                                   ap_clock_phandle, info->vendor_dbclk_id);
+            qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                          (char **)&vendor_gpio_clock_names,
+                                          ARRAY_SIZE(vendor_gpio_clock_names));
+        } else if (info->clock_id >= 0) {
             qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
                                    ap_clock_phandle, info->clock_id);
             qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "bus");
@@ -1920,12 +1960,18 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                      2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
                                th1520_uart_irqs[i], 4);
-        qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
-                               ap_clock_phandle, TH1520_CLK_UART_SCLK,
-                               ap_clock_phandle, th1520_uart_pclk_ids[i]);
-        qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
-                                      (char **)&uart_clock_names,
-                                      ARRAY_SIZE(uart_clock_names));
+        if (vendor) {
+            qemu_fdt_setprop_cell(ms->fdt, name, "clocks",
+                                  uart_sclk_phandle);
+        } else {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle, TH1520_CLK_UART_SCLK,
+                                   ap_clock_phandle,
+                                   th1520_uart_pclk_ids[i]);
+            qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                          (char **)&uart_clock_names,
+                                          ARRAY_SIZE(uart_clock_names));
+        }
         qemu_fdt_setprop_cell(ms->fdt, name, "reg-shift", 2);
         qemu_fdt_setprop_cell(ms->fdt, name, "reg-io-width", 4);
         qemu_fdt_setprop_string(ms->fdt, name, "status",
@@ -1955,8 +2001,14 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
                                      2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", info->irq, 4);
-        qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
-                               info->clock_id);
+        if (vendor) {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                                   info->vendor_clock_id);
+            qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "pclk");
+        } else {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                                   info->clock_id);
+        }
         qemu_fdt_setprop_cell(ms->fdt, name, "#address-cells", 1);
         qemu_fdt_setprop_cell(ms->fdt, name, "#size-cells", 0);
         qemu_fdt_setprop_string(ms->fdt, name, "status",
@@ -1990,8 +2042,17 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg", 2, map->base,
                                      2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", info->irq, 4);
-        qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
-                               info->clock_id);
+        if (vendor) {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle, info->vendor_sclk_id,
+                                   ap_clock_phandle, info->vendor_pclk_id);
+            qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                          (char **)&vendor_spi_clock_names,
+                                          ARRAY_SIZE(vendor_spi_clock_names));
+        } else {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                                   info->clock_id);
+        }
         qemu_fdt_setprop_cell(ms->fdt, name, "#address-cells", 1);
         qemu_fdt_setprop_cell(ms->fdt, name, "#size-cells", 0);
         qemu_fdt_setprop_string(ms->fdt, name, "status", "disabled");
@@ -2005,8 +2066,13 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_sized_cells(ms->fdt, "/soc/pwm@ffec01c000", "reg",
                                  2, th1520_memmap[TH1520_DEV_PWM].base, 2,
                                  th1520_memmap[TH1520_DEV_PWM].size);
-    qemu_fdt_setprop_cells(ms->fdt, "/soc/pwm@ffec01c000", "clocks",
-                           ap_clock_phandle, TH1520_PWM_CLOCK_ID);
+    if (vendor) {
+        qemu_fdt_setprop_cell(ms->fdt, "/soc/pwm@ffec01c000", "clocks",
+                              osc_phandle);
+    } else {
+        qemu_fdt_setprop_cells(ms->fdt, "/soc/pwm@ffec01c000", "clocks",
+                               ap_clock_phandle, TH1520_PWM_CLOCK_ID);
+    }
     qemu_fdt_setprop_cell(ms->fdt, "/soc/pwm@ffec01c000", "#pwm-cells", 3);
 
     for (int group = 0; group < TH1520_TIMER_GROUP_COUNT; group++) {
@@ -2024,9 +2090,14 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
             qemu_fdt_setprop_sized_cells(ms->fdt, name, "reg",
                                          2, base, 2,
                                          TH1520_TIMER_CHANNEL_STRIDE);
-            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
-                                   ap_clock_phandle,
-                                   TH1520_CLK_PERI_APB_PCLK);
+            if (vendor) {
+                qemu_fdt_setprop_cell(ms->fdt, name, "clocks",
+                                      apb_clock_phandle);
+            } else {
+                qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                       ap_clock_phandle,
+                                       TH1520_CLK_PERI_APB_PCLK);
+            }
             qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "timer");
             qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
                                    info->first_irq + channel, 4);
@@ -2053,7 +2124,8 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                      2, map->base, 2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", info->irq, 4);
         qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
-                               info->clock_id);
+                               vendor ? info->vendor_clock_id
+                                      : info->clock_id);
         qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "tclk");
         qemu_fdt_setprop_cells(ms->fdt, name, "resets", ap_reset_phandle,
                                info->reset_id);
@@ -2119,15 +2191,22 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
     qemu_fdt_setprop_string_array(ms->fdt, "/soc/mailbox@ffffc38000",
                                   "reg-names", (char **)&mbox_reg_names,
                                   ARRAY_SIZE(mbox_reg_names));
-    qemu_fdt_setprop_cells(ms->fdt, "/soc/mailbox@ffffc38000", "clocks",
-                           ap_clock_phandle, TH1520_CLK_MBOX0,
-                           ap_clock_phandle, TH1520_CLK_MBOX1,
-                           ap_clock_phandle, TH1520_CLK_MBOX2,
-                           ap_clock_phandle, TH1520_CLK_MBOX3);
-    qemu_fdt_setprop_string_array(ms->fdt, "/soc/mailbox@ffffc38000",
-                                  "clock-names",
-                                  (char **)&mbox_clock_names,
-                                  ARRAY_SIZE(mbox_clock_names));
+    if (vendor) {
+        qemu_fdt_setprop_cell(ms->fdt, "/soc/mailbox@ffffc38000", "clocks",
+                              apb_clock_phandle);
+        qemu_fdt_setprop_string(ms->fdt, "/soc/mailbox@ffffc38000",
+                                "clock-names", "ipg");
+    } else {
+        qemu_fdt_setprop_cells(ms->fdt, "/soc/mailbox@ffffc38000", "clocks",
+                               ap_clock_phandle, TH1520_CLK_MBOX0,
+                               ap_clock_phandle, TH1520_CLK_MBOX1,
+                               ap_clock_phandle, TH1520_CLK_MBOX2,
+                               ap_clock_phandle, TH1520_CLK_MBOX3);
+        qemu_fdt_setprop_string_array(ms->fdt, "/soc/mailbox@ffffc38000",
+                                      "clock-names",
+                                      (char **)&mbox_clock_names,
+                                      ARRAY_SIZE(mbox_clock_names));
+    }
     qemu_fdt_setprop_cells(ms->fdt, "/soc/mailbox@ffffc38000",
                            "interrupts", TH1520_MBOX_IRQ, 4);
     qemu_fdt_setprop_cell(ms->fdt, "/soc/mailbox@ffffc38000",
@@ -2143,9 +2222,16 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                  th1520_memmap[TH1520_DEV_DMAC0].size);
     qemu_fdt_setprop_cells(ms->fdt, dmac_name, "interrupts",
                            TH1520_DMAC0_IRQ, 4);
-    qemu_fdt_setprop_cells(ms->fdt, dmac_name, "clocks",
-                           ap_clock_phandle, TH1520_CLK_PERI_APB_PCLK,
-                           ap_clock_phandle, TH1520_CLK_PERI_APB_PCLK);
+    if (vendor) {
+        qemu_fdt_setprop_cells(ms->fdt, dmac_name, "clocks",
+                               ap_clock_phandle, TH1520_VCLK_DMAC_CPUSYS_ACLK,
+                               ap_clock_phandle,
+                               TH1520_VCLK_DMAC_CPUSYS_HCLK);
+    } else {
+        qemu_fdt_setprop_cells(ms->fdt, dmac_name, "clocks",
+                               ap_clock_phandle, TH1520_CLK_PERI_APB_PCLK,
+                               ap_clock_phandle, TH1520_CLK_PERI_APB_PCLK);
+    }
     qemu_fdt_setprop_string_array(ms->fdt, dmac_name, "clock-names",
                                   (char **)&dmac_clock_names,
                                   ARRAY_SIZE(dmac_clock_names));
@@ -2176,8 +2262,16 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
                                      2, map->size);
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
                                th1520_mshc_irqs[i], 4);
-        qemu_fdt_setprop_cell(ms->fdt, name, "clocks",
-                              mshc_clock_phandle);
+        /*
+         * Both kernels' dwcmshc drivers take a mandatory "core" clock: the
+         * CLK_EMMC_SDIO gate upstream, CLKGEN_EMMC_SDIO_REF_CLK (the same
+         * 0x204 bit 30) in the vendor namespace.  The vendor "bus" clock is
+         * optional and lives on a MISCSYS gate provider QEMU does not
+         * describe.
+         */
+        qemu_fdt_setprop_cells(ms->fdt, name, "clocks", ap_clock_phandle,
+                               vendor ? TH1520_VCLK_EMMC_SDIO_REF_CLK
+                                      : TH1520_CLK_EMMC_SDIO);
         qemu_fdt_setprop_string(ms->fdt, name, "clock-names", "core");
         qemu_fdt_setprop_cell(ms->fdt, name, "max-frequency",
                               TH1520_MSHC_INPUT_FREQ);
@@ -2236,15 +2330,30 @@ static void beaglev_ahead_create_fdt(BeagleVAheadState *s)
         qemu_fdt_setprop_cells(ms->fdt, name, "interrupts",
                                th1520_gmac_irqs[i], 4);
         qemu_fdt_setprop_string(ms->fdt, name, "interrupt-names", "macirq");
-        qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
-                               ap_clock_phandle, TH1520_CLK_GMAC_AXI,
-                               ap_clock_phandle,
-                               i ? TH1520_CLK_GMAC1 : TH1520_CLK_GMAC0,
-                               ap_clock_phandle,
-                               TH1520_CLK_PERISYS_APB4_HCLK);
-        qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
-                                      (char **)&gmac_clock_names,
-                                      ARRAY_SIZE(gmac_clock_names));
+        if (vendor) {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle,
+                                   i ? TH1520_VCLK_GMAC1_CCLK
+                                     : TH1520_VCLK_GMAC0_CCLK,
+                                   ap_clock_phandle,
+                                   i ? TH1520_VCLK_GMAC1_PCLK
+                                     : TH1520_VCLK_GMAC0_PCLK,
+                                   ap_clock_phandle, TH1520_VCLK_GMAC_AXI_ACLK,
+                                   ap_clock_phandle, TH1520_VCLK_GMAC_AXI_PCLK);
+            qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                          (char **)&vendor_gmac_clock_names,
+                                          ARRAY_SIZE(vendor_gmac_clock_names));
+        } else {
+            qemu_fdt_setprop_cells(ms->fdt, name, "clocks",
+                                   ap_clock_phandle, TH1520_CLK_GMAC_AXI,
+                                   ap_clock_phandle,
+                                   i ? TH1520_CLK_GMAC1 : TH1520_CLK_GMAC0,
+                                   ap_clock_phandle,
+                                   TH1520_CLK_PERISYS_APB4_HCLK);
+            qemu_fdt_setprop_string_array(ms->fdt, name, "clock-names",
+                                          (char **)&gmac_clock_names,
+                                          ARRAY_SIZE(gmac_clock_names));
+        }
         qemu_fdt_setprop_cell(ms->fdt, name, "snps,pbl", 32);
         qemu_fdt_setprop(ms->fdt, name, "snps,fixed-burst", NULL, 0);
         qemu_fdt_setprop_cell(ms->fdt, name,
@@ -2590,6 +2699,29 @@ static void beaglev_ahead_set_boot_mode(Object *obj, const char *value,
     }
 }
 
+static char *beaglev_ahead_get_clock_abi(Object *obj, Error **errp)
+{
+    BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(obj);
+
+    return g_strdup(s->clock_abi == TH1520_CLOCK_ABI_VENDOR ?
+                    "vendor" : "upstream");
+}
+
+static void beaglev_ahead_set_clock_abi(Object *obj, const char *value,
+                                        Error **errp)
+{
+    BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(obj);
+
+    if (!strcmp(value, "upstream")) {
+        s->clock_abi = TH1520_CLOCK_ABI_UPSTREAM;
+    } else if (!strcmp(value, "vendor")) {
+        s->clock_abi = TH1520_CLOCK_ABI_VENDOR;
+    } else {
+        error_setg(errp, "unsupported BeagleV Ahead clock ABI '%s' "
+                   "(expected 'upstream' or 'vendor')", value);
+    }
+}
+
 static void beaglev_ahead_machine_instance_init(Object *obj)
 {
     BeagleVAheadState *s = BEAGLEV_AHEAD_MACHINE(obj);
@@ -2633,6 +2765,15 @@ static void beaglev_ahead_machine_class_init(ObjectClass *oc,
         "Boot path: direct (QEMU firmware/FDT trampoline) or mask-rom "
         "(execute a user-supplied raw -bios image from the ROM aperture)");
     object_property_set_default_str(prop, "direct");
+
+    prop = object_class_property_add_str(oc, "clock-abi",
+                                         beaglev_ahead_get_clock_abi,
+                                         beaglev_ahead_set_clock_abi);
+    object_class_property_set_description(oc, "clock-abi",
+        "Clock binding the generated device tree describes: upstream "
+        "(thead,th1520-clk-ap, mainline Linux) or vendor "
+        "(xuantie,th1520-fm-ree-clk, RevyOS/T-Head kernels)");
+    object_property_set_default_str(prop, "upstream");
 }
 
 static const TypeInfo beaglev_ahead_types[] = {
