@@ -145,6 +145,12 @@ run-test-xtheadvector-slideup: test-xtheadvector-slideup
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 
+EXTRA_RUNS += run-test-xtheadvector-compress
+test-xtheadvector-compress: test-xtheadvector-compress.o
+run-test-xtheadvector-compress: test-xtheadvector-compress
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 EXTRA_RUNS += run-test-rvv-widen-illegal
 test-rvv-widen-illegal: test-rvv-widen-illegal.o
 run-test-rvv-widen-illegal: test-rvv-widen-illegal
