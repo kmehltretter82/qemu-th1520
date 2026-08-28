@@ -48,6 +48,8 @@
 #define TH1520_PLL_CFG2_MASK 0x3ffff000
 #define TH1520_PLL_CFG3_MASK 0xfffff700
 #define TH1520_AP_TIMED_GATE_HZ 125000000
+/* stmmaceth: the GMAC AXI/DMA clock the pinned Linux RIWT conversion assumes. */
+#define TH1520_AP_GMAC_AXI_HZ 500000000
 
 typedef struct TH1520RegInfo {
     uint16_t offset;
@@ -197,7 +199,16 @@ static Clock *th1520_ap_clock_timed_output(TH1520APClockState *s,
         output <= TH1520_AP_CLOCK_GATE_TIMER1) {
         return s->timer_clock[output - TH1520_AP_CLOCK_GATE_TIMER0];
     }
+    if (output == TH1520_AP_CLOCK_GATE_GMAC_AXI) {
+        return s->gmac_axi_clock;
+    }
     return NULL;
+}
+
+static unsigned th1520_ap_clock_output_hz(unsigned int output)
+{
+    return output == TH1520_AP_CLOCK_GATE_GMAC_AXI ? TH1520_AP_GMAC_AXI_HZ :
+                                                     TH1520_AP_TIMED_GATE_HZ;
 }
 
 static void th1520_ap_clock_update_gate(TH1520APClockState *s,
@@ -213,7 +224,8 @@ static void th1520_ap_clock_update_gate(TH1520APClockState *s,
         qemu_set_irq(s->peripheral_clock_enable[output], enabled);
     }
     if (clock && update_clock) {
-        clock_update_hz(clock, enabled ? TH1520_AP_TIMED_GATE_HZ : 0);
+        clock_update_hz(clock,
+                        enabled ? th1520_ap_clock_output_hz(output) : 0);
     }
 }
 
@@ -471,6 +483,8 @@ static void th1520_ap_clock_init(Object *obj)
         DEVICE(s), TH1520_AP_CLOCK_WDT0_OUTPUT);
     s->wdt_clock[1] = qdev_init_clock_out(
         DEVICE(s), TH1520_AP_CLOCK_WDT1_OUTPUT);
+    s->gmac_axi_clock = qdev_init_clock_out(
+        DEVICE(s), TH1520_AP_CLOCK_GMAC_AXI_OUTPUT);
 }
 
 static void th1520_ap_clock_class_init(ObjectClass *klass, const void *data)

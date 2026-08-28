@@ -15,6 +15,7 @@
 #include "hw/core/sysbus.h"
 #include "net/net.h"
 #include "qemu/timer.h"
+#include "hw/core/clock.h"
 
 #define DW_GMAC_REG_SIZE 0x1060
 #define DW_GMAC_NR_REGS (DW_GMAC_REG_SIZE / sizeof(uint32_t))
@@ -205,6 +206,15 @@ typedef struct DWGMACState {
     uint32_t rx_fifo_capacity;
     uint32_t rx_fifo_used;
     uint32_t rx_fifo_size;
+
+    /*
+     * Optional DMA clock ("stmmaceth" in the Linux binding).  When a source is
+     * connected its rate replaces rx_watchdog_clock_hz, a zero rate stalls
+     * both DMA engines, and a receive-interrupt watchdog that was counting is
+     * frozen as a cycle count so it resumes at whatever rate returns.
+     */
+    Clock *dma_clock;
+    uint64_t rx_watchdog_frozen_cycles;
 
     uint32_t version;
     uint32_t hw_feature;

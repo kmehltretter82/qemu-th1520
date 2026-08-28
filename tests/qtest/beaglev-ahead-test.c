@@ -3097,19 +3097,27 @@ static void test_ap_clock_gate_outputs(void)
     static const struct {
         unsigned int output;
         const char *path;
+        uint64_t period;
     } timed_clocks[] = {
         { TH1520_AP_CLOCK_GATE_PWM,
-          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_PWM_OUTPUT },
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_PWM_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(125000000) },
         { TH1520_AP_CLOCK_GATE_TIMER0,
-          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_TIMER0_OUTPUT },
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_TIMER0_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(125000000) },
         { TH1520_AP_CLOCK_GATE_TIMER1,
-          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_TIMER1_OUTPUT },
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_TIMER1_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(125000000) },
         { TH1520_AP_CLOCK_GATE_WDT0,
-          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_WDT0_OUTPUT },
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_WDT0_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(125000000) },
         { TH1520_AP_CLOCK_GATE_WDT1,
-          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_WDT1_OUTPUT },
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_WDT1_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(125000000) },
+        { TH1520_AP_CLOCK_GATE_GMAC_AXI,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_GMAC_AXI_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(TH1520_GMAC_RIWT_CLOCK_HZ) },
     };
-    const uint64_t enabled_period = CLOCK_PERIOD_FROM_HZ(125000000);
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
 
     qtest_irq_intercept_out_named(qts, TH1520_AP_CLOCK_QOM_PATH,
@@ -3127,7 +3135,7 @@ static void test_ap_clock_gate_outputs(void)
     }
     for (size_t i = 0; i < ARRAY_SIZE(timed_clocks); i++) {
         g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
-                         ==, enabled_period);
+                         ==, timed_clocks[i].period);
     }
 
     for (size_t output = 0;
@@ -3151,13 +3159,13 @@ static void test_ap_clock_gate_outputs(void)
             &th1520_ap_clock_gate_test_outputs[timed_clocks[i].output];
 
         g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
-                         ==, enabled_period);
+                         ==, timed_clocks[i].period);
         th1520_set_ap_clock_gate(qts, info->offset, info->mask, false);
         g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
                          ==, 0);
         th1520_set_ap_clock_gate(qts, info->offset, info->mask, true);
         g_assert_cmpuint(qtest_qom_clock_period(qts, timed_clocks[i].path),
-                         ==, enabled_period);
+                         ==, timed_clocks[i].period);
     }
 
     qtest_quit(qts);
@@ -7283,6 +7291,216 @@ static void test_gmac_rx_fifo_migration(void)
     g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(packet) + 4);
     qtest_memread(dst, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
     g_assert_cmpmem(buffer, sizeof(buffer), packet, sizeof(packet));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    close(src_sockets[0]);
+    close(dst_sockets[0]);
+    unlink(path);
+}
+
+static void gmac_set_axi_gate(QTestState *qts, bool enabled)
+{
+    th1520_set_ap_clock_gate(qts, 0x204, BIT(21), enabled);
+}
+
+static bool gmac_riwt_fired(QTestState *qts)
+{
+    return qtest_readl(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+           DWMAC_DMA_STATUS_RI;
+}
+
+/* Arm the receive-interrupt watchdog with a DIC frame and return its period. */
+static int64_t gmac_arm_riwt(QTestState *qts)
+{
+    const uint32_t riwt = 0xa0;
+    GMACDesc desc;
+
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    gmac_prepare_rx_desc(qts, GMAC_TEST_DESC_ADDR, GMAC_TEST_DATA_ADDR, true);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE,
+                    &desc);
+    gmac_configure_rx_watchdog(qts, GMAC_TEST_DESC_ADDR, riwt);
+    return DIV_ROUND_UP((uint64_t)riwt * 256 * 1000000000ULL,
+                        TH1520_GMAC_RIWT_CLOCK_HZ);
+}
+
+/*
+ * The watchdog counts stmmaceth cycles.  Gating the GMAC AXI clock freezes
+ * the remaining count; re-enabling it resumes from exactly that point.
+ */
+static void test_gmac_axi_gate_riwt_freeze(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    QTestState *qts;
+    GMACDesc desc;
+    int64_t timeout_ns;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+    timeout_ns = gmac_arm_riwt(qts);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_false(gmac_riwt_fired(qts));
+
+    qtest_clock_step(qts, timeout_ns / 2);
+    g_assert_false(gmac_riwt_fired(qts));
+
+    gmac_set_axi_gate(qts, false);
+    qtest_clock_step(qts, 4 * timeout_ns);
+    g_assert_false(gmac_riwt_fired(qts));
+
+    gmac_set_axi_gate(qts, true);
+    qtest_clock_step(qts, timeout_ns - timeout_ns / 2 - 1);
+    g_assert_false(gmac_riwt_fired(qts));
+    qtest_clock_step(qts, 1);
+    g_assert_true(gmac_riwt_fired(qts));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+/* Neither DMA engine progresses without its clock; both resume with it. */
+static void test_gmac_axi_gate_dma_pause(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x9a, 0x9b, 0x9c, 0x9d,
+    };
+    static const uint8_t outgoing[64] = {
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x08, 0x00, 0x45, 0x00, 0x7a, 0x7b, 0x7c, 0x7d,
+    };
+    const uint32_t tx_desc_addr = GMAC_TEST_DESC_ADDR + 0x800;
+    uint8_t buffer[64];
+    QTestState *qts;
+    GMACDesc desc;
+    struct pollfd pfd;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    desc = (GMACDesc) { .des0 = BIT(31), .des1 = DWMAC_RX_DESC_RER | 2048,
+                        .des2 = GMAC_TEST_DATA_ADDR };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_configure_rx_ring(qts, GMAC_TEST_DESC_ADDR);
+
+    /* Receive: the frame waits in the FIFO while the DMA has no clock. */
+    gmac_set_axi_gate(qts, false);
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    gmac_settle(qts);
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0, ==, BIT(31));
+    g_assert_false(gmac_riwt_fired(qts));
+    g_assert_cmphex(qtest_readl(qts, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                    (DWMAC_DMA_STATUS_RU | BIT(4)), ==, 0);
+
+    gmac_set_axi_gate(qts, true);
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(packet) + 4);
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), packet, sizeof(packet));
+
+    /* Transmit: an owned descriptor and a poll demand go nowhere until then. */
+    qtest_memwrite(qts, GMAC_TEST_DATA2_ADDR, outgoing, sizeof(outgoing));
+    desc = (GMACDesc) {
+        .des0 = DWMAC_TX_DESC_OWN | DWMAC_TX_DESC_FS | DWMAC_TX_DESC_LS |
+                DWMAC_TX_DESC_IC,
+        .des1 = sizeof(outgoing),
+        .des2 = GMAC_TEST_DATA2_ADDR,
+    };
+    gmac_write_desc(qts, tx_desc_addr, &desc);
+    desc = (GMACDesc) { 0 };
+    gmac_write_desc(qts, tx_desc_addr + GMAC_ENHANCED_DESC_STRIDE, &desc);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_TX_BASE_ADDR, tx_desc_addr);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG,
+                 DWMAC_MAC_CONFIG_RX_EN | BIT(3));
+    gmac_set_axi_gate(qts, false);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL,
+                 BIT(1) | DWMAC_DMA_CONTROL_ST);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_XMT_POLL_DEMAND, 1);
+    gmac_settle(qts);
+    pfd = (struct pollfd) { .fd = sockets[0], .events = POLLIN };
+    g_assert_cmpint(poll(&pfd, 1, 200), ==, 0);
+    gmac_read_desc(qts, tx_desc_addr, &desc);
+    g_assert_true(desc.des0 & DWMAC_TX_DESC_OWN);
+
+    gmac_set_axi_gate(qts, true);
+    gmac_receive_tx_packet(sockets[0], buffer, sizeof(outgoing));
+    g_assert_cmpmem(buffer, sizeof(outgoing), outgoing, sizeof(outgoing));
+    gmac_read_desc(qts, tx_desc_addr, &desc);
+    g_assert_false(desc.des0 & DWMAC_TX_DESC_OWN);
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+/* A watchdog frozen by the gate stays frozen across migration. */
+static void test_gmac_axi_gate_migration(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00,
+    };
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    GMACDesc desc;
+    int64_t timeout_ns;
+    int src_sockets[2];
+    int dst_sockets[2];
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-gmac-axigate-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, src_sockets), ==, 0);
+    src = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-nic socket,fd=%d,model=gmac0", src_sockets[1]);
+    close(src_sockets[1]);
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, dst_sockets), ==, 0);
+    dst = qtest_initf("-machine beaglev-ahead -bios none -incoming defer "
+                      "-nic socket,fd=%d,model=gmac0", dst_sockets[1]);
+    close(dst_sockets[1]);
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+
+    timeout_ns = gmac_arm_riwt(src);
+    gmac_send_packet(src_sockets[0], packet, sizeof(packet));
+    gmac_wait_rx_desc_complete(src, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_clock_step(src, timeout_ns / 2);
+    gmac_set_axi_gate(src, false);
+    g_assert_false(gmac_riwt_fired(src));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmpuint(qtest_qom_clock_period(dst,
+        TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_GMAC_AXI_OUTPUT), ==, 0);
+    qtest_clock_step(dst, 4 * timeout_ns);
+    g_assert_false(gmac_riwt_fired(dst));
+
+    gmac_set_axi_gate(dst, true);
+    qtest_clock_step(dst, timeout_ns - timeout_ns / 2 - 1);
+    g_assert_false(gmac_riwt_fired(dst));
+    qtest_clock_step(dst, 1);
+    g_assert_true(gmac_riwt_fired(dst));
 
     qtest_quit(dst);
     qtest_quit(src);
@@ -15274,6 +15492,12 @@ int main(int argc, char **argv)
                        test_gmac_rx_fifo_migration);
         qtest_add_func("/beaglev-ahead/gmac/tx-suspend-midframe",
                        test_gmac_tx_suspend_midframe);
+        qtest_add_func("/beaglev-ahead/gmac/axi-gate-riwt-freeze",
+                       test_gmac_axi_gate_riwt_freeze);
+        qtest_add_func("/beaglev-ahead/gmac/axi-gate-dma-pause",
+                       test_gmac_axi_gate_dma_pause);
+        qtest_add_func("/beaglev-ahead/gmac/axi-gate-migration",
+                       test_gmac_axi_gate_migration);
         qtest_add_func("/beaglev-ahead/gmac/tx-suspend-migration",
                        test_gmac_tx_suspend_migration);
         qtest_add_func("/beaglev-ahead/gmac/rx-checksum-type2",

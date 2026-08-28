@@ -189,6 +189,44 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
 
+### Current GMAC AXI clock-gate coupling checkpoint
+
+This is the first clock-gate coupling beyond the timed consumers, chosen
+because the GMAC has engine semantics the gate can honestly affect: the
+receive-interrupt watchdog is defined in ``stmmaceth`` cycles, and no AXI
+clock means no DMA progress.  Mainline gives GMAC0 ``CLK_GMAC_AXI`` as
+``stmmaceth`` and ``CLK_GMAC0`` as ``pclk``; only the former is coupled,
+because ``pclk`` gates register access whose fault behaviour is unknown.
+
+The CPR exports the GMAC AXI gate as a 500 MHz Clock, both cores take it as a
+``stmmaceth`` input created at instance init so the board can connect it,
+and the rate replaces the fixed ``riwt-clock-frequency`` whenever a source is
+connected; the NPCM integration connects none and is unchanged.  A counting
+watchdog is converted to cycles before the rate changes and back to a
+deadline after it, so a gate freezes it exactly and any returning rate
+resumes it; a zero rate also makes the receive drain and the transmit engine
+return early, so arrivals wait in the FIFO without ``RU`` and owned transmit
+descriptors stay owned until the clock returns.  The clock and a frozen count
+migrate through a per-identity ``dma-clock`` subsection emitted only when a
+source is connected or a count is frozen.
+
+No defect was found.  Three qtests pass: exact freeze and resume of the
+81,920 ns watchdog across a gate, receive and transmit progress stalled while
+gated and completed on re-enable, and a frozen watchdog migrated while gated
+and expiring exactly on the destination.  Three mutations each fail one of
+them: no freeze on gating, a DMA that never pauses, and a subsection that is
+never emitted.  The first attempt at the third mutation wrote
+``return false && (...) || frozen`` and, by precedence, still emitted the
+subsection whenever a count was frozen, so it tested nothing; it was redone
+as an unconditional ``return false``.  The CPR output test now carries a
+per-entry period and asserts the 500 MHz output alongside the 125 MHz ones.
+
+Gates: 166/166 normal, 162/162 dependency-minimal, 162/162 ASan/UBSan, the
+GMAC group 24/24, the CPR group 9/9, NPCM 7/7.  The mainline traffic gate
+passes on one and four harts through Linux's unused-clock pass, the
+RevyOS/Alpine cross-pair reaches its four markers, and the Tuxboot controls
+pass.
+
 ### Current USB attached-transfer migration checkpoint
 
 This closes the last named ``MIG-001`` in-flight DMA item: a transfer pending
@@ -725,7 +763,9 @@ change must add a reproducer and a regression before changing any of them.
   delivered by the destination once the guest resumes the ring.  A read
   pending on an attached USB keyboard now migrates and completes on the
   destination, validating the upstream xHCI post-load re-kick; bulk,
-  isochronous and mid-data-stage USB transfers remain open.
+  isochronous and mid-data-stage USB transfers remain open.  A GMAC
+  receive-interrupt watchdog frozen by the AXI clock gate migrates as a
+  cycle count and expires exactly once the destination re-enables the gate.
   Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load

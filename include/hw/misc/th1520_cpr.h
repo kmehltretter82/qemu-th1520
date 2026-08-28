@@ -30,6 +30,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(TH1520APResetState, TH1520_AP_RESET)
 #define TH1520_AP_CLOCK_TIMER1_OUTPUT "timer1"
 #define TH1520_AP_CLOCK_WDT0_OUTPUT "wdt0"
 #define TH1520_AP_CLOCK_WDT1_OUTPUT "wdt1"
+#define TH1520_AP_CLOCK_GMAC_AXI_OUTPUT "gmac-axi"
 
 /*
  * Active-high leaf-clock enables backed by the mainline TH1520 AP clock
@@ -120,6 +121,7 @@ struct TH1520APClockState {
     Clock *pwm_clock;
     Clock *timer_clock[2];
     Clock *wdt_clock[2];
+    Clock *gmac_axi_clock;
     uint32_t regs[TH1520_AP_CLOCK_REGS];
     uint32_t pll_pending;
     int64_t pll_deadline[TH1520_AP_PLL_COUNT];

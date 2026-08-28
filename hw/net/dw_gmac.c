@@ -19,6 +19,7 @@
 #include "hw/core/registerfields.h"
 #include "hw/net/mii.h"
 #include "hw/net/dw_gmac.h"
+#include "hw/core/qdev-clock.h"
 #include "migration/vmstate.h"
 #include "qemu/error-report.h"
 #include "net/checksum.h"
@@ -149,6 +150,9 @@ typedef struct DWGMACRxFifoEntry {
 
 static bool gmac_rx_enabled(const DWGMACState *gmac);
 static void gmac_rx_fifo_clear(DWGMACState *gmac);
+static void gmac_rx_drain(DWGMACState *gmac);
+static void gmac_try_send_next_packet(DWGMACState *gmac);
+static void gmac_rx_watchdog_cancel(DWGMACState *gmac);
 
 static hwaddr gmac_mac_addr_reg(unsigned int index, bool high)
 {
@@ -861,9 +865,7 @@ static unsigned gmac_tx_checksum_control(const DWGMACState *gmac,
 
 static void dw_gmac_soft_reset(DWGMACState *gmac)
 {
-    if (gmac->rx_watchdog_timer) {
-        timer_del(gmac->rx_watchdog_timer);
-    }
+    gmac_rx_watchdog_cancel(gmac);
     memcpy(gmac->regs, dw_gmac_cold_reset_values,
            DW_GMAC_NR_REGS * sizeof(uint32_t));
     for (unsigned int index = 1; index < gmac->num_mac_addrs; index++) {
@@ -980,6 +982,29 @@ static void gmac_update_irq(DWGMACState *gmac)
     qemu_set_irq(gmac->irq, level);
 }
 
+static uint64_t gmac_rx_watchdog_hz(const DWGMACState *gmac)
+{
+    if (gmac->dma_clock && clock_has_source(gmac->dma_clock)) {
+        return clock_get_hz(gmac->dma_clock);
+    }
+    return gmac->rx_watchdog_clock_hz;
+}
+
+/* Without a connected clock the DMA is always clocked, as before. */
+static bool gmac_dma_clocked(const DWGMACState *gmac)
+{
+    return !gmac->dma_clock || !clock_has_source(gmac->dma_clock) ||
+           clock_get_hz(gmac->dma_clock) != 0;
+}
+
+static void gmac_rx_watchdog_cancel(DWGMACState *gmac)
+{
+    if (gmac->rx_watchdog_timer) {
+        timer_del(gmac->rx_watchdog_timer);
+    }
+    gmac->rx_watchdog_frozen_cycles = 0;
+}
+
 static void gmac_rx_watchdog_expired(void *opaque)
 {
     DWGMACState *gmac = opaque;
@@ -995,16 +1020,58 @@ static void gmac_rx_watchdog_start(DWGMACState *gmac)
     uint32_t riwt = gmac->regs[R_DWMAC_DMA_RX_WATCHDOG] &
                     DWMAC_DMA_RX_WATCHDOG_RIWT_MASK;
 
-    if (!riwt || !gmac->rx_watchdog_clock_hz ||
-        timer_pending(gmac->rx_watchdog_timer)) {
+    uint64_t hz = gmac_rx_watchdog_hz(gmac);
+
+    if (!riwt || !hz || timer_pending(gmac->rx_watchdog_timer) ||
+        gmac->rx_watchdog_frozen_cycles) {
         return;
     }
 
     cycles = (uint64_t)riwt * DWMAC_DMA_RX_WATCHDOG_CYCLE_SCALE;
-    delay_ns = DIV_ROUND_UP(cycles * NANOSECONDS_PER_SECOND,
-                            gmac->rx_watchdog_clock_hz);
+    delay_ns = DIV_ROUND_UP(cycles * NANOSECONDS_PER_SECOND, hz);
     timer_mod_ns(gmac->rx_watchdog_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + MAX(delay_ns, 1));
+}
+
+/*
+ * The DMA clock is about to change or has just changed.  A counting watchdog
+ * is converted to cycles at the old rate before the change and back to a
+ * deadline at the new rate after it; a zero rate keeps it frozen.  When the
+ * clock returns, both DMA engines pick up where the guest left them.
+ */
+static void gmac_dma_clock_update(void *opaque, ClockEvent event)
+{
+    DWGMACState *gmac = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint64_t hz;
+
+    if (event == ClockPreUpdate) {
+        hz = gmac_rx_watchdog_hz(gmac);
+        if (hz && timer_pending(gmac->rx_watchdog_timer)) {
+            int64_t left = MAX(timer_expire_time_ns(gmac->rx_watchdog_timer) -
+                               now, 1);
+
+            gmac->rx_watchdog_frozen_cycles =
+                MAX(DIV_ROUND_UP((uint64_t)left * hz, NANOSECONDS_PER_SECOND),
+                    1);
+            timer_del(gmac->rx_watchdog_timer);
+        }
+        return;
+    }
+
+    hz = gmac_rx_watchdog_hz(gmac);
+    if (!hz) {
+        return;
+    }
+    if (gmac->rx_watchdog_frozen_cycles) {
+        int64_t delay_ns = DIV_ROUND_UP(gmac->rx_watchdog_frozen_cycles *
+                                        NANOSECONDS_PER_SECOND, hz);
+
+        gmac->rx_watchdog_frozen_cycles = 0;
+        timer_mod_ns(gmac->rx_watchdog_timer, now + MAX(delay_ns, 1));
+    }
+    gmac_rx_drain(gmac);
+    gmac_try_send_next_packet(gmac);
 }
 
 static int gmac_read_rx_desc(dma_addr_t addr, struct DWGMACRxDesc *desc)
@@ -1473,7 +1540,7 @@ static bool gmac_rx_deliver(DWGMACState *gmac, const uint8_t *frame,
         gmac->regs[R_DWMAC_DMA_HOST_RX_DESC] = next_desc_addr;
         if (eof_transferred) {
             if (!gmac_rx_irq_disabled(&rx_desc)) {
-                timer_del(gmac->rx_watchdog_timer);
+                gmac_rx_watchdog_cancel(gmac);
                 gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_RI;
             } else if (!(gmac->regs[R_DWMAC_DMA_STATUS] &
                          DWMAC_DMA_STATUS_RI)) {
@@ -1503,7 +1570,7 @@ static void gmac_rx_drain(DWGMACState *gmac)
     DWGMACRxFifoEntry entry;
     const uint8_t *frame;
 
-    if (!gmac_rx_enabled(gmac)) {
+    if (!gmac_rx_enabled(gmac) || !gmac_dma_clocked(gmac)) {
         return;
     }
     while (gmac_rx_fifo_peek(gmac, &entry, &frame)) {
@@ -1584,7 +1651,7 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
     /* A new frame resumes a suspended receive process: re-poll first. */
     gmac_rx_drain(gmac);
 
-    if (!gmac->rx_fifo_used) {
+    if (!gmac->rx_fifo_used && gmac_dma_clocked(gmac)) {
         switch (gmac_rx_frame_fits(gmac, frame_len)) {
         case GMAC_RX_FITS:
             if (gmac_rx_deliver(gmac, frame, frame_len, rdes0_flags,
@@ -1606,7 +1673,10 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
         gmac_rx_count_missed(gmac, true);
         return len;
     }
-    gmac_rx_suspend(gmac);
+    /* A stalled DMA is not out of buffers; it merely has no clock yet. */
+    if (gmac_dma_clocked(gmac)) {
+        gmac_rx_suspend(gmac);
+    }
     return len;
 }
 
@@ -1862,7 +1932,8 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
 
     if (!(gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_TX_EN) ||
         !(gmac->regs[R_DWMAC_DMA_CONTROL] &
-          DWMAC_DMA_CONTROL_START_STOP_TX)) {
+          DWMAC_DMA_CONTROL_START_STOP_TX) ||
+        !gmac_dma_clocked(gmac)) {
         return;
     }
 
@@ -2285,7 +2356,7 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
         gmac->regs[offset / sizeof(uint32_t)] =
             v & DWMAC_DMA_RX_WATCHDOG_RIWT_MASK;
         if (!gmac->regs[offset / sizeof(uint32_t)]) {
-            timer_del(gmac->rx_watchdog_timer);
+            gmac_rx_watchdog_cancel(gmac);
         }
         break;
 
@@ -2517,15 +2588,48 @@ static const VMStateDescription vmstate_npcm_gmac_rx_fifo = {
     .fields = dw_gmac_rx_fifo_fields,
 };
 
+static bool dw_gmac_dma_clock_needed(void *opaque)
+{
+    DWGMACState *gmac = opaque;
+
+    return (gmac->dma_clock && clock_has_source(gmac->dma_clock)) ||
+           gmac->rx_watchdog_frozen_cycles != 0;
+}
+
+static const VMStateField dw_gmac_dma_clock_fields[] = {
+    VMSTATE_CLOCK(dma_clock, DWGMACState),
+    VMSTATE_UINT64(rx_watchdog_frozen_cycles, DWGMACState),
+    VMSTATE_END_OF_LIST()
+};
+
+/* Emitted only by an integration that connects the DMA clock. */
+static const VMStateDescription vmstate_dw_gmac_dma_clock = {
+    .name = TYPE_DW_GMAC "/dma-clock",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dw_gmac_dma_clock_needed,
+    .fields = dw_gmac_dma_clock_fields,
+};
+
+static const VMStateDescription vmstate_npcm_gmac_dma_clock = {
+    .name = TYPE_NPCM_GMAC "/dma-clock",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dw_gmac_dma_clock_needed,
+    .fields = dw_gmac_dma_clock_fields,
+};
+
 static const VMStateDescription * const dw_gmac_vmstate_subsections[] = {
     &vmstate_dw_gmac_tx_frame,
     &vmstate_dw_gmac_rx_fifo,
+    &vmstate_dw_gmac_dma_clock,
     NULL
 };
 
 static const VMStateDescription * const npcm_gmac_vmstate_subsections[] = {
     &vmstate_npcm_gmac_tx_frame,
     &vmstate_npcm_gmac_rx_fifo,
+    &vmstate_npcm_gmac_dma_clock,
     NULL
 };
 
@@ -2578,6 +2682,11 @@ static const Property dw_gmac_properties[] = {
 static void dw_gmac_init(Object *obj)
 {
     DWGMACState *gmac = DW_GMAC(obj);
+
+    /* Created at init so the board can connect it before realize. */
+    gmac->dma_clock = qdev_init_clock_in(DEVICE(obj), "stmmaceth",
+                                         gmac_dma_clock_update, gmac,
+                                         ClockPreUpdate | ClockUpdate);
 
     qdev_init_gpio_in_named(DEVICE(gmac), dw_gmac_phy_reset_input,
                             "phy-reset-n", 1);

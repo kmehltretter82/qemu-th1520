@@ -69,7 +69,9 @@ GMAC receive-FIFO checkpoint: 2bc01bc9ad
 
 Console device-lookup checkpoint (UQ-014): 959eee17ee
 
-USB attached-transfer migration checkpoint: this working tree
+USB attached-transfer migration checkpoint: 5642b7fd6a
+
+GMAC AXI clock-gate coupling checkpoint: this working tree
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -121,8 +123,8 @@ externally driven mask and level per controller, which also covers the GMAC0
 PHY interrupt on GPIO3_22 that previously passed only because that line idles
 high.  This is a test defect, not a new ``UQ-L`` device finding.
 
-With both corrected, the complete board gate passes 163/163 normal, 159/159
-dependency-minimal and 159/159 ASan/UBSan at ``e017a59bba``, restoring
+With both corrected, the complete board gate passes 166/166 normal, 162/162
+dependency-minimal and 162/162 ASan/UBSan at ``e017a59bba``, restoring
 three-configuration evidence for the twelve vendor-firmware and board
 checkpoints committed after ``1369cec4d9`` that had only the normal-build
 direct run.
@@ -518,16 +520,22 @@ accessible while held; mailbox, C910-hart, AO and auxiliary-domain resets,
 functional gate effects for untimed children, physical reset scope, retention
 and ordering remain open under ledger item ``RST-001``.
 
-The clock-gate submilestone is about **45% complete**.  All 33 mainline-defined
+The clock-gate submilestone is about **50% complete**.  All 33 mainline-defined
 AP leaf gates whose consumers exist in this machine and all eight represented
 miscellaneous-system gates now have active-high observable outputs rebuilt
 from register state after reset and migration.  The PWM, both timer-group and
-both watchdog leaves additionally drive QEMU Clock links: clearing a gate
-freezes an active phase/count and re-enabling it resumes from that point.
-Focused qtests cover every raw output, neighbor isolation, timed consumers,
-system reset and migration while gated.  The other 28 AP leaves and all eight
-miscellaneous leaves remain raw state only; parent-gate dependencies, bus
-fault/access behavior, rate changes, physical phase/output behavior and all
+both watchdog leaves drive QEMU Clock links: clearing a gate freezes an
+active phase/count and re-enabling it resumes from that point.  The GMAC AXI
+leaf, ``stmmaceth`` in the Linux binding, now drives a 500 MHz Clock into
+both GMAC cores: it sets the receive-interrupt-watchdog rate, a gated clock
+freezes a counting watchdog as a cycle count and stalls both DMA engines
+while the receive FIFO holds arrivals, and re-enabling resumes the watchdog
+exactly and lets both engines pick up where the guest left them.  Focused
+qtests cover every raw output, neighbor isolation, timed consumers, the GMAC
+freeze/pause/migration cases, system reset and migration while gated.  The
+other 27 AP leaves and all eight miscellaneous leaves remain raw state only;
+parent-gate dependencies, bus fault/access behavior (including the GMAC
+``pclk`` leaf), rate changes, physical phase/output behavior and all
 AO/video/DSP/power-domain clocks remain open under ``CLK-002``.
 
 The pinned mainline and vendor device trees plus the board schematic expose no
@@ -620,7 +628,7 @@ validation.
 | T-Head CSRs/MAEE/PMU | C910-specific core CSR state, MAEE PTE ownership/migration, strong-order scalar alignment and instruction-access faults, C=0 AMO faults, SO vector faults, MAEE-disabled PTE-bit ignore behavior and immutable eight-region physical-PMA selection are implemented; a synthetic table validates every integration path, but the actual TH1520 values, cache/order/bus effects and PMU fidelity remain.  The C910 FXCR checkpoint implements the pinned-openC910 reset/FS gate, FRM/FFLAGS aliases, DQNaN/FE event semantics and version-3 migration contract.  Four-hart qtests downgrade current savevm subsections to descriptor-exact C910 CSR VMState v1/v2 layouts and reproduce the v1 parent-CPU version 11, then validate legacy defaults and carried state in poisoned destinations.  Genuine pinned last-v1 and last-v2 producer streams independently prove the four-hart wire layouts; both now load completely into current QEMU through Ahead-only legacy device aliases, and direct destination inspection preserves the hart-distinct CSR/CPUID state plus v2 PMU state.  Parent CPU v11 is accepted only under TCG; KVM remains version 12 or newer.  The FXCR execution guest passes in normal, dependency-minimal and ASan/UBSan builds.  The preceding complete normal and dependency-minimal board/CSR gates passed 114/114 plus 14/14 and 113/113 plus 7/7, while the preceding complete sanitizer board gate passed 112/112.  The current complete board gates pass 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan; the normal full RISC-V TCG gate passes 37/37, the minimal Ahead-specific TCG enumeration passes 14/14, and all six XTheadVector payloads pass directly under ASan/UBSan.  Qtest executes post-load DQNaN and same-sticky exceptions plus the first same-sticky exception after system reset, while targeted mutations fail at their intended compatibility and derived-state boundaries.  The C910 model is TCG-only and QEMU rejects it with KVM | Establish and install the TH1520 physical system map, finish CSR probes and remaining memory-attribute effects, exact counters/events and hardware comparison; characterize the documented legacy-device ambiguity boundaries on physical hardware, and compare every physical hart/stepping under CPU-016 |
 | PLIC | A dedicated C900 model now provides 240 sources, eight M/S contexts, five-bit priorities, T-Head delegation, writable pending state, trigger inputs, C900 arbitration, reset and VMState | Confirm TH1520 synthesis parameters, complete trigger/security wiring and boundary behavior on hardware |
 | CLINT/timer | A dedicated C900 CLINT now models MSIP/MTIMECMP/SSIP/STIMECMP, 32-bit APB registers, no MMIO mtime, M/S privilege checks, 3 MHz time, reset and VMState | Complete migration, rollover and fault-boundary tests; compare bus-width, latching, reset-domain and clock behavior with the physical TH1520 |
-| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
+| Clock/reset control | The workspace models the AP clock and reset banks, seven PLL groups, the misc-system USB/storage reset and clock bank, documented reset values/write masks, deterministic PLL locking and VMState.  All 28 mainline-described reset groups for modeled AP peripherals, all three storage groups and all three USB members drive device resets and are replayed after migration.  All 33 represented AP leaf gates and eight misc gates export reconstructed levels; PWM, timer0/1 and WDT0/1 gates pause and resume their timed consumers, and the GMAC AXI gate freezes the receive-interrupt watchdog and stalls both GMAC DMA engines.  The generated DT uses the upstream Linux providers | Couple the remaining raw gates only after their device-specific bus/engine semantics are established; validate parent dependencies and split APB/core/AXI, shared-GMAC, storage and USB reset scope plus held-reset MMIO, release ordering and retention; connect hart/mailbox resets only after their sequencing is established; model remaining AO/video/DSP/misc domains and power transitions |
 | UART0-5 | This workspace's reusable DW APB wrapper is integrated at all six TH1520 addresses and PLIC sources, with exact upstream clock IDs, AP reset pairs and board enablement | Verify TH1520 synthesis values, access behavior and the reserved portions of the larger apertures; complete optional shadow/DMA/RS-485 behavior, clock-gate coupling and physical reset-scope validation |
 | I2C0-5 | The reusable DesignWare model now has configurable synthesis/reset identity, abort/stuck-status registers, reset and validated VMState. All six TH1520 instances have exact Linux addresses, IRQs, clocks and AP reset pairs; I2C0 carries the 4 KiB board EEPROM with 32-byte page-write wrapping, and the pinned Linux drivers complete full-image reads | Add timed TX behavior, slave/multi-master/arbitration, clock stretch and stuck recovery, DMA/SMBus, EEPROM busy/write-protect behavior, clock-gate coupling, reserved-aperture behavior and physical reset-scope validation |
 | USB host | The TH1520 misc-system and DRD wrappers map the exact public/vendor apertures, three reset outputs and PLIC source 68 around QEMU's DWC3/xHCI host.  One paired USB2/USB3 connector supports DMA, commands, IRQs, HID hotplug, migration and upstream-Linux keyboard enumeration through a test-only glue module | Replace provisional DWC3/xHCI synthesis values after hardware reads; add gate/domain fidelity, PHY/link/timing and stress/error coverage, suspend/resume, device/OTG/role/VBUS/ID behavior and Fastboot/BootROM integration; establish a production mainline glue binding/driver |
@@ -998,8 +1006,8 @@ At the preceding migration checkpoint the complete normal and
 dependency-minimal gates passed 114/114 board plus 14/14 CSR qtests and
 113/113 plus 7/7 respectively; its preceding complete ASan/UBSan board gate
 passed 112/112.  At ``e017a59bba`` plus the current gate
-corrections, the board gate passes 163/163 normal, 159/159
-dependency-minimal and 159/159 ASan/UBSan under ``meson test``.  The
+corrections, the board gate passes 166/166 normal, 162/162
+dependency-minimal and 162/162 ASan/UBSan under ``meson test``.  The
 intervening 149/149 was a direct-binary normal-build run only.  The complete
 normal RISC-V TCG gate passes 39/39, the
 explicit Ahead-specific minimal TCG enumeration passes 16/16, and all eight
