@@ -57,7 +57,7 @@ The current vendor branches postdate some distributed board images, so their
 absence of a table is not proof that no older integration source contains it.
 Before hardware probing, repeat the search against the exact U-Boot, OpenSBI,
 SPL, trusted firmware and device-tree commits identified from the owner's
-stock image under ledger item ``DOC-002``.
+stock image under ledger items ``DOC-002a`` and ``DOC-002b``.
 
 ## Facts still required
 

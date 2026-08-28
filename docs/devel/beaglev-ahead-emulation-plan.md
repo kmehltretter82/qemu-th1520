@@ -308,12 +308,16 @@ device fitted to the owner's board.  Its identity, CID, CSD, complete EXT_CSD,
 voltage behavior and electrical/analog HS200/HS400 timing remain open under
 ``SD-001`` and ``SD-002``.
 
-The official-image gate remains blocked under ``DOC-002``.  The pinned
+The official-image gate is unstarted rather than blocked.  The pinned
 BeagleBoard flashing documentation names ``boot.ext4``, ``root.ext4``,
 ``u-boot-with-spl.bin`` and ``fastboot_emmc.sh`` in a target named
-``xuantie-ubuntu-<job-ID>.zip``, but the linked artifact could
-not be pinned through the available GitLab API/jobs page.  The portable assets
-above do not substitute for that official-image evidence.
+``xuantie-ubuntu-<job-ID>.zip``, and that linked artifact could not be pinned
+through the available GitLab API/jobs page.  That archive is not the only
+admissible source: the owner's board carries a factory eMMC image, and the
+read-only capture the ledger already requires before any update would satisfy
+``DOC-002a`` with stronger evidence, because it is the image fitted to the
+board in hand.  The remaining source-commit mapping stays open as
+``DOC-002b``.  The portable assets above substitute for neither.
 
 Upstream triage remains deferred.  The two companion bug documents continue
 to separate pre-existing QEMU issues from branch-only implementation gaps, and
@@ -503,8 +507,9 @@ The implementation must cite and pin the evidence used for each block:
   These two assets are publicly downloadable, hash-pinned test inputs, not
   official BeagleV Ahead firmware or an official image.
 * Firmware and kernel versions used by an official BeagleV Ahead image, pinned
-  by commit and image hash before compatibility work starts; this remains open
-  under ``DOC-002``.
+  by commit and image hash before compatibility work starts; obtaining the
+  image remains open under ``DOC-002a`` and mapping its binaries to source
+  commits under ``DOC-002b``.
 
 The official hardware repository publicly distributes nine TH1520 manuals,
 but the pages are marked “Secret” and carry restrictive copyright notices.
@@ -1438,7 +1443,11 @@ hands its next stage to S-mode, while this U-Boot build expects M-mode.  Keep
 the public U-Boot run as a firmware configuration checkpoint only.  A real
 vendor-firmware-to-OS claim requires a source-backed primary/secondary reset
 contract, BootROM/media contract and pinned vendor boot assets; ``BOOT-001``,
-``BOOT-003`` and ``DOC-002`` remain open.
+``BOOT-003``, ``DOC-002a`` and ``DOC-002b`` remain open.  The vendor boot
+assets this route needs -- the ``bootA``/``bootB`` partition layout,
+``light_aon_fpga.bin``, ``light_c906_audio.bin`` and ``fw_dynamic.bin`` -- come
+from that image, so no further SPL register mapping can close this boundary on
+its own.
 
 ### Vendor SPL AON audio-reset checkpoint
 
@@ -2207,7 +2216,9 @@ Gate P5:
 * Linux runs filesystem and block-integrity stress on eMMC and microSD;
 * DHCP, IPv4/IPv6, TCP/UDP, checksum/offload, multicast and sustained traffic
   pass while stressing noncoherent DMA;
-* an official board root filesystem boots unmodified to multi-user.
+* an official board root filesystem -- either a published image or the
+  owner's read-only factory eMMC capture under ``DOC-002a`` -- boots
+  unmodified to multi-user.
 
 Status: in progress.  The controller/legacy-card storage submilestone is
 implemented and has register, IRQ, PIO, v4 64-bit ADMA2, reset, DT, migration,
