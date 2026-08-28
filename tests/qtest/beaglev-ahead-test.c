@@ -3297,6 +3297,9 @@ static void test_ap_clock_gate_outputs(void)
         { TH1520_AP_CLOCK_GATE_GMAC_AXI,
           TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_GMAC_AXI_OUTPUT,
           CLOCK_PERIOD_FROM_HZ(TH1520_GMAC_RIWT_CLOCK_HZ) },
+        { TH1520_AP_CLOCK_GATE_EMMC_SDIO,
+          TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_EMMC_SDIO_OUTPUT,
+          CLOCK_PERIOD_FROM_HZ(198000000) },
     };
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
 
@@ -14849,6 +14852,177 @@ static void test_dwcmshc_adma_migration(void)
     g_assert_cmpint(g_unlink(dst_image), ==, 0);
 }
 
+/* Program the six-descriptor ADMA read used by the timer-boundary tests. */
+static void dwcmshc_arm_six_block_adma(QTestState *qts, uint64_t base,
+                                       const uint8_t *expected,
+                                       size_t expected_len)
+{
+    enum { BLOCKS = 6, DESCRIPTOR_SIZE = 16 };
+    uint8_t descriptors[BLOCKS * DESCRIPTOR_SIZE] = {};
+
+    for (unsigned block = 0; block < BLOCKS; block++) {
+        descriptors[block * DESCRIPTOR_SIZE] =
+            SDHC_ADMA_ATTR_VALID | SDHC_ADMA_ATTR_ACT_TRAN |
+            (block == BLOCKS - 1 ? SDHC_ADMA_ATTR_END : 0);
+        stw_le_p(descriptors + block * DESCRIPTOR_SIZE + 2,
+                 DWCMSHC_BLOCK_SIZE);
+        stq_le_p(descriptors + block * DESCRIPTOR_SIZE + 4,
+                 DWCMSHC_ADMA_DATA_ADDR + block * DWCMSHC_BLOCK_SIZE);
+    }
+    dwcmshc_init_sd(qts, base);
+    qtest_memwrite(qts, DWCMSHC_ADMA_DESC_ADDR, descriptors,
+                   sizeof(descriptors));
+    qtest_memset(qts, DWCMSHC_ADMA_DATA_ADDR, 0xa5, expected_len);
+    qtest_writeb(qts, base + SDHC_HOSTCTL, SDHC_CTRL_ADMA2_32);
+    qtest_writew(qts, base + SDHC_HOSTCTL2,
+                 R_SDHC_HOSTCTL2_VERSION4_MASK |
+                 R_SDHC_HOSTCTL2_ADDRESSING_MASK |
+                 R_SDHC_HOSTCTL2_CMD23_ENA_MASK);
+    qtest_writew(qts, base + SDHC_NORINTSTS, UINT16_MAX);
+    qtest_writew(qts, base + SDHC_ERRINTSTS, UINT16_MAX);
+    qtest_writew(qts, base + SDHC_NORINTSTSEN,
+                 SDHC_NISEN_CMDCMP | SDHC_NISEN_TRSCMP);
+    qtest_writew(qts, base + SDHC_NORINTSIGEN, 0);
+    dwcmshc_write_adma_address(qts, base, DWCMSHC_ADMA_DESC_ADDR);
+    sdhci_cmd_regs(qts, base, DWCMSHC_BLOCK_SIZE, BLOCKS, 0,
+                   SDHC_TRNS_DMA | SDHC_TRNS_BLK_CNT_EN |
+                   SDHC_TRNS_ACMD_AUTO | SDHC_TRNS_READ | SDHC_TRNS_MULTI,
+                   (18 << 8) | SDHC_CMD_RESPONSE | SDHC_CMD_DATA_PRESENT);
+}
+
+static void dwcmshc_assert_five_blocks(QTestState *qts, const uint8_t *expected,
+                                       size_t len)
+{
+    enum { DESCS_PER_DELAY = 5 };
+    g_autofree uint8_t *actual = g_malloc(len);
+
+    qtest_memread(qts, DWCMSHC_ADMA_DATA_ADDR, actual, len);
+    g_assert_cmpmem(actual, DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE,
+                    expected, DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE);
+    for (size_t i = DESCS_PER_DELAY * DWCMSHC_BLOCK_SIZE; i < len; i++) {
+        g_assert_cmphex(actual[i], ==, 0xa5);
+    }
+}
+
+static void dwcmshc_assert_all_blocks(QTestState *qts, uint64_t base,
+                                      const uint8_t *expected, size_t len)
+{
+    g_autofree uint8_t *actual = g_malloc(len);
+
+    qtest_memread(qts, DWCMSHC_ADMA_DATA_ADDR, actual, len);
+    g_assert_cmpmem(actual, len, expected, len);
+    g_assert_cmphex(dwcmshc_read_adma_address(qts, base), ==,
+                    DWCMSHC_ADMA_DESC_ADDR + 6 * 16);
+    g_assert_cmphex(qtest_readw(qts, base + SDHC_BLKCNT), ==, 0);
+    g_assert_true(qtest_readw(qts, base + SDHC_NORINTSTS) & SDHC_NIS_TRSCMP);
+}
+
+static void mshc_set_core_gate(QTestState *qts, bool enabled)
+{
+    th1520_set_ap_clock_gate(qts, 0x204, BIT(30), enabled);
+}
+
+/*
+ * The eMMC/SDIO core clock paces the SDHCI data engine.  Gating it holds the
+ * sixth ADMA descriptor indefinitely; re-enabling it completes the read one
+ * transfer step later.
+ */
+static void test_dwcmshc_core_gate_adma_stall(void)
+{
+    enum { BLOCKS = 6, TRANSFER_DELAY_NS = 100 };
+    const uint64_t base = TH1520_SDIO0_BASE;
+    uint8_t expected[BLOCKS * DWCMSHC_BLOCK_SIZE];
+    g_autofree char *image = NULL;
+    QTestState *qts;
+
+    for (unsigned block = 0; block < BLOCKS; block++) {
+        memset(expected + block * DWCMSHC_BLOCK_SIZE, 0x10 + block,
+               DWCMSHC_BLOCK_SIZE);
+    }
+    image = dwcmshc_create_image(expected, sizeof(expected));
+    qts = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-drive if=sd,index=1,file=%s,format=raw,"
+                      "auto-read-only=off", image);
+    dwcmshc_arm_six_block_adma(qts, base, expected, sizeof(expected));
+    dwcmshc_assert_five_blocks(qts, expected, sizeof(expected));
+
+    mshc_set_core_gate(qts, false);
+    qtest_clock_step(qts, 10 * TRANSFER_DELAY_NS);
+    dwcmshc_assert_five_blocks(qts, expected, sizeof(expected));
+
+    mshc_set_core_gate(qts, true);
+    qtest_clock_step(qts, TRANSFER_DELAY_NS - 1);
+    dwcmshc_assert_five_blocks(qts, expected, sizeof(expected));
+    qtest_clock_step(qts, 1);
+    dwcmshc_assert_all_blocks(qts, base, expected, sizeof(expected));
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(image), ==, 0);
+}
+
+/* A data engine held by the gate stays held across migration. */
+static void test_dwcmshc_core_gate_migration(void)
+{
+    enum { BLOCKS = 6, TRANSFER_DELAY_NS = 100 };
+    const uint64_t base = TH1520_SDIO0_BASE;
+    uint8_t expected[BLOCKS * DWCMSHC_BLOCK_SIZE];
+    g_autofree char *src_image = NULL;
+    g_autofree char *dst_image = NULL;
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int fd;
+
+    for (unsigned block = 0; block < BLOCKS; block++) {
+        memset(expected + block * DWCMSHC_BLOCK_SIZE, 0x10 + block,
+               DWCMSHC_BLOCK_SIZE);
+    }
+    src_image = dwcmshc_create_image(expected, sizeof(expected));
+    dst_image = dwcmshc_create_image(expected, sizeof(expected));
+    fd = g_file_open_tmp("beaglev-ahead-mshc-gate-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+    src = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-drive if=sd,index=1,file=%s,format=raw,"
+                      "auto-read-only=off", src_image);
+    dst = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-drive if=sd,index=1,file=%s,format=raw,"
+                      "auto-read-only=off -incoming defer", dst_image);
+
+    dwcmshc_arm_six_block_adma(src, base, expected, sizeof(expected));
+    mshc_set_core_gate(src, false);
+    qtest_clock_step(src, 10 * TRANSFER_DELAY_NS);
+    dwcmshc_assert_five_blocks(src, expected, sizeof(expected));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_cmpuint(qtest_qom_clock_period(dst,
+        TH1520_AP_CLOCK_QOM_PATH "/" TH1520_AP_CLOCK_EMMC_SDIO_OUTPUT),
+        ==, 0);
+    qtest_clock_step(dst, 10 * TRANSFER_DELAY_NS);
+    dwcmshc_assert_five_blocks(dst, expected, sizeof(expected));
+
+    mshc_set_core_gate(dst, true);
+    qtest_clock_step(dst, TRANSFER_DELAY_NS - 1);
+    dwcmshc_assert_five_blocks(dst, expected, sizeof(expected));
+    qtest_clock_step(dst, 1);
+    dwcmshc_assert_all_blocks(dst, base, expected, sizeof(expected));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    g_assert_cmpint(g_unlink(path), ==, 0);
+    g_assert_cmpint(g_unlink(src_image), ==, 0);
+    g_assert_cmpint(g_unlink(dst_image), ==, 0);
+}
+
 static void test_dwcmshc_migration(void)
 {
     const uint64_t base = TH1520_EMMC_BASE;
@@ -15727,6 +15901,10 @@ int main(int argc, char **argv)
                        test_dwcmshc_v4_adma);
         qtest_add_func("/beaglev-ahead/dwcmshc/adma-migration",
                        test_dwcmshc_adma_migration);
+        qtest_add_func("/beaglev-ahead/dwcmshc/core-gate-adma-stall",
+                       test_dwcmshc_core_gate_adma_stall);
+        qtest_add_func("/beaglev-ahead/dwcmshc/core-gate-migration",
+                       test_dwcmshc_core_gate_migration);
         qtest_add_func("/beaglev-ahead/dwcmshc/migration",
                        test_dwcmshc_migration);
         qtest_add_func("/beaglev-ahead/c900-plic/reset",

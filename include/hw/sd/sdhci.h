@@ -29,6 +29,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/sd/sd.h"
 #include "qom/object.h"
+#include "hw/core/clock.h"
 
 /* SD/MMC host controller state */
 struct SDHCIState {
@@ -48,6 +49,14 @@ struct SDHCIState {
 
     QEMUTimer *insert_timer;       /* timer for 'changing' sd card. */
     QEMUTimer *transfer_timer;
+    /*
+     * Optional controller core clock set by an integration wrapper.  While its
+     * rate is zero the data engine makes no progress: a due transfer step is
+     * deferred and remembered in transfer_stalled until the wrapper reports the
+     * clock back with sdhci_core_clock_resumed().
+     */
+    Clock *core_clk;
+    bool transfer_stalled;
     qemu_irq irq;
 
     /* Registers cleared on reset */
@@ -129,5 +138,9 @@ DECLARE_INSTANCE_CHECKER(SDHCIState, SYSBUS_SDHCI,
 #define TYPE_IMX_USDHC "imx-usdhc"
 
 #define TYPE_S3C_SDHCI "s3c-sdhci"
+
+
+/* Report a restored core clock after a stalled data-engine step. */
+void sdhci_core_clock_resumed(SDHCIState *s);
 
 #endif /* SDHCI_H */

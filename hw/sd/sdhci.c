@@ -998,9 +998,30 @@ static void sdhci_do_adma(SDHCIState *s)
 
 /* Perform data transfer according to controller configuration */
 
+static bool sdhci_core_clock_stalled(SDHCIState *s)
+{
+    return s->core_clk && clock_has_source(s->core_clk) &&
+           !clock_get_hz(s->core_clk);
+}
+
+void sdhci_core_clock_resumed(SDHCIState *s)
+{
+    if (s->transfer_stalled && !sdhci_core_clock_stalled(s)) {
+        s->transfer_stalled = false;
+        timer_mod(s->transfer_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SDHC_TRANSFER_DELAY);
+    }
+}
+
 static void sdhci_data_transfer(void *opaque)
 {
     SDHCIState *s = (SDHCIState *)opaque;
+
+    if (sdhci_core_clock_stalled(s)) {
+        /* No clock, no progress: keep every register and DMA cursor as is. */
+        s->transfer_stalled = true;
+        return;
+    }
 
     if (s->trnmod & SDHC_TRNS_DMA) {
         switch (SDHC_DMA_TYPE(s->hostctl1)) {
@@ -1566,6 +1587,25 @@ static int sdhci_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool sdhci_transfer_stall_needed(void *opaque)
+{
+    SDHCIState *s = opaque;
+
+    return s->transfer_stalled;
+}
+
+/* Emitted only while an integration's core clock holds a transfer step. */
+static const VMStateDescription vmstate_sdhci_transfer_stall = {
+    .name = "sdhci/transfer-stall",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = sdhci_transfer_stall_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BOOL(transfer_stalled, SDHCIState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 const VMStateDescription sdhci_vmstate = {
     .name = "sdhci",
     .version_id = 1,
@@ -1605,6 +1645,7 @@ const VMStateDescription sdhci_vmstate = {
     .subsections = (const VMStateDescription * const []) {
         &sdhci_pending_insert_vmstate,
         &sdhci_hostctl2_vmstate,
+        &vmstate_sdhci_transfer_stall,
         NULL
     },
 };

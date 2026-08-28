@@ -778,6 +778,10 @@ static void th1520_soc_init(Object *obj)
     for (int i = 0; i < TH1520_MSHC_COUNT; i++) {
         object_initialize_child(obj, mshc_names[i], &s->mshc[i],
                                 TYPE_DWC_MSHC);
+        qdev_connect_clock_in(DEVICE(&s->mshc[i]), "core",
+                              qdev_get_clock_out(
+                                  DEVICE(&s->ap_clock),
+                                  TH1520_AP_CLOCK_EMMC_SDIO_OUTPUT));
     }
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "hartid-base", 0);
     qdev_prop_set_uint32(DEVICE(&s->c910_cpus), "num-harts",
