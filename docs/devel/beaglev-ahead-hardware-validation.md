@@ -171,9 +171,9 @@ At ``e017a59bba`` plus the current gate corrections, the board gate passes
 ``meson test``.  The intervening PHY GPIO checkpoint's 149/149 was a
 direct-binary normal-build run only, because the suite could not complete
 under ``meson test``.  The full
-normal RISC-V TCG gate passes 37/37, while the explicitly enumerated
-Ahead-specific minimal TCG gate passes 14/14.  The FXCR execution guest and all
-six XTheadVector firmware payloads also pass directly under ASan/UBSan.  The
+normal RISC-V TCG gate passes 38/38, while the explicitly enumerated
+Ahead-specific minimal TCG gate passes 15/15.  The FXCR execution guest and all
+seven XTheadVector firmware payloads also pass directly under ASan/UBSan.  The
 scalar-permutation payload's earlier targeted wrap, truncation and off-by-one
 mutations fail at exits 3, 9 and 13; its new vector-gather-index and
 slide-overlap mutations fail at exits 14 and 15.

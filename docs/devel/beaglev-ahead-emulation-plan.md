@@ -436,9 +436,11 @@ width/group regression independently checks ``th.vrgather.vv`` at e8,m2,
 e8,m8, e16,m1, e32,m1 and e64,m1, including two- and eight-register source
 groups.  These bounded changes do not move either rounded estimate.  Dynamic
 permutation coverage now includes RV64 e8,m1 scalar slide/gather and
-slide-overlap cases plus e8,m2/e8,m8/e16,m1/e32,m1/e64,m1 vector gather; other
-element widths and LMULs, RV32, big-endian execution, the remaining permutation
-forms and physical C910 comparison remain open.  Four clean
+slide-overlap cases, e8,m2/e8,m8/e16,m1/e32,m1/e64,m1 vector gather, and the
+three slide-up forms with their offset, mask, ``vstart``, full-XLEN and
+in-place-prohibition boundaries; other element widths and LMULs, RV32,
+big-endian execution, ``th.vrgather.vi``, ``th.vcompress.vm`` and physical
+C910 comparison remain open.  Four clean
 normal/minimal one-/four-hart Linux runs complete DHCP, three pings and a
 1 MiB HTTP SHA-256 transfer, but longer and contention-sensitive network stress
 remains open.
@@ -985,8 +987,8 @@ passed 112/112.  At ``e017a59bba`` plus the current gate
 corrections, the board gate passes 153/153 normal, 152/152
 dependency-minimal and 152/152 ASan/UBSan under ``meson test``.  The
 intervening 149/149 was a direct-binary normal-build run only.  The complete
-normal RISC-V TCG gate passes 37/37, the
-explicit Ahead-specific minimal TCG enumeration passes 14/14, and all six
+normal RISC-V TCG gate passes 38/38, the
+explicit Ahead-specific minimal TCG enumeration passes 15/15, and all seven
 XTheadVector payloads pass directly under ASan/UBSan.  The sole conditional
 difference in the board totals is
 the HID hotplug test because ``usb-kbd`` is intentionally absent from the

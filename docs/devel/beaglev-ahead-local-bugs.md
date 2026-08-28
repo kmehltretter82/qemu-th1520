@@ -150,14 +150,43 @@ corrections.
 
 The remaining cited gates were re-run at the same commit and were all still
 accurate, so only the board-gate number changed: ``riscv-csr-test`` passes
-14/14, the complete normal RISC-V TCG gate passes 37/37 with no failures, and
-the enumerated Ahead-specific subset passes 14/14 in the dependency-minimal
-build.  ``make check-tcg`` cannot be used for that subset because the
-dependency-minimal and sanitizer builds provide only the ``beaglev-ahead``
-machine, so the ``virt``-based payloads abort with ``unsupported machine type:
-"virt"``; the fourteen Ahead-machine targets must be named explicitly.  All
-six XTheadVector payloads also pass under ASan/UBSan when run directly on the
-``beaglev-ahead`` machine with ``detect_leaks=0``.
+14/14, and the complete normal RISC-V TCG gate passed 37/37 with no failures.
+``make check-tcg`` cannot be used for the dependency-minimal or sanitizer
+builds, because they provide only the ``beaglev-ahead`` machine and the
+``virt``-based payloads abort with ``unsupported machine type: "virt"``; the
+Ahead-machine targets must be named explicitly.  With the slide-up payload
+added below those totals are now 38/38 normal and 15/15 for the enumerated
+Ahead-specific subset, and all seven XTheadVector payloads pass under
+ASan/UBSan when run directly on the ``beaglev-ahead`` machine with
+``detect_leaks=0``.
+
+### Current XTheadVector slide-up checkpoint
+
+Of the ten XTheadVector permutation instructions, five had no dynamic
+coverage at all: ``th.vslideup.vx``, ``th.vslideup.vi``, ``th.vslide1up.vx``,
+``th.vrgather.vi`` and ``th.vcompress.vm``.  The slide-down and gather forms
+next to them produced four wrong-result or illegal-encoding defects
+(``UQ-L013`` and ``UQ-L014``), so the untested neighbours were the obvious
+next gate.
+
+A seventh payload, ``tests/tcg/riscv64/test-xtheadvector-slideup.S``, covers
+the three slide-up forms.  Its independent scalar oracle checks offset 2, a
+zero offset, an offset at vl, a full-XLEN ``0xffffffffffffffff`` offset, a
+masked body, a nonzero ``vstart`` above the offset, the immediate form, and
+``th.vslide1up.vx`` with and without a skipped element zero.  Six illegal
+encodings must trap: masked ``vd=v0`` for all three forms, and the in-place
+``vd=vs2`` encoding that frozen RVV 0.7.1 forbids for slide-up because lower
+lanes are written before the higher source lanes are read.  Unmasked
+``vd=v0``, a non-overlapping masked destination and the in-place *slide-down*
+encoding are exercised as legal controls.
+
+No defect was found: the implementation already satisfies every case.  The
+payload is mutation-sensitive rather than vacuous.  Replacing the helper's
+``i_min = MAX(env->vstart, offset)`` with ``i_min = env->vstart`` fails at exit
+1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
+23.  Both mutations were applied to a scratch copy and reverted.
+
+``th.vrgather.vi`` and ``th.vcompress.vm`` remain without dynamic coverage.
 
 ### Current focused FXCR/MMC-alias checkpoint
 
