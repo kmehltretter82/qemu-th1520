@@ -1573,16 +1573,27 @@ static uint32_t gmac_tx_coe_insert(DWGMACState *gmac, uint8_t *buf,
     return status ? gmac_tx_coe_error(gmac, status) : 0;
 }
 
+static void gmac_tx_frame_reserve(DWGMACState *gmac, uint32_t needed)
+{
+    if (needed > gmac->tx_frame_capacity) {
+        gmac->tx_frame = g_realloc(gmac->tx_frame, needed);
+        gmac->tx_frame_capacity = needed;
+    }
+}
+
+/* Abandon a partially assembled frame without disturbing the descriptor ring. */
+static void gmac_tx_frame_discard(DWGMACState *gmac)
+{
+    gmac->tx_frame_len = 0;
+    gmac->tx_frame_cic = TX_DESC_CIC_BYPASS;
+}
+
 static void gmac_try_send_next_packet(DWGMACState *gmac)
 {
-    size_t tx_buffer_size = 2048;
-    g_autofree uint8_t *tx_send_buffer = g_malloc(tx_buffer_size);
     uint32_t desc_addr;
     struct DWGMACTxDesc tx_desc;
     uint32_t tx_buf_addr, tx_buf_len;
-    uint32_t prev_buf_size = 0;
     uint32_t descriptors = 0;
-    unsigned int cic = TX_DESC_CIC_BYPASS;
 
     if (!(gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_TX_EN) ||
         !(gmac->regs[R_DWMAC_DMA_CONTROL] &
@@ -1643,38 +1654,39 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
             DWMAC_DMA_STATUS_TX_RUNNING_READ_STATE);
         next_desc_addr = gmac_tx_next_desc(gmac, desc_addr, &tx_desc);
         if (gmac_tx_is_first(gmac, &tx_desc)) {
-            cic = gmac_tx_checksum_control(gmac, &tx_desc);
+            /* A first segment starts a new frame and drops any stale one. */
+            gmac->tx_frame_len = 0;
+            gmac->tx_frame_cic = gmac_tx_checksum_control(gmac, &tx_desc);
         }
         /* step 4 */
         tx_buf_addr = tx_desc.tdes2;
         gmac->regs[R_DWMAC_DMA_CUR_TX_BUF_ADDR] = tx_buf_addr;
         tx_buf_len = gmac_tx_buffer1_size(gmac, &tx_desc);
 
-        if ((uint64_t)prev_buf_size + tx_buf_len > UINT16_MAX) {
+        if ((uint64_t)gmac->tx_frame_len + tx_buf_len > UINT16_MAX) {
             qemu_log_mask(LOG_GUEST_ERROR,
                           "%s: TX frame exceeds 65535 bytes\n",
                           DEVICE(gmac)->canonical_path);
             gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_UNF;
+            gmac_tx_frame_discard(gmac);
             gmac_update_irq(gmac);
             return;
         }
-        if ((size_t)prev_buf_size + tx_buf_len > tx_buffer_size) {
-            tx_buffer_size = prev_buf_size + tx_buf_len;
-            tx_send_buffer = g_realloc(tx_send_buffer, tx_buffer_size);
-        }
+        gmac_tx_frame_reserve(gmac, gmac->tx_frame_len + tx_buf_len);
 
         /* step 5 */
         if (tx_buf_len &&
             dma_memory_read(&address_space_memory, tx_buf_addr,
-                            tx_send_buffer + prev_buf_size, tx_buf_len,
+                            gmac->tx_frame + gmac->tx_frame_len, tx_buf_len,
                             MEMTXATTRS_UNSPECIFIED)) {
             qemu_log_mask(LOG_GUEST_ERROR, "%s: Failed to read packet @ 0x%x\n",
                         __func__, tx_buf_addr);
+            gmac_tx_frame_discard(gmac);
             gmac_dma_bus_error(gmac,
                                DWMAC_DMA_STATUS_TX_PROCESS_STATE_SHIFT);
             return;
         }
-        prev_buf_size += tx_buf_len;
+        gmac->tx_frame_len += tx_buf_len;
 
         /* If not chained we'll have a second buffer. */
         if (!gmac_tx_is_chained(gmac, &tx_desc)) {
@@ -1682,44 +1694,42 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
             gmac->regs[R_DWMAC_DMA_CUR_TX_BUF_ADDR] = tx_buf_addr;
             tx_buf_len = gmac_tx_buffer2_size(gmac, &tx_desc);
 
-            if ((uint64_t)prev_buf_size + tx_buf_len > UINT16_MAX) {
+            if ((uint64_t)gmac->tx_frame_len + tx_buf_len > UINT16_MAX) {
                 qemu_log_mask(LOG_GUEST_ERROR,
                               "%s: TX frame exceeds 65535 bytes\n",
                               DEVICE(gmac)->canonical_path);
                 gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_UNF;
+                gmac_tx_frame_discard(gmac);
                 gmac_update_irq(gmac);
                 return;
             }
-            if ((size_t)prev_buf_size + tx_buf_len > tx_buffer_size) {
-                tx_buffer_size = prev_buf_size + tx_buf_len;
-                tx_send_buffer = g_realloc(tx_send_buffer, tx_buffer_size);
-            }
+            gmac_tx_frame_reserve(gmac, gmac->tx_frame_len + tx_buf_len);
 
             if (tx_buf_len &&
                 dma_memory_read(&address_space_memory, tx_buf_addr,
-                                tx_send_buffer + prev_buf_size,
+                                gmac->tx_frame + gmac->tx_frame_len,
                                 tx_buf_len, MEMTXATTRS_UNSPECIFIED)) {
                 qemu_log_mask(LOG_GUEST_ERROR,
                               "%s: Failed to read packet @ 0x%x\n",
                               __func__, tx_buf_addr);
+                gmac_tx_frame_discard(gmac);
                 gmac_dma_bus_error(gmac,
                                    DWMAC_DMA_STATUS_TX_PROCESS_STATE_SHIFT);
                 return;
             }
-            prev_buf_size += tx_buf_len;
+            gmac->tx_frame_len += tx_buf_len;
         }
         tx_desc.tdes0 &= ~(TX_DESC_TDES0_IP_HEAD_ERR_MASK |
                            TX_DESC_TDES0_PYLD_CHKSM_ERR_MASK |
                            TX_DESC_TDES0_ERR_SUMM_MASK);
         if (gmac_tx_is_last(gmac, &tx_desc)) {
-            uint16_t length = prev_buf_size;
+            uint16_t length = gmac->tx_frame_len;
 
-            tx_desc.tdes0 |= gmac_tx_coe_insert(gmac, tx_send_buffer,
-                                                length, cic);
-            qemu_send_packet(qemu_get_queue(gmac->nic), tx_send_buffer, length);
+            tx_desc.tdes0 |= gmac_tx_coe_insert(gmac, gmac->tx_frame,
+                                                length, gmac->tx_frame_cic);
+            qemu_send_packet(qemu_get_queue(gmac->nic), gmac->tx_frame, length);
             trace_dw_gmac_packet_sent(DEVICE(gmac)->canonical_path, length);
-            prev_buf_size = 0;
-            cic = TX_DESC_CIC_BYPASS;
+            gmac_tx_frame_discard(gmac);
         }
 
         /* step 6 */
@@ -2028,6 +2038,7 @@ static void dw_gmac_reset(DeviceState *dev)
     dw_gmac_reset_phy(gmac);
     gmac_update_phy_link(gmac);
     dw_gmac_set_phy_irq(gmac, false);
+    gmac_tx_frame_discard(gmac);
     gmac_update_irq(gmac);
 
     trace_dw_gmac_reset(DEVICE(gmac)->canonical_path,
@@ -2113,6 +2124,9 @@ static void dw_gmac_unrealize(DeviceState *dev)
     qemu_del_nic(gmac->nic);
     timer_free(gmac->rx_watchdog_timer);
     gmac->rx_watchdog_timer = NULL;
+    g_free(gmac->tx_frame);
+    gmac->tx_frame = NULL;
+    gmac->tx_frame_capacity = 0;
 }
 
 static int dw_gmac_post_load(void *opaque, int version_id)
@@ -2133,6 +2147,70 @@ static int dw_gmac_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool dw_gmac_tx_frame_needed(void *opaque)
+{
+    DWGMACState *gmac = opaque;
+
+    return gmac->tx_frame_len != 0;
+}
+
+static int dw_gmac_tx_frame_post_load(void *opaque, int version_id)
+{
+    DWGMACState *gmac = opaque;
+
+    /*
+     * VMSTATE_VBUFFER_ALLOC_UINT32 allocates exactly the migrated length, so
+     * the host-side capacity has to match what was just allocated.
+     */
+    gmac->tx_frame_capacity = gmac->tx_frame_len;
+    return 0;
+}
+
+static const VMStateField dw_gmac_tx_frame_fields[] = {
+    VMSTATE_UINT32(tx_frame_len, DWGMACState),
+    VMSTATE_UINT8(tx_frame_cic, DWGMACState),
+    VMSTATE_VBUFFER_ALLOC_UINT32(tx_frame, DWGMACState, 0, NULL,
+                                 tx_frame_len),
+    VMSTATE_END_OF_LIST()
+};
+
+/*
+ * Only a frame suspended between its first and terminal segment needs this,
+ * which is why it is a subsection: an idle or mid-quiescent GMAC emits
+ * nothing extra, and a stream without it simply has no partial frame.
+ *
+ * savevm requires a subsection name to be prefixed by its parent's name, and
+ * the reusable core is registered under two identities, so each identity
+ * carries its own description over the shared field table.
+ */
+static const VMStateDescription vmstate_dw_gmac_tx_frame = {
+    .name = TYPE_DW_GMAC "/tx-frame",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dw_gmac_tx_frame_needed,
+    .post_load = dw_gmac_tx_frame_post_load,
+    .fields = dw_gmac_tx_frame_fields,
+};
+
+static const VMStateDescription vmstate_npcm_gmac_tx_frame = {
+    .name = TYPE_NPCM_GMAC "/tx-frame",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dw_gmac_tx_frame_needed,
+    .post_load = dw_gmac_tx_frame_post_load,
+    .fields = dw_gmac_tx_frame_fields,
+};
+
+static const VMStateDescription * const dw_gmac_vmstate_subsections[] = {
+    &vmstate_dw_gmac_tx_frame,
+    NULL
+};
+
+static const VMStateDescription * const npcm_gmac_vmstate_subsections[] = {
+    &vmstate_npcm_gmac_tx_frame,
+    NULL
+};
+
 static const VMStateField dw_gmac_vmstate_fields[] = {
     VMSTATE_UINT32_ARRAY(regs, DWGMACState, DW_GMAC_NR_REGS),
     VMSTATE_UINT16_2DARRAY_V(phy_regs, DWGMACState, DW_GMAC_MAX_PHYS,
@@ -2148,6 +2226,7 @@ static const VMStateDescription vmstate_dw_gmac = {
     .minimum_version_id = 0,
     .post_load = dw_gmac_post_load,
     .fields = dw_gmac_vmstate_fields,
+    .subsections = dw_gmac_vmstate_subsections,
 };
 
 static const VMStateDescription vmstate_npcm_gmac = {
@@ -2156,6 +2235,7 @@ static const VMStateDescription vmstate_npcm_gmac = {
     .minimum_version_id = 0,
     .post_load = dw_gmac_post_load,
     .fields = dw_gmac_vmstate_fields,
+    .subsections = npcm_gmac_vmstate_subsections,
 };
 
 static const Property dw_gmac_properties[] = {

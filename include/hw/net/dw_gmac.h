@@ -180,6 +180,18 @@ typedef struct DWGMACState {
     /* Optional external PHY reset input; its electrical level is active-low. */
     bool phy_reset_asserted;
 
+    /*
+     * A multi-descriptor frame belongs to the transmit engine until its
+     * terminal segment is processed.  The DMA suspends whenever the next
+     * descriptor is still owned by software, so the partially assembled frame
+     * has to outlive one call and one migration.  tx_frame_capacity is host
+     * allocation bookkeeping and is rebuilt from tx_frame_len on load.
+     */
+    uint8_t *tx_frame;
+    uint32_t tx_frame_capacity;
+    uint32_t tx_frame_len;
+    uint8_t tx_frame_cic;
+
     uint32_t version;
     uint32_t hw_feature;
     uint64_t rx_watchdog_clock_hz;
