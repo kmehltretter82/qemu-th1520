@@ -1,6 +1,7 @@
 slow_qtests = {
   'ahci-test': 150,
   'aspeed_smc-test': 360,
+  'beaglev-ahead-test': 600,
   'bios-tables-test' : 910,
   'cdrom-test' : 610,
   'device-introspect-test' : 720,
