@@ -166,11 +166,12 @@ sections (109 normal/108 minimal or sanitizer, then 114 normal/113 minimal and
 112 sanitizer) are historical evidence from those implementation milestones.
 At the vector/RIWT checkpoints ``78ad4d6e56`` and ``1369cec4d9``, the board
 gates passed 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan.
-At ``e017a59bba`` plus the current gate corrections, the board gate passes
-166/166 normal, 162/162 dependency-minimal and 162/162 ASan/UBSan under
-``meson test``.  The intervening PHY GPIO checkpoint's 149/149 was a
-direct-binary normal-build run only, because the suite could not complete
-under ``meson test``.  The full
+At the ``clock-abi`` and eMMC/SDIO gate checkpoint the board gate passes
+170/170 normal, 166/166 dependency-minimal and 166/166 ASan/UBSan under
+``meson test``; at the preceding ``e017a59bba`` plus its gate corrections it
+passed 166/166, 162/162 and 162/162.  The intervening PHY GPIO checkpoint's
+149/149 was a direct-binary normal-build run only, because the suite could
+not complete under ``meson test``.  The full
 normal RISC-V TCG gate passes 39/39, while the explicitly enumerated
 Ahead-specific minimal TCG gate passes 16/16.  The FXCR execution guest and all
 eight XTheadVector firmware payloads also pass directly under ASan/UBSan.  The
@@ -320,7 +321,9 @@ without loading unreviewed DSP or display firmware.
 
 ### DT-002 — vendor/AP clock binding
 
-State: OPEN-DOC.  Upstream ``thead,th1520-clk-ap`` has one 24 MHz parent and
+State: OPEN-HW; the software contract is settled by the ``clock-abi``
+machine option (see the 2026-08-28 resolution at the end of this entry).
+Upstream ``thead,th1520-clk-ap`` has one 24 MHz parent and
 uses ``CLK_EMMC_SDIO`` ID 43.  RevyOS commit
 ``a092d55649279e1c9bcda2769b8f6b4370fa2c94`` uses
 ``xuantie,th1520-fm-ree-clk``, three named parents and a different MSHC
@@ -351,6 +354,24 @@ kernels cannot share one ``clocks`` cell: mainline needs ``<&clk 43>`` on
 is preserved on branch ``wip/mshc-core-gate``; landing it requires deciding
 how the generated DT names the eMMC clock consumer for both kernels, for
 example a machine option selecting the upstream or vendor clock ABI.
+
+Resolution, 2026-08-28: that machine option exists.
+``-machine beaglev-ahead,clock-abi=upstream`` (default) keeps the mainline
+provider and names ``CLK_EMMC_SDIO`` on the MSHC nodes;
+``clock-abi=vendor`` emits the RevyOS provider, its ``osc_32k``/``osc_24m``/
+``rc_24m`` parents, the vendor root fixed clocks and the vendor cells and
+names on every provider consumer, with ``CLKGEN_EMMC_SDIO_REF_CLK`` as the
+MSHC ``core`` clock.  The fixed ``mshc-input`` clock is gone.  A vendor
+contract qtest pins the provider shape and every consumer's vendor cells;
+the direct-boot contract pins the upstream ones.  With the vendor flavour the
+RevyOS 6.6 lane still reaches its eMMC-root marker and additionally
+registers the vendor clock driver, probes GMAC0 as ``DWMAC1000`` and the AXI
+DMA controller, which all deferred forever on the upstream node; SDIO1
+(``mmc2``) now probes too and reports a failed non-removable card because
+no SDIO function sits behind it.  The eMMC/SDIO gate coupling then landed
+from ``wip/mshc-core-gate``.  What stays open is the hardware side: the
+stock DTB/kernel, ``clk_summary`` and the deployed binding on the owner
+board, which decide whether either flavour matches the shipped tree.
 
 ### CPU-016 implementation update
 

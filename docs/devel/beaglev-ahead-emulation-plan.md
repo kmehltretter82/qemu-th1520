@@ -491,8 +491,9 @@ rounded estimate either.  They remove defects and close migration boundaries
 in areas that were already counted, and the evidence base grew from 149 to
 166 board subtests without new modeled scope.  The remaining strict gap is
 still dominated by items no software change can close: 62 of 80 open ledger
-entries need the physical board, and the eMMC clock question under
-``DT-002`` now needs a decision before that leaf can be coupled.
+entries need the physical board.  The eMMC clock question under ``DT-002``
+is settled in software by the ``clock-abi`` machine option, which let the
+eMMC/SDIO leaf be coupled; what remains of it is the hardware comparison.
 
 The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
 miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
@@ -548,9 +549,9 @@ other 27 AP leaves and all eight miscellaneous leaves remain raw state only;
 parent-gate dependencies, bus fault/access behavior (including the GMAC
 ``pclk`` leaf), rate changes, physical phase/output behavior and all
 AO/video/DSP/power-domain clocks remain open under ``CLK-002``.  The
-eMMC/SDIO leaf is deliberately not coupled: the generated DT's fixed MSHC
-clock means mainline closes that gate as unused, so coupling it breaks
-mainline storage until the binding question under ``DT-002`` is settled.
+eMMC/SDIO leaf is coupled to the three MSHC data engines now that both
+device-tree flavours name the gate as the MSHC ``core`` consumer, so neither
+kernel closes it as unused; see ``DT-002``.
 
 The pinned mainline and vendor device trees plus the board schematic expose no
 PCIe controller, endpoint or routed connector for BeagleV Ahead.  PCIe is
@@ -1398,27 +1399,74 @@ the same checkpoint with ``MAINLINE_EMMC_ROOT_PASS``.
 
 The generated MSHC nodes list both the older
 ``xuantie,th1520-dwcmshc`` and upstream ``thead,th1520-dwcmshc`` compatibles.
-They use a dedicated fixed 198 MHz ``mshc-input`` clock.  This avoids claiming
-either the vendor AP clock-provider ID space or the upstream one for a QEMU
-device whose input is currently fixed; it also avoids colliding with the
-upstream provider's ``emmc-sdio`` output name.  The AP clock-controller node
-remains the upstream one-parent ``thead,th1520-clk-ap`` binding.  RevyOS's
-three-parent XuanTie AP-clock ABI is therefore deliberately not claimed by the
-generated DT.
+Until 2026-08-28 they used a dedicated fixed 198 MHz ``mshc-input`` clock so
+that both kernels would bind storage without the generated DT claiming either
+AP clock-provider ID space.  That fiction was load-bearing: coupling the
+eMMC/SDIO leaf gate to the MSHC data engines, which worked in isolation,
+killed both mainline lanes because no DT consumer named the real AP gate and
+mainline's unused-clock pass closed it.
 
-That fixed clock is load-bearing.  Coupling the eMMC/SDIO leaf gate to the
-MSHC data engines, which works in isolation, killed both mainline lanes:
-with no DT consumer naming the real AP gate, mainline's unused-clock pass
-closes it and the eMMC data engine stalls before the root device is opened.
-The work is preserved on ``wip/mshc-core-gate`` and stays there until the
-generated DT can name the eMMC clock consumer for both kernels; see
-``DT-002``.
+The ``clock-abi`` machine option replaced the fiction.  ``clock-abi=upstream``
+(the default) keeps the mainline ``thead,th1520-clk-ap`` provider and now
+names ``CLK_EMMC_SDIO`` (43) as each MSHC ``core`` clock.  ``clock-abi=vendor``
+emits the RevyOS ``xuantie,th1520-fm-ree-clk`` provider with its three named
+parents, the root ``apb_clk`` and ``uart_sclk`` fixed clocks the vendor tree
+binds directly, and the vendor ``CLKGEN_*`` cells and names on every provider
+consumer, with ``CLKGEN_EMMC_SDIO_REF_CLK`` (122) as the MSHC ``core`` clock;
+the optional vendor ``bus`` clock lives on a MISCSYS gate provider QEMU does
+not describe.  Both flavours therefore name the same ``0x204`` bit 30 gate,
+which is what allowed the shelved coupling to land.  The mapping was taken
+from the RevyOS ``th1520.dtsi``, ``th1520-beaglev-ahead.dts`` and
+``th1520-fm-ap-clock.h`` at the pinned commit; it is a QEMU description of
+the modeled devices, not a copy of either published device tree.  The
+RevyOS lane passes ``--machine-options clock-abi=vendor`` to select it.
 
 This is a kernel-diversity storage check, not an official image, normal distro
-init or hardware comparison.  In the vendor boot, non-storage devices remain
-deferred and the runtime console is unavailable; GPIO registration warnings
-also remain.  The binding split and the required hardware/stock-DTB comparison
-are tracked as ``DT-002`` in the validation ledger.
+init or hardware comparison.  On the upstream flavour the vendor boot leaves
+every AP-clock consumer deferred and has no runtime console.  On the vendor
+flavour the RevyOS kernel registers its clock driver, brings up ``ttyS0`` as
+a runtime console, probes GMAC0 and the AXI DMA controller, and SDIO1
+(``mmc2``) probes but reports a failed non-removable card because no SDIO
+function is modeled behind it.  The required hardware/stock-DTB comparison
+stays tracked as ``DT-002`` in the validation ledger.
+
+### Clock-ABI machine option and eMMC/SDIO gate coupling checkpoint
+
+The generated device tree now offers both published clock bindings through
+``-machine beaglev-ahead,clock-abi=upstream|vendor``, defaulting to
+``upstream``.  The upstream flavour is the previous binding except that the
+three MSHC nodes name ``CLK_EMMC_SDIO`` instead of a standalone fixed clock;
+the vendor flavour emits ``xuantie,th1520-fm-ree-clk`` with its ``osc_32k``,
+``osc_24m`` and ``rc_24m`` parents, the vendor tree's root ``apb_clk`` and
+``uart_sclk`` fixed clocks, and the vendor ``CLKGEN_*`` cells and
+``clock-names`` on the MSHC, GMAC, DMAC, GPIO, I2C, SPI, pinctrl and
+watchdog nodes, with PWM, timers and the mailbox following the vendor tree
+onto fixed clocks.  Because both flavours name AP gate ``0x204`` bit 30 as
+the MSHC ``core`` clock, the eMMC/SDIO gate coupling shelved on
+``wip/mshc-core-gate`` was cherry-picked onto this branch unchanged.
+
+Evidence at this checkpoint: the board gate passes 170/170 normal, 166/166
+dependency-minimal and 166/166 ASan/UBSan under ``meson test``, with no
+sanitizer finding; the shared DWC GMAC model's NPCM suite passes 7/7.  The
+mainline traffic lane passes on one and four harts, and the Tuxboot 6.11.9
+functional control passes both of its cases, so the coupled gate does not
+disturb mainline storage as it did before the DT option.  The RevyOS 6.6
+lane, run with ``--machine-options clock-abi=vendor``, mounts its ext4 root
+and reaches ``ALPINE_RISCV_EMMC_GATE_PASS``, and additionally registers the
+vendor clock driver, brings up ``ttyS0`` as a runtime console, and probes
+GMAC0 as ``DWMAC1000`` and the AXI DMA controller, all of which deferred
+forever on the upstream provider node.  SDIO1 (``mmc2``) now probes and
+reports a failed non-removable card because no SDIO function is modeled
+behind it.
+
+Two mutations each fail one of the two device-tree contract tests: swapping
+the upstream and vendor MSHC ``core`` clock IDs fails the direct-boot
+contract, and dropping the vendor provider's parent ``clock-names`` fails the
+vendor contract.  A third test rejects an unknown ``clock-abi`` value.
+
+The option describes QEMU's modeled devices in each kernel's namespace; it is
+not a copy of either published device tree, and no hardware comparison has
+been made.  ``DT-002`` stays open for that.
 
 ### Vendor U-Boot configuration checkpoint
 

@@ -106,8 +106,11 @@ qemu-system-riscv64 -M beaglev-ahead \
     -nographic
 ```
 
-See the machine documentation for mask-ROM boot, bare M-mode ELF payloads and
-the other supported modes.
+Add `clock-abi=vendor` to `-M beaglev-ahead` when booting a RevyOS/T-Head
+kernel: the generated device tree then describes the vendor clock provider and
+its clock IDs instead of the mainline binding (the default).  See the machine
+documentation for mask-ROM boot, bare M-mode ELF payloads and the other
+supported modes.
 
 ## Tests
 

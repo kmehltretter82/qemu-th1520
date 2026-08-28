@@ -189,7 +189,7 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
 
-### Attempted eMMC/SDIO gate coupling (shelved)
+### eMMC/SDIO gate coupling (shelved, then landed with ``clock-abi``)
 
 The same coupling was then built for the eMMC/SDIO leaf, the ``core`` clock
 of all three MSHC controllers: a 198 MHz Clock from the CPR, a wrapper input,
@@ -208,8 +208,17 @@ selection and could not open its root device.  RevyOS passed because its
 driver never binds the upstream provider.  The two kernels cannot share one
 ``clocks`` cell (``<&clk 43>`` on ``thead,th1520-clk-ap`` against
 ``<&clk 122>`` on ``xuantie,th1520-fm-ree-clk``, the latter mandatory), so
-the coupling waits on a DT decision and lives on ``wip/mshc-core-gate``.
-Nothing of it is on this branch; ``DT-002`` records the contract.
+the coupling waited on a DT decision and lived on ``wip/mshc-core-gate``
+while ``DT-002`` recorded the contract.
+
+The decision was the ``clock-abi`` machine option: the generated DT now
+names the real gate as the MSHC ``core`` clock in both flavours
+(``CLK_EMMC_SDIO`` upstream, ``CLKGEN_EMMC_SDIO_REF_CLK`` vendor), so no
+kernel closes it as unused, and the coupling was cherry-picked onto this
+branch unchanged.  With it landed, the board gate passes 170/170 normal,
+166/166 dependency-minimal and 166/166 ASan/UBSan, the mainline traffic lane
+passes on one and four harts, the Tuxboot control passes both cases, and the
+RevyOS lane on ``clock-abi=vendor`` mounts its ext4 root.
 
 ### Current GMAC AXI clock-gate coupling checkpoint
 

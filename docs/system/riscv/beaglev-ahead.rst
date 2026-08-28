@@ -115,7 +115,10 @@ The machine currently provides:
   (on-board Wi-Fi/SDIO1), connected to PLIC sources 62, 64, and 71.  The
   SDHCI v4.20 register interface, TH1520 vendor/PHY registers, programmed I/O,
   SDMA, ADMA2 including v4 64-bit descriptors, Auto CMD23, reset, interrupts,
-  and migration are modeled.  Unit 0 opts its card into an Ahead-specific,
+  and migration are modeled.  Each controller's ``core`` clock follows the AP
+  eMMC/SDIO gate (register ``0x204`` bit 30): a closed gate holds a due
+  data-engine step until the gate reopens, across migration if need be.
+  Unit 0 opts its card into an Ahead-specific,
   synthetic eMMC 5.1 speed profile with HS200 and HS400 at 1.8 V, eMMC CMD21
   tuning blocks and validated CMD6 timing/bus-width transitions.  Other QEMU
   eMMC users retain the generic card profile;
@@ -256,6 +259,34 @@ image can instead be made writable and persistent with:
 
 Keep any factory dump private unless its contents have been reviewed and
 redacted.  The image must be exactly 4096 bytes.
+
+Clock binding
+-------------
+
+``clock-abi=upstream`` is the default.  The generated device tree then
+describes the mainline ``thead,th1520-clk-ap`` provider with its single
+24 MHz parent and the mainline ``CLK_*`` cells, which is what the pinned
+Tuxboot and mainline-7.2 kernels bind.  ``clock-abi=vendor`` instead
+describes the RevyOS/T-Head ``xuantie,th1520-fm-ree-clk`` provider with its
+``osc_32k``, ``osc_24m`` and ``rc_24m`` parents, the root ``apb_clk`` and
+``uart_sclk`` fixed clocks the vendor tree binds directly, and the vendor
+``CLKGEN_*`` cells and ``clock-names`` on every provider consumer, so a
+RevyOS kernel probes its own clock driver and the devices that depend on it:
+
+.. code-block:: bash
+
+   qemu-system-riscv64 -M beaglev-ahead,clock-abi=vendor \
+       -kernel revyos-Image \
+       -drive if=sd,index=0,file=emmc.img,format=raw \
+       -append "console=ttyS0,115200 earlycon root=/dev/mmcblk0p1" \
+       -nographic
+
+Both flavours name the same eMMC/SDIO gate as the MSHC ``core`` clock; the
+vendor ``bus`` clock is optional and lives on a MISCSYS gate provider the
+generated tree does not describe.  The option only changes the generated
+device tree: a ``-dtb`` file is used as supplied.  Neither flavour is a
+copy of a published board device tree, and only the storage path of the
+vendor flavour has been exercised so far.
 
 CPU limitation
 --------------
