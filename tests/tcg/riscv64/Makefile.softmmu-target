@@ -139,6 +139,12 @@ run-test-xtheadvector-permute: test-xtheadvector-permute
 	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
 	  -semihosting -bios $<)
 
+EXTRA_RUNS += run-test-xtheadvector-slideup
+test-xtheadvector-slideup: test-xtheadvector-slideup.o
+run-test-xtheadvector-slideup: test-xtheadvector-slideup
+	$(call run-test, $<, $(QEMU) -M beaglev-ahead -display none \
+	  -semihosting -bios $<)
+
 EXTRA_RUNS += run-test-rvv-widen-illegal
 test-rvv-widen-illegal: test-rvv-widen-illegal.o
 run-test-rvv-widen-illegal: test-rvv-widen-illegal
