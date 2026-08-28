@@ -563,6 +563,7 @@
 #define DWMAC_VERSION              0x0020
 #define DWMAC_DMA_BUS_MODE         0x1000
 #define DWMAC_DMA_XMT_POLL_DEMAND  0x1004
+#define DWMAC_DMA_RCV_POLL_DEMAND  0x1008
 #define DWMAC_DMA_RX_BASE_ADDR     0x100c
 #define DWMAC_DMA_TX_BASE_ADDR     0x1010
 #define DWMAC_DMA_STATUS           0x1014
@@ -577,9 +578,11 @@
 #define DWMAC_DMA_STATUS_AIS       BIT(15)
 #define DWMAC_DMA_STATUS_RWT       BIT(9)
 #define DWMAC_DMA_STATUS_RI        BIT(6)
+#define DWMAC_DMA_STATUS_RU        BIT(7)
 #define DWMAC_DMA_STATUS_TU        BIT(2)
 
 #define DWMAC_MAC_CONFIG_IPC       BIT(10)
+#define DWMAC_MAC_CONFIG_RX_EN     BIT(2)
 
 #define DWMAC_DMA_CONTROL_TSF      BIT(21)
 #define DWMAC_DMA_CONTROL_ST       BIT(13)
@@ -597,6 +600,9 @@
     (DWMAC_TX_DESC_IHE | DWMAC_TX_DESC_ES | DWMAC_TX_DESC_IPE)
 
 #define DWMAC_RX_DESC_ES           BIT(15)
+#define DWMAC_RX_DESC_FS           BIT(9)
+#define DWMAC_RX_DESC_LS           BIT(8)
+#define DWMAC_RX_DESC_RER          BIT(15)
 #define DWMAC_RX_DESC_FT           BIT(5)
 #define DWMAC_RX_DESC_ESA          BIT(0)
 #define DWMAC_RX_DESC4_IPHE        BIT(3)
@@ -5529,6 +5535,18 @@ static uint16_t gmac_test_checksum_finish(uint32_t sum)
     return ~gmac_test_checksum_fold(sum);
 }
 
+static QTestState *gmac_packet_test_init_extra(int sockets[2],
+                                               const char *extra)
+{
+    QTestState *qts;
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, sockets), ==, 0);
+    qts = qtest_initf("-machine beaglev-ahead -bios none %s "
+                      "-nic socket,fd=%d,model=gmac0", extra, sockets[1]);
+    close(sockets[1]);
+    return qts;
+}
+
 static QTestState *gmac_packet_test_init(int sockets[2])
 {
     QTestState *qts;
@@ -6890,6 +6908,372 @@ static void gmac_run_tx_checksum_case(const GMACTxChecksumCase *test)
  * accumulated segments belong to the transmit engine across that suspend, so
  * the resumed frame must carry both of them.
  */
+static void gmac_configure_rx_ring(QTestState *qts, uint32_t desc_addr)
+{
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_HI,
+                 BIT(31) | 0x5634);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC0_ADDR_LO, 0x12005452);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_BUS_MODE,
+                 0x00020100 | BIT(7));
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RX_BASE_ADDR, desc_addr);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_INTR_ENA,
+                 BIT(16) | BIT(15) | DWMAC_DMA_STATUS_RU |
+                 DWMAC_DMA_STATUS_RI);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_MAC_CONFIG,
+                 DWMAC_MAC_CONFIG_RX_EN);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_CONTROL, BIT(1));
+}
+
+/*
+ * A frame that arrives while every receive descriptor is owned by software
+ * is held by the MAC, not discarded: the DMA reports RU and suspends, and the
+ * frame lands as soon as the guest hands a descriptor back and resumes.
+ */
+static void test_gmac_rx_ring_full_backpressure(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0xaa, 0xbb, 0xcc, 0xdd,
+    };
+    uint8_t buffer[sizeof(packet)];
+    QTestState *qts;
+    GMACDesc desc;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+
+    /* A one-descriptor ring that software still owns: the ring is full. */
+    desc = (GMACDesc) {
+        .des0 = 0,
+        .des1 = DWMAC_RX_DESC_RER | 2048,
+        .des2 = GMAC_TEST_DATA_ADDR,
+    };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_configure_rx_ring(qts, GMAC_TEST_DESC_ADDR);
+
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+
+    /* The DMA cannot place the frame and must say so without touching it. */
+    g_assert_true(gmac_wait_status(qts, DWMAC_DMA_STATUS_RU));
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0, ==, 0);
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
+    g_assert_cmphex(buffer[0], ==, 0xa5);
+
+    /* Hand the descriptor over and resume: the held frame must land. */
+    desc.des0 = BIT(31);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RCV_POLL_DEMAND, 1);
+
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & (DWMAC_RX_DESC_FS | DWMAC_RX_DESC_LS), ==,
+                    DWMAC_RX_DESC_FS | DWMAC_RX_DESC_LS);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(packet) + 4);
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), packet, sizeof(packet));
+    g_assert_true(gmac_wait_status(qts, DWMAC_DMA_STATUS_RI));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+/* Let QEMU consume anything queued on the backend socket. */
+static void gmac_settle(QTestState *qts)
+{
+    for (unsigned i = 0; i < 20; i++) {
+        qtest_clock_step(qts, 1000000);
+        g_usleep(2000);
+    }
+}
+
+static bool gmac_desc_stays_owned(QTestState *qts, uint32_t desc_addr)
+{
+    GMACDesc desc;
+
+    for (unsigned i = 0; i < 50; i++) {
+        qtest_clock_step(qts, 1000000);
+        g_usleep(2000);
+        gmac_read_desc(qts, desc_addr, &desc);
+        if (!(desc.des0 & BIT(31))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * A frame larger than the first available buffer spans descriptors.  When
+ * the second descriptor is still owned by software the frame is held whole
+ * and the first descriptor is left untouched.  The next frame's arrival then
+ * re-polls the ring and delivers both in order: that is the only resume path
+ * a driver which never writes the receive poll demand has.
+ */
+static void test_gmac_rx_suspend_midframe(void)
+{
+    const uint32_t desc1_addr = GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE;
+    const uint32_t desc2_addr = GMAC_TEST_DESC_ADDR +
+                                2 * GMAC_ENHANCED_DESC_STRIDE;
+    const uint32_t third_buffer = GMAC_TEST_DATA2_ADDR + 0x800;
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x11, 0x22, 0x33, 0x44,
+    };
+    static const uint8_t second[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x55, 0x66, 0x77, 0x88,
+    };
+    uint8_t buffer[64];
+    QTestState *qts;
+    GMACDesc desc;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    qtest_memset(qts, GMAC_TEST_DATA2_ADDR, 0x5a, 2048);
+    qtest_memset(qts, third_buffer, 0x3c, 2048);
+
+    desc = (GMACDesc) { .des0 = BIT(31), .des1 = 32,
+                        .des2 = GMAC_TEST_DATA_ADDR };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) { .des0 = 0, .des1 = 2048, .des2 = GMAC_TEST_DATA2_ADDR };
+    gmac_write_desc(qts, desc1_addr, &desc);
+    desc = (GMACDesc) { .des0 = BIT(31), .des1 = DWMAC_RX_DESC_RER | 2048,
+                        .des2 = third_buffer };
+    gmac_write_desc(qts, desc2_addr, &desc);
+    gmac_configure_rx_ring(qts, GMAC_TEST_DESC_ADDR);
+
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    g_assert_true(gmac_wait_status(qts, DWMAC_DMA_STATUS_RU));
+
+    /* Nothing is written back until the whole frame fits. */
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0, ==, BIT(31));
+    gmac_read_desc(qts, desc1_addr, &desc);
+    g_assert_cmphex(desc.des0, ==, 0);
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, 1);
+    g_assert_cmphex(buffer[0], ==, 0xa5);
+
+    /* Hand the descriptor over; no register write follows. */
+    desc.des0 = BIT(31);
+    gmac_write_desc(qts, desc1_addr, &desc);
+    gmac_send_packet(sockets[0], second, sizeof(second));
+
+    gmac_wait_rx_desc_complete(qts, desc2_addr, &desc);
+    g_assert_cmphex(desc.des0 & (DWMAC_RX_DESC_FS | DWMAC_RX_DESC_LS), ==,
+                    DWMAC_RX_DESC_FS | DWMAC_RX_DESC_LS);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(second) + 4);
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & (BIT(31) | DWMAC_RX_DESC_FS |
+                                 DWMAC_RX_DESC_LS), ==, DWMAC_RX_DESC_FS);
+    gmac_read_desc(qts, desc1_addr, &desc);
+    g_assert_cmphex(desc.des0 & (BIT(31) | DWMAC_RX_DESC_FS |
+                                 DWMAC_RX_DESC_LS), ==, DWMAC_RX_DESC_LS);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(packet) + 4);
+
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, 32);
+    g_assert_cmpmem(buffer, 32, packet, 32);
+    qtest_memread(qts, GMAC_TEST_DATA2_ADDR, buffer, 32);
+    g_assert_cmpmem(buffer, 32, packet + 32, 32);
+    qtest_memread(qts, third_buffer, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), second, sizeof(second));
+    g_assert_true(gmac_wait_status(qts, DWMAC_DMA_STATUS_RI));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+/*
+ * The receive FIFO is finite.  With a 100-byte FIFO a first 68-byte frame is
+ * held, a second overflows and is counted, and only the held frame is ever
+ * delivered.
+ */
+static void test_gmac_rx_fifo_overflow(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x01, 0x02, 0x03, 0x04,
+    };
+    static const uint8_t overflow[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0x05, 0x06, 0x07, 0x08,
+    };
+    uint8_t buffer[64];
+    uint32_t missed;
+    QTestState *qts;
+    GMACDesc desc;
+    int sockets[2];
+
+    qts = gmac_packet_test_init_extra(sockets,
+                                      "-global dw-gmac.rx-fifo-size=100");
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    desc = (GMACDesc) { .des0 = 0, .des1 = DWMAC_RX_DESC_RER | 2048,
+                        .des2 = GMAC_TEST_DATA_ADDR };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_configure_rx_ring(qts, GMAC_TEST_DESC_ADDR);
+
+    gmac_send_packet(sockets[0], packet, sizeof(packet));
+    g_assert_true(gmac_wait_status(qts, DWMAC_DMA_STATUS_RU));
+    gmac_send_packet(sockets[0], overflow, sizeof(overflow));
+    g_assert_true(gmac_wait_status(qts, BIT(4)));
+
+    missed = qtest_readl(qts, TH1520_GMAC0_BASE + 0x1020);
+    g_assert_cmpuint(extract32(missed, 17, 11), ==, 1);
+    g_assert_cmpuint(extract32(missed, 0, 16), ==, 0);
+
+    desc.des0 = BIT(31);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RCV_POLL_DEMAND, 1);
+    gmac_wait_rx_desc_complete(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(packet) + 4);
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), packet, sizeof(packet));
+
+    /* The overflowed frame is gone: a fresh descriptor stays with the DMA. */
+    desc.des0 = BIT(31);
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RCV_POLL_DEMAND, 1);
+    g_assert_true(gmac_desc_stays_owned(qts, GMAC_TEST_DESC_ADDR));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+/* Frames held across a ring-full event are delivered in arrival order. */
+static void test_gmac_rx_fifo_order(void)
+{
+    const uint32_t desc1_addr = GMAC_TEST_DESC_ADDR + GMAC_ENHANCED_DESC_STRIDE;
+    static const uint8_t first[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0xf1, 0xf1, 0xf1, 0xf1,
+    };
+    static const uint8_t second[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0xf2, 0xf2, 0xf2, 0xf2,
+    };
+    uint8_t buffer[64];
+    QTestState *qts;
+    GMACDesc desc;
+    int sockets[2];
+
+    qts = gmac_packet_test_init(sockets);
+    qtest_memset(qts, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    qtest_memset(qts, GMAC_TEST_DATA2_ADDR, 0x5a, 2048);
+    desc = (GMACDesc) { .des0 = 0, .des1 = 2048, .des2 = GMAC_TEST_DATA_ADDR };
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc = (GMACDesc) { .des0 = 0, .des1 = DWMAC_RX_DESC_RER | 2048,
+                        .des2 = GMAC_TEST_DATA2_ADDR };
+    gmac_write_desc(qts, desc1_addr, &desc);
+    gmac_configure_rx_ring(qts, GMAC_TEST_DESC_ADDR);
+
+    gmac_send_packet(sockets[0], first, sizeof(first));
+    gmac_send_packet(sockets[0], second, sizeof(second));
+    g_assert_true(gmac_wait_status(qts, DWMAC_DMA_STATUS_RU));
+    gmac_settle(qts);
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0, ==, 0);
+
+    desc.des0 = BIT(31);
+    desc.des1 = 2048;
+    desc.des2 = GMAC_TEST_DATA_ADDR;
+    gmac_write_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    desc.des1 = DWMAC_RX_DESC_RER | 2048;
+    desc.des2 = GMAC_TEST_DATA2_ADDR;
+    gmac_write_desc(qts, desc1_addr, &desc);
+    qtest_writel(qts, TH1520_GMAC0_BASE + DWMAC_DMA_RCV_POLL_DEMAND, 1);
+
+    gmac_wait_rx_desc_complete(qts, desc1_addr, &desc);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(second) + 4);
+    qtest_memread(qts, GMAC_TEST_DATA2_ADDR, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), second, sizeof(second));
+    gmac_read_desc(qts, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0 & BIT(31), ==, 0);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(first) + 4);
+    qtest_memread(qts, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), first, sizeof(first));
+
+    qtest_quit(qts);
+    close(sockets[0]);
+}
+
+/*
+ * A frame held in the receive FIFO is in-flight device state and must reach
+ * the destination, which then delivers it once the guest resumes the ring.
+ */
+static void test_gmac_rx_fifo_migration(void)
+{
+    static const uint8_t packet[64] = {
+        0x52, 0x54, 0x00, 0x12, 0x34, 0x56,
+        0x52, 0x54, 0x00, 0x65, 0x43, 0x21,
+        0x08, 0x00, 0x45, 0x00, 0xc0, 0xff, 0xee, 0x00,
+    };
+    uint8_t buffer[64];
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    GMACDesc desc;
+    int src_sockets[2];
+    int dst_sockets[2];
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-gmac-rxfifo-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, src_sockets), ==, 0);
+    src = qtest_initf("-machine beaglev-ahead -bios none "
+                      "-nic socket,fd=%d,model=gmac0", src_sockets[1]);
+    close(src_sockets[1]);
+    g_assert_cmpint(socketpair(PF_UNIX, SOCK_STREAM, 0, dst_sockets), ==, 0);
+    dst = qtest_initf("-machine beaglev-ahead -bios none -incoming defer "
+                      "-nic socket,fd=%d,model=gmac0", dst_sockets[1]);
+    close(dst_sockets[1]);
+
+    qtest_memset(src, GMAC_TEST_DATA_ADDR, 0xa5, 2048);
+    desc = (GMACDesc) { .des0 = 0, .des1 = DWMAC_RX_DESC_RER | 2048,
+                        .des2 = GMAC_TEST_DATA_ADDR };
+    gmac_write_desc(src, GMAC_TEST_DESC_ADDR, &desc);
+    gmac_configure_rx_ring(src, GMAC_TEST_DESC_ADDR);
+    gmac_send_packet(src_sockets[0], packet, sizeof(packet));
+    g_assert_true(gmac_wait_status(src, DWMAC_DMA_STATUS_RU));
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    g_assert_true(qtest_readl(dst, TH1520_GMAC0_BASE + DWMAC_DMA_STATUS) &
+                  DWMAC_DMA_STATUS_RU);
+    gmac_read_desc(dst, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmphex(desc.des0, ==, 0);
+
+    desc.des0 = BIT(31);
+    gmac_write_desc(dst, GMAC_TEST_DESC_ADDR, &desc);
+    qtest_writel(dst, TH1520_GMAC0_BASE + DWMAC_DMA_RCV_POLL_DEMAND, 1);
+    gmac_wait_rx_desc_complete(dst, GMAC_TEST_DESC_ADDR, &desc);
+    g_assert_cmpuint(extract32(desc.des0, 16, 14), ==, sizeof(packet) + 4);
+    qtest_memread(dst, GMAC_TEST_DATA_ADDR, buffer, sizeof(buffer));
+    g_assert_cmpmem(buffer, sizeof(buffer), packet, sizeof(packet));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    close(src_sockets[0]);
+    close(dst_sockets[0]);
+    unlink(path);
+}
+
 static void test_gmac_tx_suspend_midframe(void)
 {
     const uint32_t last_desc_addr = GMAC_TEST_DESC_ADDR +
@@ -14541,6 +14925,16 @@ int main(int argc, char **argv)
                        test_gmac_rx_filter_matrix);
         qtest_add_func("/beaglev-ahead/gmac/rx-filter-migration",
                        test_gmac_rx_filter_migration);
+        qtest_add_func("/beaglev-ahead/gmac/rx-ring-full-backpressure",
+                       test_gmac_rx_ring_full_backpressure);
+        qtest_add_func("/beaglev-ahead/gmac/rx-suspend-midframe",
+                       test_gmac_rx_suspend_midframe);
+        qtest_add_func("/beaglev-ahead/gmac/rx-fifo-overflow",
+                       test_gmac_rx_fifo_overflow);
+        qtest_add_func("/beaglev-ahead/gmac/rx-fifo-order",
+                       test_gmac_rx_fifo_order);
+        qtest_add_func("/beaglev-ahead/gmac/rx-fifo-migration",
+                       test_gmac_rx_fifo_migration);
         qtest_add_func("/beaglev-ahead/gmac/tx-suspend-midframe",
                        test_gmac_tx_suspend_midframe);
         qtest_add_func("/beaglev-ahead/gmac/tx-suspend-migration",

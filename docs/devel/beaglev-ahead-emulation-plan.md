@@ -57,7 +57,15 @@ TH1520 SPL PMP portal checkpoint: e418fc463d
 
 AP6203BM control/wake checkpoint: e017a59bba
 
-Board-gate infrastructure checkpoint: this working tree
+Board-gate infrastructure checkpoint: 2c128ef9c1
+
+XTheadVector slide-up/gather-immediate/compress checkpoint: 49c64da308
+
+GMAC partial-transmit-frame checkpoint: c1e8df8bfd
+
+TH1520 pinctrl compatible checkpoint: 6f38a22353
+
+GMAC receive-FIFO checkpoint: this working tree
 
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
@@ -109,8 +117,8 @@ externally driven mask and level per controller, which also covers the GMAC0
 PHY interrupt on GPIO3_22 that previously passed only because that line idles
 high.  This is a test defect, not a new ``UQ-L`` device finding.
 
-With both corrected, the complete board gate passes 153/153 normal, 152/152
-dependency-minimal and 152/152 ASan/UBSan at ``e017a59bba``, restoring
+With both corrected, the complete board gate passes 160/160 normal, 159/159
+dependency-minimal and9/159 ASan/UBSan at ``e017a59bba``, restoring
 three-configuration evidence for the twelve vendor-firmware and board
 checkpoints committed after ``1369cec4d9`` that had only the normal-build
 direct run.
@@ -136,7 +144,7 @@ descriptor arms the one-shot timer; expiry raises RI/NIS and the GMAC PLIC
 line, while an immediate non-DIC RI, a zero write or reset cancels it.  Current
 VMState version 2 preserves an armed deadline; a pre-version-2 stream retains
 the masked low register byte but cannot reconstruct a missing deadline and is
-loaded unarmed.  The complete GMAC qtest group passes 16/16, including PHY
+loaded unarmed.  The complete GMAC qtest group passes 21/21, including PHY
 GPIO/reset-state migration plus focused watchdog and migration cases.  The
 direct normal board gate passes 149/149; the 115/115 dependency-minimal and
 ASan/UBSan gate records predate this checkpoint.
@@ -986,8 +994,8 @@ At the preceding migration checkpoint the complete normal and
 dependency-minimal gates passed 114/114 board plus 14/14 CSR qtests and
 113/113 plus 7/7 respectively; its preceding complete ASan/UBSan board gate
 passed 112/112.  At ``e017a59bba`` plus the current gate
-corrections, the board gate passes 153/153 normal, 152/152
-dependency-minimal and 152/152 ASan/UBSan under ``meson test``.  The
+corrections, the board gate passes 160/160 normal, 159/159
+dependency-minimal and9/159 ASan/UBSan under ``meson test``.  The
 intervening 149/149 was a direct-binary normal-build run only.  The complete
 normal RISC-V TCG gate passes 39/39, the
 explicit Ahead-specific minimal TCG enumeration passes 16/16, and all eight
@@ -2338,11 +2346,15 @@ assembly and normal/enhanced status distinctions without changing guest
 buffers.  DMA RIWT now implements the driver's DIC-based interrupt-mitigation
 timer at the fixed 500 MHz TH1520 reset/reference rate, raises RI/NIS and PLIC
 source 66 on expiry, cancels on reset/zero/immediate RI, and migrates an armed
-deadline in VMState v2.  Sixteen focused GMAC qtests include a deterministic
+deadline in VMState v2.  Twenty-one focused GMAC qtests include a deterministic
 rejection barrier, a 34-case filter matrix, a Type-2 matrix, an 18-case TX
 checksum matrix, PHY reset/interrupt GPIO wiring and reset-state migration,
 split-descriptor boundaries, filter/IPC-state migration and exact 81,920 ns
-RIWT timing/current-v2 migration.  The seven-case NPCM suite,
+RIWT timing/current-v2 migration.  Five receive-FIFO cases cover ring-full
+resume by poll demand, mid-frame hold with next-frame resume, overflow with
+both missed-frame counters, arrival order and migration of a held frame, and
+two transmit cases cover a frame suspended between its segments and its
+migration.  The seven-case NPCM suite,
 successful mainline ``dwmac-thead`` probe and four clean normal/minimal
 one-/four-hart DHCP/ping/1 MiB HTTP-integrity runs remain green.  The retained
 masked-RI contention failure keeps sustained traffic and driver IRQ stress

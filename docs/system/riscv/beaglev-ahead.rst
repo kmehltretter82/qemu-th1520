@@ -126,7 +126,8 @@ The machine currently provides:
   intentionally does not implement an SDIO function, CYW43012 firmware,
   WLAN, Bluetooth, RF, power, clock or timing behavior; and
 * two DesignWare GMAC 3.x cores at ``0xffe7070000`` and ``0xffe7060000``
-  with TH1520 APB glue, descriptor DMA, normal/enhanced descriptors, FCS,
+  with TH1520 APB glue, descriptor DMA, a receive FIFO for frames the DMA
+  cannot yet place, normal/enhanced descriptors, FCS,
   checksum status, Clause 22 MDIO/PHY state, DMA receive-interrupt-watchdog
   timing, PLIC sources 66/67 and migration including an armed watchdog timer.
   Board GMAC0 can use a QEMU network backend; GMAC1 is board-disabled; and
@@ -779,7 +780,7 @@ zero write or reset cancels it.  Current VMState version 2 preserves an armed
 deadline.  Older streams retain the low register byte but load unarmed because
 they contain no deadline.
 
-The complete GMAC qtest group passes 16/16.  Four clean normal/minimal
+The complete GMAC qtest group passes 21/21.  Four clean normal/minimal
 one-/four-hart Linux runs pass DHCP, 3/3 gateway pings and a 1 MiB HTTP
 SHA-256 download.  A retained contention run exposes a Linux masked-RI race:
 RIWT expires while RIE is masked, then an unrelated TX interrupt W1C-clears RI
@@ -845,8 +846,7 @@ device tests, an armed DWC GMAC RIWT deadline now survives current-version
 migration: a half-expired timer remains quiet through remaining time minus one
 nanosecond and expires on the next.  Pre-version-2 GMAC streams load the masked
 register value unarmed because their missing deadline cannot be reconstructed.
-The board gate passes 153/153 normal, 152/152 dependency-minimal and
-152/152 ASan/UBSan.  The complete normal
+The board gate passes 160/160 normal, 159/159 dependency-minimal and9/159 ASan/UBSan.  The complete normal
 RISC-V TCG gate passes 39/39, and the explicitly enumerated Ahead-specific
 minimal TCG gate passes
 16/16, and all eight XTheadVector firmware payloads pass directly under

@@ -192,6 +192,20 @@ typedef struct DWGMACState {
     uint32_t tx_frame_len;
     uint8_t tx_frame_cic;
 
+    /*
+     * Frames the MAC accepted but the DMA could not place because every
+     * receive descriptor was still owned by software.  Silicon holds them in
+     * the receive FIFO and re-polls the descriptor on the next frame or a
+     * receive poll demand; a full FIFO overflows.  Each entry is a
+     * DWGMACRxFifoEntry header followed by the frame bytes including FCS.
+     * rx_fifo_capacity is host allocation bookkeeping rebuilt on load;
+     * rx_fifo_size is the modeled depth in frame bytes.
+     */
+    uint8_t *rx_fifo;
+    uint32_t rx_fifo_capacity;
+    uint32_t rx_fifo_used;
+    uint32_t rx_fifo_size;
+
     uint32_t version;
     uint32_t hw_feature;
     uint64_t rx_watchdog_clock_hz;

@@ -20,6 +20,7 @@
 #include "hw/net/mii.h"
 #include "hw/net/dw_gmac.h"
 #include "migration/vmstate.h"
+#include "qemu/error-report.h"
 #include "net/checksum.h"
 #include "net/eth.h"
 #include "net/net.h"
@@ -135,6 +136,19 @@ typedef struct DWGMACRxCOEStatus {
     bool available;
     uint32_t rdes4;
 } DWGMACRxCOEStatus;
+
+/*
+ * One frame held in the receive FIFO: its length including FCS, the RDES0
+ * status bits the MAC decided on arrival, and the extended status word.
+ */
+typedef struct DWGMACRxFifoEntry {
+    uint32_t len;
+    uint32_t rdes0;
+    uint32_t rdes4;
+} DWGMACRxFifoEntry;
+
+static bool gmac_rx_enabled(const DWGMACState *gmac);
+static void gmac_rx_fifo_clear(DWGMACState *gmac);
 
 static hwaddr gmac_mac_addr_reg(unsigned int index, bool high)
 {
@@ -857,6 +871,7 @@ static void dw_gmac_soft_reset(DWGMACState *gmac)
         gmac->regs[gmac_mac_addr_reg(index, false) / 4] = 0xffffffff;
     }
     gmac_sanitize_filter_regs(gmac);
+    gmac_rx_fifo_clear(gmac);
     gmac->regs[R_DW_GMAC_VERSION] = gmac->version;
     gmac->regs[R_DWMAC_DMA_HW_FEATURE] = gmac->hw_feature;
     /* Clear reset bits */
@@ -915,20 +930,14 @@ static void dw_gmac_phy_reset_input(void *opaque, int n, int level)
     gmac_update_phy_link(gmac);
 }
 
+/*
+ * Frames keep arriving while the ring is full: silicon holds them in the
+ * receive FIFO and re-polls the descriptor on the next one, which is the only
+ * resume path a driver that never writes the poll-demand register has.
+ */
 static bool gmac_can_receive(NetClientState *nc)
 {
-    DWGMACState *gmac = DW_GMAC(qemu_get_nic_opaque(nc));
-
-    /* If GMAC receive is disabled. */
-    if (!(gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_RX_EN)) {
-        return false;
-    }
-
-    /* If GMAC DMA RX is stopped. */
-    if (!(gmac->regs[R_DWMAC_DMA_CONTROL] & DWMAC_DMA_CONTROL_START_STOP_RX)) {
-        return false;
-    }
-    return true;
+    return gmac_rx_enabled(DW_GMAC(qemu_get_nic_opaque(nc)));
 }
 
 /*
@@ -1152,51 +1161,203 @@ static void gmac_dma_bus_error(DWGMACState *gmac, int state_shift)
     gmac_update_irq(gmac);
 }
 
-static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
+static bool gmac_rx_enabled(const DWGMACState *gmac)
 {
-    DWGMACState *gmac = DW_GMAC(qemu_get_nic_opaque(nc));
-    g_autofree uint8_t *frame = NULL;
-    const uint8_t *frame_ptr;
-    uint32_t left_frame;
+    return (gmac->regs[R_DW_GMAC_MAC_CONFIG] & DW_GMAC_MAC_CONFIG_RX_EN) &&
+           (gmac->regs[R_DWMAC_DMA_CONTROL] & DWMAC_DMA_CONTROL_START_STOP_RX);
+}
+
+static uint32_t gmac_rx_fifo_data_bytes(const DWGMACState *gmac)
+{
+    uint32_t offset = 0, total = 0;
+
+    while (offset < gmac->rx_fifo_used) {
+        DWGMACRxFifoEntry entry;
+
+        memcpy(&entry, gmac->rx_fifo + offset, sizeof(entry));
+        total += entry.len;
+        offset += sizeof(entry) + entry.len;
+    }
+    return total;
+}
+
+static bool gmac_rx_fifo_push(DWGMACState *gmac, const uint8_t *frame,
+                              uint32_t len, uint32_t rdes0, uint32_t rdes4)
+{
+    DWGMACRxFifoEntry entry = { .len = len, .rdes0 = rdes0, .rdes4 = rdes4 };
+    uint32_t needed = gmac->rx_fifo_used + sizeof(entry) + len;
+
+    if (gmac_rx_fifo_data_bytes(gmac) + len > gmac->rx_fifo_size) {
+        return false;
+    }
+    if (needed > gmac->rx_fifo_capacity) {
+        gmac->rx_fifo = g_realloc(gmac->rx_fifo, needed);
+        gmac->rx_fifo_capacity = needed;
+    }
+    memcpy(gmac->rx_fifo + gmac->rx_fifo_used, &entry, sizeof(entry));
+    memcpy(gmac->rx_fifo + gmac->rx_fifo_used + sizeof(entry), frame, len);
+    gmac->rx_fifo_used = needed;
+    return true;
+}
+
+static bool gmac_rx_fifo_peek(const DWGMACState *gmac, DWGMACRxFifoEntry *entry,
+                              const uint8_t **frame)
+{
+    if (!gmac->rx_fifo_used) {
+        return false;
+    }
+    memcpy(entry, gmac->rx_fifo, sizeof(*entry));
+    *frame = gmac->rx_fifo + sizeof(*entry);
+    return true;
+}
+
+static void gmac_rx_fifo_pop(DWGMACState *gmac)
+{
+    DWGMACRxFifoEntry entry;
+    uint32_t size;
+
+    memcpy(&entry, gmac->rx_fifo, sizeof(entry));
+    size = sizeof(entry) + entry.len;
+    memmove(gmac->rx_fifo, gmac->rx_fifo + size, gmac->rx_fifo_used - size);
+    gmac->rx_fifo_used -= size;
+}
+
+static void gmac_rx_fifo_clear(DWGMACState *gmac)
+{
+    gmac->rx_fifo_used = 0;
+}
+
+/* Validate a FIFO image, typically one that arrived through migration. */
+static bool gmac_rx_fifo_valid(const DWGMACState *gmac)
+{
+    uint32_t offset = 0;
+
+    while (offset < gmac->rx_fifo_used) {
+        DWGMACRxFifoEntry entry;
+
+        if (gmac->rx_fifo_used - offset < sizeof(entry)) {
+            return false;
+        }
+        memcpy(&entry, gmac->rx_fifo + offset, sizeof(entry));
+        if (entry.len < ETH_FCS_LEN ||
+            entry.len > gmac->rx_fifo_used - offset - sizeof(entry)) {
+            return false;
+        }
+        offset += sizeof(entry) + entry.len;
+    }
+    return offset == gmac->rx_fifo_used &&
+           gmac_rx_fifo_data_bytes(gmac) <= gmac->rx_fifo_size;
+}
+
+static uint32_t gmac_rx_current_desc(const DWGMACState *gmac)
+{
+    uint32_t current = gmac->regs[R_DWMAC_DMA_HOST_RX_DESC];
+
+    if (!current) {
+        current = gmac->regs[R_DWMAC_DMA_RX_BASE_ADDR];
+    }
+    return DWMAC_DMA_HOST_RX_DESC_MASK(current);
+}
+
+typedef enum {
+    GMAC_RX_FITS,        /* enough DMA-owned buffers from the current descriptor */
+    GMAC_RX_FITS_LATER,  /* blocked by a software-owned descriptor */
+    GMAC_RX_FITS_NEVER,  /* every descriptor is DMA-owned and still too small */
+} GMACRxFit;
+
+/*
+ * Decide whether a frame can be placed before anything is written back, so a
+ * frame that cannot be completed is never half-delivered.  Silicon closes
+ * each descriptor as its buffer fills and would leave the first part of a
+ * blocked frame with FD set and no LD; QEMU instead holds the whole frame
+ * until it fits.  The outcome for the frame is identical.
+ */
+static GMACRxFit gmac_rx_frame_fits(DWGMACState *gmac, uint32_t len)
+{
+    uint32_t start = gmac_rx_current_desc(gmac);
+    uint32_t addr = start;
+    uint64_t available = 0;
+    uint32_t descriptors = 0;
+
+    while (available < len) {
+        struct DWGMACRxDesc desc;
+
+        if (++descriptors > 65536) {
+            return GMAC_RX_FITS_NEVER;
+        }
+        if (gmac_read_rx_desc(addr, &desc)) {
+            /* Let delivery report the bus error rather than stalling. */
+            return GMAC_RX_FITS;
+        }
+        if (!(desc.rdes0 & RX_DESC_RDES0_OWN)) {
+            return GMAC_RX_FITS_LATER;
+        }
+        available += gmac_rx_buffer1_size(gmac, &desc);
+        if (!gmac_rx_is_chained(gmac, &desc)) {
+            available += gmac_rx_buffer2_size(gmac, &desc);
+        }
+        addr = gmac_rx_next_desc(gmac, addr, &desc);
+        if (addr == start) {
+            break;
+        }
+    }
+    return available >= len ? GMAC_RX_FITS : GMAC_RX_FITS_NEVER;
+}
+
+/* Enter Suspended once; a re-poll that fails again is not a new RU event. */
+static void gmac_rx_suspend(DWGMACState *gmac)
+{
+    uint32_t state = extract32(gmac->regs[R_DWMAC_DMA_STATUS],
+                               DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT, 3);
+
+    if (state != DWMAC_DMA_STATUS_RX_SUSPENDED_STATE) {
+        gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_RU;
+        gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
+                           DWMAC_DMA_STATUS_RX_SUSPENDED_STATE);
+        gmac_update_irq(gmac);
+    }
+}
+
+/*
+ * Missed Frame and Buffer Overflow Counter: bits 15:0 count frames the DMA
+ * missed for lack of a receive buffer, bits 27:17 frames the MAC dropped on
+ * receive FIFO overflow; bits 16 and 28 latch counter overflow.
+ */
+static void gmac_rx_count_missed(DWGMACState *gmac, bool fifo_overflow)
+{
+    uint32_t *ctr = &gmac->regs[R_DWMAC_DMA_MISSED_FRAME_CTR];
+
+    if (fifo_overflow) {
+        uint32_t count = extract32(*ctr, 17, 11);
+
+        *ctr = count == 0x7ff ? *ctr | BIT(28) : deposit32(*ctr, 17, 11,
+                                                             count + 1);
+        gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_OVF;
+    } else {
+        uint32_t count = extract32(*ctr, 0, 16);
+
+        *ctr = count == 0xffff ? *ctr | BIT(16) : deposit32(*ctr, 0, 16,
+                                                              count + 1);
+    }
+    gmac_update_irq(gmac);
+}
+
+/*
+ * Write one frame into the descriptor ring.  Returns false only if the very
+ * first descriptor turned out to be software-owned before anything was
+ * written, so the caller can hold the frame; every other outcome consumes it.
+ */
+static bool gmac_rx_deliver(DWGMACState *gmac, const uint8_t *frame,
+                            uint32_t len, uint32_t rdes0_flags, uint32_t rdes4)
+{
+    const uint8_t *frame_ptr = frame;
+    uint32_t left_frame = len;
     uint32_t desc_addr;
     uint32_t next_desc_addr;
     struct DWGMACRxDesc rx_desc;
     uint32_t transferred = 0;
     uint32_t descriptors = 0;
     bool first_desc = true;
-    DWGMACRxFilterResult filter_result = { .accept = true };
-    DWGMACRxCOEStatus coe_status;
-    uint32_t frame_type;
-
-    trace_dw_gmac_packet_receive(DEVICE(gmac)->canonical_path, len);
-    if (!gmac_can_receive(nc)) {
-        qemu_log_mask(LOG_GUEST_ERROR, "GMAC is not able to receive\n");
-        return -1;
-    }
-
-    if (len > UINT32_MAX - ETH_FCS_LEN) {
-        return -1;
-    }
-
-    if (gmac->rx_filtering) {
-        filter_result = gmac_filter_packet(gmac, buf, len);
-        if (!filter_result.accept) {
-            /* The MAC consumed and discarded the frame; do not retry it. */
-            return len;
-        }
-    }
-
-    frame_type = !gmac->rx_coe_type2 || gmac_rx_is_type_frame(buf, len) ?
-                 RX_DESC_RDES0_FRM_TYPE_MASK : 0;
-    coe_status = gmac_rx_coe_status(gmac, buf, len);
-
-    /* QEMU network backends omit the FCS, but DWMAC DMA includes it. */
-    frame = g_malloc(len + ETH_FCS_LEN);
-    memcpy(frame, buf, len);
-    uint32_t fcs = cpu_to_le32(crc32(0, buf, len));
-    memcpy(frame + len, &fcs, sizeof(fcs));
-    frame_ptr = frame;
-    left_frame = len + ETH_FCS_LEN;
 
     if (!gmac->regs[R_DWMAC_DMA_HOST_RX_DESC]) {
         gmac->regs[R_DWMAC_DMA_HOST_RX_DESC] =
@@ -1214,11 +1375,8 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
             qemu_log_mask(LOG_GUEST_ERROR,
                           "%s: RX descriptor ring made no progress\n",
                           DEVICE(gmac)->canonical_path);
-            gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_RU;
-            gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
-                               DWMAC_DMA_STATUS_RX_SUSPENDED_STATE);
-            gmac_update_irq(gmac);
-            return len;
+            gmac_rx_suspend(gmac);
+            return true;
         }
 
         gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
@@ -1230,22 +1388,26 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
                           "RX descriptor @ 0x%x cannot be read\n", desc_addr);
             gmac_dma_bus_error(gmac,
                                DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
-            return len;
+            return true;
         }
 
         trace_dw_gmac_debug_desc_data(DEVICE(gmac)->canonical_path, &rx_desc,
                                       rx_desc.rdes0, rx_desc.rdes1,
                                       rx_desc.rdes2, rx_desc.rdes3);
         if (!(rx_desc.rdes0 & RX_DESC_RDES0_OWN)) {
-            gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_RU;
-            gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
-                               DWMAC_DMA_STATUS_RX_SUSPENDED_STATE);
-            gmac_update_irq(gmac);
-            return len;
+            if (first_desc) {
+                return false;
+            }
+            /* Unreachable after the fit check unless the guest raced the DMA. */
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: RX descriptor @ 0x%x reclaimed mid-frame\n",
+                          DEVICE(gmac)->canonical_path, desc_addr);
+            gmac_rx_suspend(gmac);
+            return true;
         }
 
         next_desc_addr = gmac_rx_next_desc(gmac, desc_addr, &rx_desc);
-        rx_desc.rdes0 = frame_type;
+        rx_desc.rdes0 = rdes0_flags & RX_DESC_RDES0_FRM_TYPE_MASK;
         if (first_desc) {
             rx_desc.rdes0 |= RX_DESC_RDES0_FIRST_DESC_MASK;
         }
@@ -1261,7 +1423,7 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
                                              &frame_ptr, &transferred)) {
             gmac_dma_bus_error(gmac,
                                DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
-            return len;
+            return true;
         }
         trace_dw_gmac_packet_receiving_buffer(DEVICE(gmac)->canonical_path,
                                               rx_buf_len, rx_buf_addr);
@@ -1276,29 +1438,14 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
                                                  &frame_ptr, &transferred)) {
                 gmac_dma_bus_error(gmac,
                                    DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
-                return len;
+                return true;
             }
             trace_dw_gmac_packet_receiving_buffer(
                 DEVICE(gmac)->canonical_path, rx_buf_len, rx_buf_addr);
         }
 
         if (eof_transferred) {
-            rx_desc.rdes0 |= RX_DESC_RDES0_LAST_DESC_MASK;
-            if (coe_status.available) {
-                rx_desc.rdes0 |= RX_DESC_RDES0_EXT_STATUS_AVAIL_MASK;
-                if (gmac_rx_coe_has_error(&coe_status)) {
-                    rx_desc.rdes0 |= RX_DESC_RDES0_ERR_SUMM_MASK;
-                }
-            }
-            if (filter_result.da_fail) {
-                rx_desc.rdes0 |= RX_DESC_RDES0_DEST_ADDR_FILT_FAIL;
-            }
-            if (filter_result.sa_fail) {
-                rx_desc.rdes0 |= RX_DESC_RDES0_SRC_ADDR_FILT_FAIL_MASK;
-            }
-            if (filter_result.vlan_tag) {
-                rx_desc.rdes0 |= RX_DESC_RDES0_VLAN_TAG_MASK;
-            }
+            rx_desc.rdes0 |= rdes0_flags | RX_DESC_RDES0_LAST_DESC_MASK;
             rx_desc.rdes0 = deposit32(rx_desc.rdes0,
                                       RX_DESC_RDES0_FRAME_LEN_SHIFT, 14,
                                       MIN(transferred, 0x3fff));
@@ -1310,16 +1457,17 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
 
         gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
                            DWMAC_DMA_STATUS_RX_RUNNING_CLOSING_STATE);
-        if (eof_transferred && coe_status.available &&
-            gmac_write_rx_ext_status(desc_addr, coe_status.rdes4)) {
+        if (eof_transferred &&
+            (rdes0_flags & RX_DESC_RDES0_EXT_STATUS_AVAIL_MASK) &&
+            gmac_write_rx_ext_status(desc_addr, rdes4)) {
             gmac_dma_bus_error(gmac,
                                DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
-            return len;
+            return true;
         }
         if (gmac_write_rx_desc(desc_addr, &rx_desc)) {
             gmac_dma_bus_error(gmac,
                                DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT);
-            return len;
+            return true;
         }
 
         gmac->regs[R_DWMAC_DMA_HOST_RX_DESC] = next_desc_addr;
@@ -1342,6 +1490,123 @@ static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
     gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
                        DWMAC_DMA_STATUS_RX_RUNNING_WAITING_STATE);
     gmac_update_irq(gmac);
+    return true;
+}
+
+/*
+ * Re-poll the ring and place as many held frames as now fit, in order.  This
+ * is what a resumed receive process does on the next frame, a receive poll
+ * demand, or a DMA start.
+ */
+static void gmac_rx_drain(DWGMACState *gmac)
+{
+    DWGMACRxFifoEntry entry;
+    const uint8_t *frame;
+
+    if (!gmac_rx_enabled(gmac)) {
+        return;
+    }
+    while (gmac_rx_fifo_peek(gmac, &entry, &frame)) {
+        switch (gmac_rx_frame_fits(gmac, entry.len)) {
+        case GMAC_RX_FITS:
+            if (!gmac_rx_deliver(gmac, frame, entry.len, entry.rdes0,
+                                 entry.rdes4)) {
+                gmac_rx_suspend(gmac);
+                return;
+            }
+            gmac_rx_fifo_pop(gmac);
+            break;
+        case GMAC_RX_FITS_LATER:
+            gmac_rx_suspend(gmac);
+            return;
+        case GMAC_RX_FITS_NEVER:
+            gmac_rx_fifo_pop(gmac);
+            gmac_rx_count_missed(gmac, false);
+            break;
+        }
+    }
+}
+
+static ssize_t gmac_receive(NetClientState *nc, const uint8_t *buf, size_t len)
+{
+    DWGMACState *gmac = DW_GMAC(qemu_get_nic_opaque(nc));
+    g_autofree uint8_t *frame = NULL;
+    uint32_t frame_len;
+    DWGMACRxFilterResult filter_result = { .accept = true };
+    DWGMACRxCOEStatus coe_status;
+    uint32_t rdes0_flags;
+
+    trace_dw_gmac_packet_receive(DEVICE(gmac)->canonical_path, len);
+    if (!gmac_can_receive(nc)) {
+        qemu_log_mask(LOG_GUEST_ERROR, "GMAC is not able to receive\n");
+        return -1;
+    }
+
+    if (len > UINT32_MAX - ETH_FCS_LEN) {
+        return -1;
+    }
+
+    if (gmac->rx_filtering) {
+        filter_result = gmac_filter_packet(gmac, buf, len);
+        if (!filter_result.accept) {
+            /* The MAC consumed and discarded the frame; do not retry it. */
+            return len;
+        }
+    }
+
+    /* The MAC decides frame status on arrival, before anything is queued. */
+    rdes0_flags = !gmac->rx_coe_type2 || gmac_rx_is_type_frame(buf, len) ?
+                  RX_DESC_RDES0_FRM_TYPE_MASK : 0;
+    coe_status = gmac_rx_coe_status(gmac, buf, len);
+    if (coe_status.available) {
+        rdes0_flags |= RX_DESC_RDES0_EXT_STATUS_AVAIL_MASK;
+        if (gmac_rx_coe_has_error(&coe_status)) {
+            rdes0_flags |= RX_DESC_RDES0_ERR_SUMM_MASK;
+        }
+    }
+    if (filter_result.da_fail) {
+        rdes0_flags |= RX_DESC_RDES0_DEST_ADDR_FILT_FAIL;
+    }
+    if (filter_result.sa_fail) {
+        rdes0_flags |= RX_DESC_RDES0_SRC_ADDR_FILT_FAIL_MASK;
+    }
+    if (filter_result.vlan_tag) {
+        rdes0_flags |= RX_DESC_RDES0_VLAN_TAG_MASK;
+    }
+
+    /* QEMU network backends omit the FCS, but DWMAC DMA includes it. */
+    frame_len = len + ETH_FCS_LEN;
+    frame = g_malloc(frame_len);
+    memcpy(frame, buf, len);
+    uint32_t fcs = cpu_to_le32(crc32(0, buf, len));
+    memcpy(frame + len, &fcs, sizeof(fcs));
+
+    /* A new frame resumes a suspended receive process: re-poll first. */
+    gmac_rx_drain(gmac);
+
+    if (!gmac->rx_fifo_used) {
+        switch (gmac_rx_frame_fits(gmac, frame_len)) {
+        case GMAC_RX_FITS:
+            if (gmac_rx_deliver(gmac, frame, frame_len, rdes0_flags,
+                                coe_status.rdes4)) {
+                return len;
+            }
+            break;
+        case GMAC_RX_FITS_NEVER:
+            gmac_rx_count_missed(gmac, false);
+            return len;
+        case GMAC_RX_FITS_LATER:
+            break;
+        }
+    }
+
+    /* Hold the frame behind anything already waiting, or overflow. */
+    if (!gmac_rx_fifo_push(gmac, frame, frame_len, rdes0_flags,
+                           coe_status.rdes4)) {
+        gmac_rx_count_missed(gmac, true);
+        return len;
+    }
+    gmac_rx_suspend(gmac);
     return len;
 }
 
@@ -1971,6 +2236,7 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
         /* The written value is not significant. */
         gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
             DWMAC_DMA_STATUS_RX_RUNNING_WAITING_STATE);
+        gmac_rx_drain(gmac);
         break;
 
     case A_DWMAC_DMA_XMT_POLL_DEMAND:
@@ -1989,6 +2255,7 @@ static void dw_gmac_write(void *opaque, hwaddr offset,
         if (v & DWMAC_DMA_CONTROL_START_STOP_RX) {
             gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
                 DWMAC_DMA_STATUS_RX_RUNNING_WAITING_STATE);
+            gmac_rx_drain(gmac);
             qemu_flush_queued_packets(qemu_get_queue(gmac->nic));
         } else {
             gmac_dma_set_state(gmac, DWMAC_DMA_STATUS_RX_PROCESS_STATE_SHIFT,
@@ -2127,6 +2394,9 @@ static void dw_gmac_unrealize(DeviceState *dev)
     g_free(gmac->tx_frame);
     gmac->tx_frame = NULL;
     gmac->tx_frame_capacity = 0;
+    g_free(gmac->rx_fifo);
+    gmac->rx_fifo = NULL;
+    gmac->rx_fifo_capacity = 0;
 }
 
 static int dw_gmac_post_load(void *opaque, int version_id)
@@ -2201,13 +2471,61 @@ static const VMStateDescription vmstate_npcm_gmac_tx_frame = {
     .fields = dw_gmac_tx_frame_fields,
 };
 
+static bool dw_gmac_rx_fifo_needed(void *opaque)
+{
+    DWGMACState *gmac = opaque;
+
+    return gmac->rx_fifo_used != 0;
+}
+
+static int dw_gmac_rx_fifo_post_load(void *opaque, int version_id)
+{
+    DWGMACState *gmac = opaque;
+
+    gmac->rx_fifo_capacity = gmac->rx_fifo_used;
+    if (!gmac_rx_fifo_valid(gmac)) {
+        error_report("%s: corrupt receive FIFO image",
+                     DEVICE(gmac)->canonical_path);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static const VMStateField dw_gmac_rx_fifo_fields[] = {
+    VMSTATE_UINT32(rx_fifo_used, DWGMACState),
+    VMSTATE_VBUFFER_ALLOC_UINT32(rx_fifo, DWGMACState, 0, NULL,
+                                 rx_fifo_used),
+    VMSTATE_END_OF_LIST()
+};
+
+/* Emitted only while the DMA is holding frames it could not place yet. */
+static const VMStateDescription vmstate_dw_gmac_rx_fifo = {
+    .name = TYPE_DW_GMAC "/rx-fifo",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dw_gmac_rx_fifo_needed,
+    .post_load = dw_gmac_rx_fifo_post_load,
+    .fields = dw_gmac_rx_fifo_fields,
+};
+
+static const VMStateDescription vmstate_npcm_gmac_rx_fifo = {
+    .name = TYPE_NPCM_GMAC "/rx-fifo",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dw_gmac_rx_fifo_needed,
+    .post_load = dw_gmac_rx_fifo_post_load,
+    .fields = dw_gmac_rx_fifo_fields,
+};
+
 static const VMStateDescription * const dw_gmac_vmstate_subsections[] = {
     &vmstate_dw_gmac_tx_frame,
+    &vmstate_dw_gmac_rx_fifo,
     NULL
 };
 
 static const VMStateDescription * const npcm_gmac_vmstate_subsections[] = {
     &vmstate_npcm_gmac_tx_frame,
+    &vmstate_npcm_gmac_rx_fifo,
     NULL
 };
 
@@ -2248,6 +2566,8 @@ static const Property dw_gmac_properties[] = {
     DEFINE_PROP_BOOL("rx-filtering", DWGMACState, rx_filtering, false),
     /* Preserve legacy descriptor status unless explicitly enabled. */
     DEFINE_PROP_BOOL("rx-coe-type2", DWGMACState, rx_coe_type2, false),
+    /* Receive FIFO depth in frame bytes; the TH1520 synthesis value is unknown. */
+    DEFINE_PROP_UINT32("rx-fifo-size", DWGMACState, rx_fifo_size, 16384),
     DEFINE_PROP_UINT16("hash-bins", DWGMACState, hash_bins, 64),
     DEFINE_PROP_UINT8("num-mac-addresses", DWGMACState, num_mac_addrs, 4),
     DEFINE_PROP_UINT8("phy-addr", DWGMACState, phy_addr, 0),

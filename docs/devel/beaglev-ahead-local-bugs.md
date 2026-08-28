@@ -14,8 +14,8 @@ baseline reproducer.
 
 ## Current disposition
 
-The seventeen local findings recorded during implementation (`UQ-L001` through
-`UQ-L017`) are fixed and have focused regressions.  The GMAC audit found that
+The eighteen local findings recorded during implementation (`UQ-L001` through
+`UQ-L018`) are fixed and have focused regressions.  The GMAC audit found that
 the reusable DWC GMAC transmit path advertised checksum offload while its
 inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
 did not model the feature/TSF gates or descriptor-format error status.  At the
@@ -105,6 +105,7 @@ the short review index and current test checkpoint.
 | UQ-L012 | TH1520 PLL polling | A guest could observe virtual time beyond a due PLL-lock deadline while ``PLL_STS`` remained stale until the I/O thread dispatched its timer callback. | Fixed by materializing an expired deadline on ``PLL_STS`` reads through the existing lock helper; the raw RV64 single-threaded-TCG qtest fails with the preserved pre-fix binary and passes twice, across reset, with the fix. |
 | UQ-L013 | XTheadVector scalar permutation | `th.vslidedown.vx` could wrap a full-XLEN offset into a valid source lane, and the `th.vrgather.vx` helper truncated its scalar index to 32 bits. | Fixed with overflow-safe slide bounds and a `target_ulong` gather index; an independent scalar oracle covers helper/optimized, mask/prestart/tail, in-place and boundary paths, and mutations fail at exits 3, 9 and 13. |
 | UQ-L014 | XTheadVector vector permutation/slide legality | `th.vrgather.vv` truncated e64 vector indices to 32 bits, and the slide-down translators missed the frozen v0.7.1 instruction-specific masked-`vd=v0` prohibition at LMUL=1. | Fixed in `78ad4d6e56` with a `uint64_t` gather index and dedicated slide checker; an e64,m1 oracle, three exact illegal traps, state preservation and legal controls pass, while mutations fail at exits 14 and 15. |
+| UQ-L018 | DWC GMAC receive ring-full and mid-frame loss | `gmac_can_receive` checked only the enable bits, so a frame arriving while every receive descriptor was software-owned reached `gmac_receive`, which reported `RU`, suspended and returned `len`: the frame was consumed and lost.  Linux reaches that state whenever NAPI falls behind.  A frame spanning descriptors whose later descriptor was unavailable had its first part written back with `FD` and no `LD`, and the remainder dropped. | Fixed by giving the MAC a receive FIFO: a frame the DMA cannot place is held, `RU` asserts once on the running-to-suspended transition, and the ring is re-polled on the next frame, a receive poll demand or a DMA start, the resume paths the RevyOS and mainline drivers respectively rely on.  A frame is written only once a check-ahead shows every descriptor it needs is DMA-owned; a full FIFO overflows with `OVF` and both missed-frame counters count.  The FIFO migrates through a per-identity `rx-fifo` subsection validated on load.  Five qtests cover ring-full resume by poll demand, mid-frame hold with next-frame resume, overflow, ordering and migration; the first two fail before the fix. |
 | UQ-L017 | TH1520 pad-controller DT compatible | Commit `6538905317` replaced the generated `thead,th1520-pinctrl` compatible with an invented `thead,th1520-groupN-pinctrl` string that no driver matches, while adding the RevyOS `xuantie` fallback.  Mainline's pinctrl stopped binding, every DesignWare gpiochip deferred on its `gpio-ranges`, and after `e248faad96` gave the GMAC0 PHY a GPIO3 reset line the mainline ethernet deferred with it: `eth0` never existed and the traffic gate failed at three seconds.  Only storage markers were re-checked after those commits. | Fixed by emitting the binding's sole compatible, `thead,th1520-pinctrl`, ahead of the vendor fallback, so each kernel matches its own string.  The direct-DT qtest asserts the corrected pair; the mainline traffic gate passes on one and four harts, the RevyOS/Alpine pair and the Tuxboot control still pass, and no kernel reports `failed to register gpiochip`. |
 | UQ-L016 | DWC GMAC partial transmit frame | A multi-descriptor frame whose terminal segment was not yet owned by the DMA was accumulated in locals of one transmit call, so the engine's suspend discarded every segment already read; the resumed frame carried only the segments submitted after the suspend, and no migration stream carried the partial frame at all. | Fixed by giving the transmit engine ownership of the partial frame: it lives in device state, resets with the device, and migrates through a per-identity `tx-frame` subsection emitted only while a frame is suspended. A two-segment qtest fails before the fix with a 64-byte frame instead of 128, and a matching migration qtest fails when the subsection is removed. |
 | UQ-L015 | DWC GMAC receive-interrupt watchdog | The local DWMAC 3.70/Ahead path advertised and Linux enabled RIWT mitigation, but the register did not schedule RI, so DIC-suppressed receive completions could remain unreported. | Fixed in `1369cec4d9` with low-byte RIWT timing, RI/NIS/PLIC delivery, cancellation/reset and VMState v2; focused watchdog/migration tests pass and the GMAC group passes 12/12. |
@@ -187,6 +188,68 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 ``i_min = MAX(env->vstart, offset)`` with ``i_min = env->vstart`` fails at exit
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
+
+### Current GMAC receive-FIFO checkpoint (UQ-L018)
+
+This closes the receive half of the ``MIG-001`` in-flight DMA item and, like
+the transmit half, found a guest-visible defect first.  ``gmac_can_receive``
+checked only ``RX_EN`` and DMA start, so a frame arriving while every receive
+descriptor was software-owned still reached ``gmac_receive``, which set ``RU``,
+suspended and returned ``len``.  The net core took that as consumed: the frame
+was gone.  Linux reaches a full ring whenever NAPI falls behind.  A frame
+spanning descriptors whose later descriptor was unavailable was worse: the
+first part was written back with ``FD`` and no ``LD`` and the remainder
+dropped.  Two reproducers established both: after the guest handed a
+descriptor back and resumed, nothing ever landed, and a spanning frame left
+``0x00000220`` (``FD|FT``) in its first descriptor with 36 bytes lost.
+
+The obvious QEMU idiom, backpressure through ``can_receive`` and a flush on
+the register write the driver performs after a refill, would have deadlocked
+the RevyOS lane.  The pinned RevyOS driver writes nothing after a refill: its
+``stmmac_set_rx_tail_ptr`` is unimplemented for dwmac1000 and it only counts
+``RU``.  RevyOS nevertheless works on the board, so silicon must resume
+without any register write, on the next frame's arrival.  Mainline confirms
+the model from the other side: its refill ends with
+``stmmac_enable_dma_reception``, commented "Wake up Rx DMA from the suspend
+state if required", writing the receive poll demand.  A survey of six QEMU NIC
+models catalogued the failure class the ``can_receive`` idiom invites (stale
+cached availability in cadence_gem and imx_fec, a permanently false state in
+allwinner, an unreachable path in ftgmac100) and contributed the e1000-style
+check-ahead and the distinction between "not enough owned descriptors now"
+and "the ring can never hold this frame".
+
+The MAC therefore has a receive FIFO in device state.  A frame the DMA cannot
+place is held behind anything already waiting; ``RU`` asserts once, on the
+running-to-suspended transition, so no storm is possible; the ring is
+re-polled on the next frame, a receive poll demand and a DMA start, and never
+on a status acknowledge, which RevyOS performs before it refills.  Nothing is
+written back until a check-ahead shows every descriptor the frame needs is
+DMA-owned, so a spanning frame is held whole rather than half-delivered; a
+frame no DMA-owned ring could ever hold is counted in the missed-frame
+counter's low field and dropped rather than blocking the head of the FIFO.  A
+full FIFO overflows with ``OVF`` and the counter's overflow field.  The depth
+is a synthesis value the ledger does not have, so it is a 16 KiB
+``rx-fifo-size`` property recorded under ``GMAC-001``.  The FIFO migrates
+through a per-identity ``rx-fifo`` subsection emitted only while frames are
+held and validated on load, and clears on both resets.
+
+Five qtests cover ring-full resume by poll demand, mid-frame hold with
+next-frame resume and an untouched first descriptor, overflow with the
+counters, arrival-order delivery, and migration with a held frame; the first
+two fail before the fix.  Five mutations were applied to a scratch copy and
+reverted, each failing exactly one test: never emitting the subsection
+(migration), removing the next-frame re-poll (mid-frame), making the
+check-ahead always succeed (mid-frame, the first descriptor is half-written
+again), removing the poll-demand drain (ring-full) and removing the depth
+check (overflow).  A first mutation attempt that removed the subsection's
+array entry did not compile under the minimal tree's ``-Werror`` and so
+tested nothing; it was redone as a compiling mutation.
+
+Gates at this checkpoint: 160/160 normal, 159/159 dependency-minimal,
+159/159 ASan/UBSan, the GMAC group 21/21, NPCM 7/7.  The mainline traffic
+gate passes on one and four harts and the RevyOS/Alpine cross-pair reaches its
+four markers with this change present, though both first required
+``UQ-L017``.
 
 ### Current TH1520 pinctrl compatible checkpoint (UQ-L017)
 
@@ -620,8 +683,10 @@ change must add a reproducer and a regression before changing any of them.
   boundary: a frame suspended between its first and terminal segment carries
   its accumulated bytes and checksum control through a subsection, and the
   destination completes it once the guest hands over the last descriptor.
-  USB migration during an attached transfer, and GMAC receive during an
-  in-flight frame, still need phase/ownership tests.  Focused same-version
+  GMAC receive now migrates its held frames through the receive-FIFO
+  subsection, so a frame the DMA could not place before migration is
+  delivered by the destination once the guest resumes the ring.  USB
+  migration during an attached transfer still needs a phase/ownership test.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load
   reject/accept behavior and a Type-2 RDES4 result.  DWC GMAC VMState v2 now
@@ -647,7 +712,11 @@ change must add a reproducer and a regression before changing any of them.
   without changing the device model.  The previous generic helper's incidental
   S-VLAN/QinQ traversal is not
   claimed by the new one-tag/ESVL parser.  Exact filter, control-frame, pause
-  and VLAN behavior also requires physical comparison.
+  and VLAN behavior also requires physical comparison.  The receive FIFO
+  depth is a provisional 16 KiB ``rx-fifo-size`` property; the physical
+  depth, whether silicon closes each descriptor of a spanning frame before
+  suspending (QEMU holds the frame whole), the exact missed-frame counter
+  semantics and behaviour under sustained overflow remain unverified.
 * `USB-002`: the current model is a host-only digital DWC3/xHCI integration
   with synthetic capability values.  PHY/link timing, device/OTG role,
   ID/VBUS, suspend/resume, and reset-domain independence are not modeled.
