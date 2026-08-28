@@ -208,8 +208,25 @@ overlapping either source and the zero-``vstart`` requirement.
 Again no defect was found, and again the payload is mutation-sensitive.
 Clearing from ``vl`` instead of the compacted count fails at exit 5, removing
 ``s->vstart_eq_zero`` from ``vcompress_vm_check_th`` fails at exit 24, and
-relaxing the gather-immediate range test to ``>`` fails at exit 10.  All three
+relaxing the gather-immediate range test to ``>`` fails at exit 10.  All
 mutations were applied to a scratch copy and reverted.
+
+Three e64,m1 compress cases extend the payload to the widest element width.
+Their value is specifically the mask layout: ``mlen`` is ``SEW/LMUL``, so the
+mask bit for element ``i`` sits at bit ``i*8`` at e8,m1 but at bit ``i*64`` at
+e64,m1.  Pinning the compress helper's ``th_elem_mask`` argument to a literal
+8 is a no-op at e8 and fails the e64 case at exit 12.
+
+Two other candidate width mutations were tried and rejected as
+non-discriminating, which bounds how much further width expansion is worth
+here.  Dropping ``sizeof(ETYPE)`` from the compress clear length changes
+nothing at e8, and at e64 it overruns the destination register into its
+neighbour without altering the checked result; ASan does not report it either,
+because the write stays inside ``CPURISCVState`` rather than crossing a
+redzone.  The helpers are otherwise uniformly templated and ``H8`` is the
+identity on little-endian, so element width alone exercises no further
+distinct logic.  The genuine width risk in this area is an index type rather
+than an element type, which is what ``UQ-L014`` was.
 
 ### Current focused FXCR/MMC-alias checkpoint
 

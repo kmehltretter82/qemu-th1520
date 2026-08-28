@@ -266,6 +266,67 @@ _start:
     call    check_16
 
     /*
+     * e64,m1 has VLMAX 2.  Compress at the widest element width checks that
+     * the compacted store and the clear origin both use the element type
+     * rather than a byte count.  The mask register keeps its byte layout: at
+     * e64 the mask bit for element i lives in byte i*8.
+     */
+    lla     a0, expected
+    lla     a1, source64
+    lla     a2, mask64_lo
+    call    oracle_compress64
+    LOAD_VECTORS mask_all, mask64_lo
+    li      t1, 2
+    .word   0x00c37057      /* th.vsetvli zero, t1, e64, m1 */
+    lla     t2, source64
+    .word   0x0203f087      /* th.vle.v v1, (t2) */
+    .word   0x5e11a157      /* th.vcompress.vm v2, v1, v3 */
+    lla     t2, output
+    .word   0x0203f127      /* th.vse.v v2, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 11
+    call    check_16
+
+    lla     a0, expected
+    lla     a1, source64
+    lla     a2, mask64_hi
+    call    oracle_compress64
+    LOAD_VECTORS mask_all, mask64_hi
+    li      t1, 2
+    .word   0x00c37057      /* th.vsetvli zero, t1, e64, m1 */
+    lla     t2, source64
+    .word   0x0203f087      /* th.vle.v v1, (t2) */
+    .word   0x5e11a157      /* th.vcompress.vm v2, v1, v3 */
+    lla     t2, output
+    .word   0x0203f127      /* th.vse.v v2, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 12
+    call    check_16
+
+    lla     a0, expected
+    lla     a1, source64
+    lla     a2, mask64_both
+    call    oracle_compress64
+    LOAD_VECTORS mask_all, mask64_both
+    li      t1, 2
+    .word   0x00c37057      /* th.vsetvli zero, t1, e64, m1 */
+    lla     t2, source64
+    .word   0x0203f087      /* th.vle.v v1, (t2) */
+    .word   0x5e11a157      /* th.vcompress.vm v2, v1, v3 */
+    lla     t2, output
+    .word   0x0203f127      /* th.vse.v v2, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 13
+    call    check_16
+
+    /* Restore e8,m1 for the legality block below. */
+    li      t1, 16
+    SET_E8_M1
+
+    /*
      * Legality.  Compress requires a zero vstart and a destination that
      * overlaps neither source; the gather immediate keeps the shared masked
      * vd=v0 and non-overlapping destination rules.
@@ -386,6 +447,45 @@ oracle_compress:
 .Lco_done:
     ret
 
+/*
+ * a0 expected, a1 source (2 dwords), a2 mask (byte i*8 carries element i).
+ * VLMAX is 2 for e64,m1, so the clear runs from the compacted count to 2.
+ */
+oracle_compress64:
+    li      t0, 0             /* source element index */
+    li      t4, 0             /* destination count */
+.Lco64_body:
+    li      t1, 2
+    bgeu    t0, t1, .Lco64_tail
+    slli    t1, t0, 3
+    add     t1, a2, t1
+    lbu     t2, 0(t1)
+    andi    t2, t2, 1
+    beqz    t2, .Lco64_next
+    slli    t1, t0, 3
+    add     t1, a1, t1
+    ld      t3, 0(t1)
+    slli    t1, t4, 3
+    add     t1, a0, t1
+    sd      t3, 0(t1)
+    addi    t4, t4, 1
+.Lco64_next:
+    addi    t0, t0, 1
+    j       .Lco64_body
+
+.Lco64_tail:
+    mv      t0, t4
+.Lco64_tail_loop:
+    li      t1, 2
+    bgeu    t0, t1, .Lco64_done
+    slli    t1, t0, 3
+    add     t1, a0, t1
+    sd      zero, 0(t1)
+    addi    t0, t0, 1
+    j       .Lco64_tail_loop
+.Lco64_done:
+    ret
+
 check_16:
     li      t0, 16
 .Lcheck_loop:
@@ -453,6 +553,18 @@ mask_alt:
 mask_none:
     .byte   0, 0, 0, 0, 0, 0, 0, 0
     .byte   0, 0, 0, 0, 0, 0, 0, 0
+    .balign 16
+source64:
+    .dword  0x1122334455667788, 0x99aabbccddeeff00
+mask64_lo:
+    .byte   1, 0, 0, 0, 0, 0, 0, 0
+    .byte   0, 0, 0, 0, 0, 0, 0, 0
+mask64_hi:
+    .byte   0, 0, 0, 0, 0, 0, 0, 0
+    .byte   1, 0, 0, 0, 0, 0, 0, 0
+mask64_both:
+    .byte   1, 0, 0, 0, 0, 0, 0, 0
+    .byte   1, 0, 0, 0, 0, 0, 0, 0
 
     .data
     .balign 16
