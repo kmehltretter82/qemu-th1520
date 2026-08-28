@@ -11253,6 +11253,35 @@ static void test_th1520_usb_pending_irq_migration(void)
     g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
+/*
+ * input-send-event's "device" names the display device whose console takes
+ * the input, so naming an input device is a client error.  It must be
+ * answered as one: -display none leaves a text console in the console list,
+ * and the lookup used to read its absent device link with error_abort.
+ */
+static void test_usb_hid_input_event_device_misuse(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    QDict *resp;
+
+    qtest_qmp_device_add(qts, "usb-kbd", "usb-kbd0", "{}");
+    resp = qtest_qmp(qts,
+        "{ 'execute': 'input-send-event', 'arguments': { 'device': 'usb-kbd0',"
+        " 'events': [ { 'type': 'key', 'data': { 'down': true,"
+        " 'key': { 'type': 'qcode', 'data': 'a' } } } ] } }");
+    g_assert_true(qdict_haskey(resp, "error"));
+    qobject_unref(resp);
+
+    /* The process must still be alive and the same device must still work. */
+    resp = qtest_qmp(qts,
+        "{ 'execute': 'input-send-event', 'arguments': {"
+        " 'events': [ { 'type': 'key', 'data': { 'down': true,"
+        " 'key': { 'type': 'qcode', 'data': 'a' } } } ] } }");
+    g_assert_true(qdict_haskey(resp, "return"));
+    qobject_unref(resp);
+    qtest_quit(qts);
+}
+
 static void test_th1520_usb_hid_hotplug(void)
 {
     uint32_t erst[4] = {
@@ -14851,6 +14880,8 @@ int main(int argc, char **argv)
         if (qtest_has_device("usb-kbd")) {
             qtest_add_func("/beaglev-ahead/usb/hid-hotplug",
                            test_th1520_usb_hid_hotplug);
+            qtest_add_func("/beaglev-ahead/usb/hid-input-event-device-misuse",
+                           test_usb_hid_input_event_device_misuse);
         }
         qtest_add_func("/beaglev-ahead/usb/migration",
                        test_th1520_usb_migration);

@@ -26,14 +26,14 @@ so it needs patch coordination rather than another report.
 
 The current conservative tally is:
 
-* **12 proposed new upstream report units** (`UQ-001` through `UQ-010`,
-  `UQ-012` and `UQ-013`);
+* **13 proposed new upstream report units** (`UQ-001` through `UQ-010` and
+  `UQ-012` through `UQ-014`);
 * **2 matching public upstream reports** (`UQ-011` and `UQ-K001`), which are
   not new;
 * **1 matching public upstream patch series** (`UQ-K002`), which is not new;
 * **3 additional investigation candidates** (`UQ-C001` through `UQ-C003`);
-* **13 defects confined to this not-yet-upstream board/CPU implementation**
-  (`UQ-L001` through `UQ-L013`), which must not be reported as existing
+* **18 defects confined to this not-yet-upstream board/CPU implementation**
+  (`UQ-L001` through `UQ-L018`), which must not be reported as existing
   upstream bugs; and
 * **0 reports filed by this project so far**.
 
@@ -971,6 +971,58 @@ issue to start as a confidential work item.  Do not file publicly until a
 human has reviewed the minimal ASan trace, run the exact generic payload on a
 fresh upstream sanitizer build, and searched QEMU GitLab and qemu-devel for
 `GEN_OPIVV_WIDEN_TRANS`, `vwredsum`, `opiwv` and `opiwx`.
+
+### UQ-014: `input-send-event` aborts QEMU when a text console precedes the named device
+
+Status: **REPORTABLE; generic current-master QMP-reachable abort.**
+
+Affected upstream code:
+
+* `ui/console.c`, `qemu_console_lookup_by_device()`, reached from
+  `qmp_input_send_event()` through `qemu_console_lookup_by_device_name()`.
+
+The lookup walks every console in the global list and reads each one's
+`device` link and `head` with `error_abort`.  Only graphic consoles carry
+those properties.  `-display none` still creates a `qemu-fixed-text-console`
+for the default serial and monitor character devices, so on any headless VM
+the first console examined has neither, and the read aborts the process with
+`Property 'qemu-fixed-text-console.device' not found`.
+
+The QMP contract says `device` names the display device whose console takes
+the input, so naming an input device is a client mistake, but a mistake that
+must produce an error reply.  Because the abort happens before the device is
+even compared, it is also reachable when the client names a perfectly valid
+display device that merely follows a text console in the list.
+
+Machine-independent reproducer, no board code involved:
+
+```text
+qemu-system-riscv64 -display none -M virt -device qemu-xhci \
+    -device usb-kbd,id=usb-kbd0 -qmp unix:/tmp/q,server=on,wait=off
+{ "execute": "qmp_capabilities" }
+{ "execute": "input-send-event", "arguments": { "device": "usb-kbd0",
+  "events": [ { "type": "key", "data": { "down": true,
+  "key": { "type": "qcode", "data": "a" } } } ] } }
+```
+
+Observed: SIGABRT, `Unexpected error in object_property_find_err() at
+../qom/object.c:1440`.  Expected: the existing error
+`Device usb-kbd0 (head 0) is not bound to a QemuConsole`.  The same command
+without `device` succeeds and reaches the keyboard's input handler.
+
+Baseline verification: this branch has no change under `ui/`, and
+`upstream/master` carries the identical two `error_abort` reads in the same
+function, so the defect is present on pristine upstream.  It was found while
+building the BeagleV Ahead attached-transfer migration test, whose keyboard
+injection must therefore omit `device`.
+
+Local reference fix: `qemu_console_lookup_by_device()` skips any console
+that lacks a `device` or `head` property before reading them, which restores
+the intended error reply.  The Ahead qtest
+`/beaglev-ahead/usb/hid-input-event-device-misuse` hot-adds a keyboard,
+requires an error reply for the misuse, and then requires the same device to
+still accept a correctly addressed event from the still-running process.  A
+report should carry the `virt` reproducer above, not the Ahead qtest.
 
 ## Already reported or addressed upstream
 

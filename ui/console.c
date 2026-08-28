@@ -1217,6 +1217,17 @@ QemuConsole *qemu_console_lookup_by_device(DeviceState *dev, uint32_t head)
     uint32_t h;
 
     QTAILQ_FOREACH(con, &consoles, next) {
+        /*
+         * Only graphic consoles carry a device link and a head.  A text
+         * console, which -display none always creates for the default
+         * serial and monitor character devices, has neither, and reading
+         * them with error_abort turns a QMP lookup of the wrong device
+         * into a crash reachable from the monitor.
+         */
+        if (!object_property_find(OBJECT(con), "device") ||
+            !object_property_find(OBJECT(con), "head")) {
+            continue;
+        }
         obj = object_property_get_link(OBJECT(con),
                                        "device", &error_abort);
         if (DEVICE(obj) != dev) {
