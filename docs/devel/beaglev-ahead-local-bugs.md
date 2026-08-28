@@ -7,9 +7,9 @@ work in this branch.  These findings are not claims about pre-existing
 upstream QEMU, and must not be filed as upstream bugs without an independent
 baseline reproducer.
 
-* Audit checkpoint: 2026-08-26
+* Audit checkpoint: 2026-08-28
 * Branch: `beaglev-ahead`
-* Latest-finding pre-fix workspace HEAD: `78ad4d6e56`
+* Latest-finding pre-fix workspace HEAD: `e017a59bba`
 * Pinned upstream comparison: `bde2492aace2b5acb755a5b057013e915163a77f`
 
 ## Current disposition
@@ -114,6 +114,50 @@ use the locally built QEMU through `QTEST_QEMU_BINARY`; sanitizer runs set
 `ASAN_OPTIONS=detect_leaks=0` because LeakSanitizer cannot operate reliably
 under the qtest parent/ptrace setup.  The ASan `makecontext` warning is emitted
 by the runtime and was not accompanied by an ASan or UBSan finding.
+
+### Current board-gate infrastructure checkpoint
+
+``beaglev-ahead-test`` was never added to ``slow_qtests`` in
+``tests/qtest/meson.build``, so ``meson test`` applied the default 60-second
+budget and terminated the complete board suite after roughly half its cases
+(``Too few tests run (expected 149, got 78)``).  Every recent complete-gate
+number was therefore obtained by running the test binary directly.  The suite
+now declares 600 seconds, which is comfortable against the observed 74-second
+normal-build runtime and the slower sanitizer build.
+
+Restoring the meson path immediately failed
+``/riscv64/beaglev-ahead/dw-gpio/registers``: GPIO2 returned ``0xddffffff``
+from ``EXT_PORTA`` where the test expected ``0xffffffff``.  The two clear bits
+are 25 and 29, the AP6203BM ``WL_HW_OOB`` and ``HOST_WAKE_BT`` inputs added at
+``e017a59bba``.  ``dw_apb_gpio_update_pins()`` intentionally gives an external
+driver priority over the internal one and logs the conflict, so a bank with
+externally driven pins cannot read back everything the guest drives.  The
+device model, board wiring and all-low reset convention are correct and
+unchanged; the test now computes the externally driven mask and level per
+controller.  That also makes the GMAC0 PHY interrupt on GPIO3_22 explicit,
+where the previous ad-hoc expression happened to pass only because the
+active-low line idles high.
+
+This is recorded as a test defect rather than a ``UQ-L`` entry: no
+guest-visible device behavior was wrong, and the promotion rule below requires
+a stated expected result that the implementation violates.  The lesson is
+procedural -- ``e017a59bba`` was committed with focused tests only, without a
+complete-suite rerun that the timeout would have prevented anyway.
+
+The complete board gate now passes 153/153 normal, 152/152
+dependency-minimal and 152/152 ASan/UBSan at ``e017a59bba`` plus these two
+corrections.
+
+The remaining cited gates were re-run at the same commit and were all still
+accurate, so only the board-gate number changed: ``riscv-csr-test`` passes
+14/14, the complete normal RISC-V TCG gate passes 37/37 with no failures, and
+the enumerated Ahead-specific subset passes 14/14 in the dependency-minimal
+build.  ``make check-tcg`` cannot be used for that subset because the
+dependency-minimal and sanitizer builds provide only the ``beaglev-ahead``
+machine, so the ``virt``-based payloads abort with ``unsupported machine type:
+"virt"``; the fourteen Ahead-machine targets must be named explicitly.  All
+six XTheadVector payloads also pass under ASan/UBSan when run directly on the
+``beaglev-ahead`` machine with ``detect_leaks=0``.
 
 ### Current focused FXCR/MMC-alias checkpoint
 

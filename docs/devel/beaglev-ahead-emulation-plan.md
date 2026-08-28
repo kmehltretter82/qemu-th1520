@@ -6,9 +6,12 @@ C910 CSR VMState v1/v2 compatibility, genuine historical v1/v2
 producer-to-current migration, Ahead-scoped load-only compatibility for the
 former PLIC, timer and boot-UART sections, pending eMMC tuning-IRQ migration,
 XTheadVector scalar/vector-index permutation and slide-overlap boundaries, and
-GMAC receive-interrupt watchdog timing/migration are validated.  Current
-normal, dependency-minimal and ASan/UBSan board gates also pass.  The official
-image and physical-card/CPU validation remain open, 2026-08-26
+GMAC receive-interrupt watchdog timing/migration are validated.  The vendor
+SPL/U-Boot lane additionally reaches its PMIC, LPDDR4X controller/PHY and PMP
+portal checkpoints, and the AP6203BM control/wake wires are modeled.  The
+complete board gate now passes 153/153 normal, 152/152 dependency-minimal
+and 152/152 ASan/UBSan at ``e017a59bba``.  The official image and
+physical-card/CPU validation remain open, 2026-08-28
 
 Board: BeagleV Ahead, Seeed/BeagleBoard SKU 102991698
 
@@ -46,6 +49,16 @@ AXI DMAC advertised-width checkpoint: d22d37ec8d
 
 GMAC receive-interrupt-watchdog checkpoint: 1369cec4d9
 
+Vendor SPL PMIC/DDR checkpoint: 3ed803ee92
+
+Vendor pinctrl and GMAC PHY GPIO checkpoint: e248faad96
+
+TH1520 SPL PMP portal checkpoint: e418fc463d
+
+AP6203BM control/wake checkpoint: e017a59bba
+
+Board-gate infrastructure checkpoint: this working tree
+
 Hardware evidence baseline: beagleboard/beaglev-ahead
 6b56e2d69485c375c5912eaa2791f79f1d089c07
 
@@ -75,7 +88,34 @@ fidelity gaps that must not be mislabeled as upstream bugs.
 ## Current milestone and handoff
 
 Per owner direction, work is focused on the local BeagleV Ahead QEMU rather
-than upstream bug reporting.  Checkpoint ``78ad4d6e56``
+than upstream bug reporting.
+
+The current working tree repairs the board gate itself.  ``beaglev-ahead-test``
+was absent from the ``slow_qtests`` table in ``tests/qtest/meson.build``, so
+``meson test`` gave the complete board suite the default 60-second budget and
+killed it partway through; the recorded 149/149 result at the PHY GPIO
+checkpoint came from invoking the test binary directly, which is why the
+regression below survived.  The suite now declares a 600-second budget and runs
+under ``meson test`` in every configuration.
+
+That immediately exposed a stale assumption in ``test_dw_gpio_registers``.  The
+AP6203BM checkpoint routes ``WL_HW_OOB`` and ``HOST_WAKE_BT`` into GPIO2_25 and
+GPIO2_29, and the DesignWare GPIO model deliberately lets an external driver
+win over the internal one and logs the contention.  The generic register test
+still expected every pin configured as an output to read its driven value back,
+so GPIO2 read ``0xddffffff`` instead of ``0xffffffff``.  The device model, the
+board wiring and the reset convention are all correct; the test now derives the
+externally driven mask and level per controller, which also covers the GMAC0
+PHY interrupt on GPIO3_22 that previously passed only because that line idles
+high.  This is a test defect, not a new ``UQ-L`` device finding.
+
+With both corrected, the complete board gate passes 153/153 normal, 152/152
+dependency-minimal and 152/152 ASan/UBSan at ``e017a59bba``, restoring
+three-configuration evidence for the twelve vendor-firmware and board
+checkpoints committed after ``1369cec4d9`` that had only the normal-build
+direct run.
+
+Checkpoint ``78ad4d6e56``
 extends the sixth XTheadVector payload.  ``th.vrgather.vv`` now retains every
 bit of an e64 vector index: an independent two-lane e64,m1 oracle requires
 ``1ULL << 32`` to select zero and index 1 to select source lane 1.  The frozen
@@ -415,6 +455,15 @@ copy chunk, and rejection of the next (e256) width code without a destination
 write.  It checks bytes, final SAR/DAR and status for the successful paths.
 It does not establish physical packing, throughput, alignment, peripheral
 request routing or timing behavior.
+
+The vendor-firmware checkpoints committed after ``1369cec4d9`` -- SPL PMIC
+setup, the DDR PLL/controller/PHY handshake, vendor pinctrl names, the GMAC0
+PHY reset/interrupt GPIOs, the SPL PMP portal words and the AP6203BM
+control/wake wires -- do not move either rounded estimate.  Each maps a
+source-identified register window or board net so a public firmware image stops
+faulting at it; none establishes a physical reset value, an electrical
+behaviour or an OS handoff.  Vendor U-Boot still stops before handing off to a
+kernel, and the assets it needs are the ones tracked under ``DOC-002a``.
 
 The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
 miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
@@ -932,10 +981,11 @@ so it is only the first bounded Phase-4 checkpoint.
 At the preceding migration checkpoint the complete normal and
 dependency-minimal gates passed 114/114 board plus 14/14 CSR qtests and
 113/113 plus 7/7 respectively; its preceding complete ASan/UBSan board gate
-passed 112/112.  With the later PHY GPIO checkpoint, the direct normal board
-gate passes 149/149.  The 115/115 dependency-minimal and ASan/UBSan results
-are retained earlier checkpoints.  The complete normal RISC-V TCG gate passes
-37/37, the
+passed 112/112.  At ``e017a59bba`` plus the current gate
+corrections, the board gate passes 153/153 normal, 152/152
+dependency-minimal and 152/152 ASan/UBSan under ``meson test``.  The
+intervening 149/149 was a direct-binary normal-build run only.  The complete
+normal RISC-V TCG gate passes 37/37, the
 explicit Ahead-specific minimal TCG enumeration passes 14/14, and all six
 XTheadVector payloads pass directly under ASan/UBSan.  The sole conditional
 difference in the board totals is

@@ -166,8 +166,11 @@ sections (109 normal/108 minimal or sanitizer, then 114 normal/113 minimal and
 112 sanitizer) are historical evidence from those implementation milestones.
 At the vector/RIWT checkpoints ``78ad4d6e56`` and ``1369cec4d9``, the board
 gates passed 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan.
-The later PHY GPIO checkpoint passes the direct normal board gate 149/149;
-dependency-minimal and ASan/UBSan were not rerun.  The full
+At ``e017a59bba`` plus the current gate corrections, the board gate passes
+153/153 normal, 152/152 dependency-minimal and 152/152 ASan/UBSan under
+``meson test``.  The intervening PHY GPIO checkpoint's 149/149 was a
+direct-binary normal-build run only, because the suite could not complete
+under ``meson test``.  The full
 normal RISC-V TCG gate passes 37/37, while the explicitly enumerated
 Ahead-specific minimal TCG gate passes 14/14.  The FXCR execution guest and all
 six XTheadVector firmware payloads also pass directly under ASan/UBSan.  The

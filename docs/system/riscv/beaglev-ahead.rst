@@ -845,8 +845,8 @@ device tests, an armed DWC GMAC RIWT deadline now survives current-version
 migration: a half-expired timer remains quiet through remaining time minus one
 nanosecond and expires on the next.  Pre-version-2 GMAC streams load the masked
 register value unarmed because their missing deadline cannot be reconstructed.
-The direct normal board gate passes 149/149.  The 115/115 dependency-minimal
-and ASan/UBSan results are retained earlier checkpoints.  The complete normal
+The board gate passes 153/153 normal, 152/152 dependency-minimal and
+152/152 ASan/UBSan.  The complete normal
 RISC-V TCG gate passes 37/37, and the explicitly enumerated Ahead-specific
 minimal TCG gate passes
 14/14, and all six XTheadVector firmware payloads pass directly under
