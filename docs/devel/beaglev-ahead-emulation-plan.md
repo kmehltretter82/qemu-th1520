@@ -536,7 +536,10 @@ freeze/pause/migration cases, system reset and migration while gated.  The
 other 27 AP leaves and all eight miscellaneous leaves remain raw state only;
 parent-gate dependencies, bus fault/access behavior (including the GMAC
 ``pclk`` leaf), rate changes, physical phase/output behavior and all
-AO/video/DSP/power-domain clocks remain open under ``CLK-002``.
+AO/video/DSP/power-domain clocks remain open under ``CLK-002``.  The
+eMMC/SDIO leaf is deliberately not coupled: the generated DT's fixed MSHC
+clock means mainline closes that gate as unused, so coupling it breaks
+mainline storage until the binding question under ``DT-002`` is settled.
 
 The pinned mainline and vendor device trees plus the board schematic expose no
 PCIe controller, endpoint or routed connector for BeagleV Ahead.  PCIe is
@@ -1391,6 +1394,14 @@ upstream provider's ``emmc-sdio`` output name.  The AP clock-controller node
 remains the upstream one-parent ``thead,th1520-clk-ap`` binding.  RevyOS's
 three-parent XuanTie AP-clock ABI is therefore deliberately not claimed by the
 generated DT.
+
+That fixed clock is load-bearing.  Coupling the eMMC/SDIO leaf gate to the
+MSHC data engines, which works in isolation, killed both mainline lanes:
+with no DT consumer naming the real AP gate, mainline's unused-clock pass
+closes it and the eMMC data engine stalls before the root device is opened.
+The work is preserved on ``wip/mshc-core-gate`` and stays there until the
+generated DT can name the eMMC clock consumer for both kernels; see
+``DT-002``.
 
 This is a kernel-diversity storage check, not an official image, normal distro
 init or hardware comparison.  In the vendor boot, non-storage devices remain

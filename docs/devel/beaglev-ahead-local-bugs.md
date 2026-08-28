@@ -189,6 +189,28 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
 
+### Attempted eMMC/SDIO gate coupling (shelved)
+
+The same coupling was then built for the eMMC/SDIO leaf, the ``core`` clock
+of all three MSHC controllers: a 198 MHz Clock from the CPR, a wrapper input,
+and a small hook in the generic SDHCI so that a due data-engine step is held
+while the clock is zero and resumes one transfer step after it returns, with
+the held state in a stall-only subsection.  Two qtests passed, two mutations
+each failed one, and the board gates were 168/168, 164/164 and 164/164.
+
+It was shelved because the Linux lanes failed, and the failure is a real
+finding rather than a bug in the coupling.  The generated MSHC nodes name a
+fixed ``mshc-input`` clock so that both pinned kernels bind; no consumer
+therefore claims the real AP gate, mainline's unused-clock pass closes it,
+and with the gate coupled the Tuxboot 6.11.9 control died with ``error -110
+whilst initialising MMC card`` and the 7.2 traffic lane failed HS200
+selection and could not open its root device.  RevyOS passed because its
+driver never binds the upstream provider.  The two kernels cannot share one
+``clocks`` cell (``<&clk 43>`` on ``thead,th1520-clk-ap`` against
+``<&clk 122>`` on ``xuantie,th1520-fm-ree-clk``, the latter mandatory), so
+the coupling waits on a DT decision and lives on ``wip/mshc-core-gate``.
+Nothing of it is on this branch; ``DT-002`` records the contract.
+
 ### Current GMAC AXI clock-gate coupling checkpoint
 
 This is the first clock-gate coupling beyond the timed consumers, chosen
