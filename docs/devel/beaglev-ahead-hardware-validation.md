@@ -167,7 +167,7 @@ sections (109 normal/108 minimal or sanitizer, then 114 normal/113 minimal and
 At the vector/RIWT checkpoints ``78ad4d6e56`` and ``1369cec4d9``, the board
 gates passed 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan.
 At ``e017a59bba`` plus the current gate corrections, the board gate passes
-160/160 normal, 159/159 dependency-minimal and9/159 ASan/UBSan under
+160/160 normal, 159/159 dependency-minimal and 159/159 ASan/UBSan under
 ``meson test``.  The intervening PHY GPIO checkpoint's 149/149 was a
 direct-binary normal-build run only, because the suite could not complete
 under ``meson test``.  The full

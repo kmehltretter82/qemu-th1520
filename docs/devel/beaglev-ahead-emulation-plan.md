@@ -118,7 +118,7 @@ PHY interrupt on GPIO3_22 that previously passed only because that line idles
 high.  This is a test defect, not a new ``UQ-L`` device finding.
 
 With both corrected, the complete board gate passes 160/160 normal, 159/159
-dependency-minimal and9/159 ASan/UBSan at ``e017a59bba``, restoring
+dependency-minimal and 159/159 ASan/UBSan at ``e017a59bba``, restoring
 three-configuration evidence for the twelve vendor-firmware and board
 checkpoints committed after ``1369cec4d9`` that had only the normal-build
 direct run.
@@ -995,7 +995,7 @@ dependency-minimal gates passed 114/114 board plus 14/14 CSR qtests and
 113/113 plus 7/7 respectively; its preceding complete ASan/UBSan board gate
 passed 112/112.  At ``e017a59bba`` plus the current gate
 corrections, the board gate passes 160/160 normal, 159/159
-dependency-minimal and9/159 ASan/UBSan under ``meson test``.  The
+dependency-minimal and 159/159 ASan/UBSan under ``meson test``.  The
 intervening 149/149 was a direct-binary normal-build run only.  The complete
 normal RISC-V TCG gate passes 39/39, the
 explicit Ahead-specific minimal TCG enumeration passes 16/16, and all eight
