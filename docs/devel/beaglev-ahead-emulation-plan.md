@@ -455,8 +455,9 @@ three slide-up forms with their offset, mask, ``vstart``, full-XLEN and
 in-place-prohibition boundaries, and ``th.vrgather.vi`` and
 ``th.vcompress.vm`` with their VLMAX-boundary, mask-decided length and
 zero-``vstart`` rules.  All ten permutation forms now have dynamic coverage at
-RV64 e8,m1; other element widths and LMULs, RV32, big-endian execution and
-physical C910 comparison remain open.  Four clean
+RV64 e8,m1, compress additionally at e64,m1 and at e8,m8 where the mask is a
+dense one-bit-per-element bitmap; other element widths and LMULs, RV32,
+big-endian execution and physical C910 comparison remain open.  Four clean
 normal/minimal one-/four-hart Linux runs complete DHCP, three pings and a
 1 MiB HTTP SHA-256 transfer, but longer and contention-sensitive network stress
 remains open.
@@ -1774,7 +1775,9 @@ GPIOs and mask-ROM boot behavior remain unproved.
 
 An exploratory SMP audit subsequently brought all four CPUs online in eight
 completed four-hart reruns, without reproducing the earlier CPU2-offline/CPU0-
-soft-lockup event.  Seven of those runs used ``root=179:0``; that numeric
+soft-lockup event.  A formal repetition on 2026-08-28 ran the PARTUUID-based
+four-hart gate eight further times on an idle host: all passed, every boot
+brought up four CPUs, and no lockup was logged.  Seven of those runs used ``root=179:0``; that numeric
 device number is resolved before the block device necessarily exists and does
 not make ``rootwait`` wait for MMC discovery.  It explains the early root-open
 race but not necessarily the mixed card-initialization results, so the matrix

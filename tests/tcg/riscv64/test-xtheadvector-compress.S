@@ -322,6 +322,46 @@ _start:
     li      a2, 13
     call    check_16
 
+    /*
+     * e8,m8 has VLMAX 128 and mlen 1: the mask is a dense bitmap, one bit per
+     * element, read from a single register while the sources and destination
+     * are eight-register groups.  Load the mask at m1 first, since a load
+     * into v1 is illegal once LMUL is 8.
+     */
+    lla     a0, expected
+    lla     a1, source128
+    lla     a2, mask128
+    call    oracle_compress_m8
+    li      t1, 16
+    SET_E8_M1
+    lla     t2, mask128
+    .word   0x12038087      /* th.vlb.v v1, (t2) */
+    li      t1, 128
+    .word   0x00337057      /* th.vsetvli zero, t1, e8, m8 */
+    lla     t2, source128
+    .word   0x0203f407      /* th.vle.v v8, (t2) */
+    .word   0x5e80a857      /* th.vcompress.vm v16, v8, v1 */
+    lla     t2, output
+    .word   0x203f827      /* th.vse.v v16, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 20
+    call    check_16
+    li      a2, 21
+    call    check_16
+    li      a2, 22
+    call    check_16
+    li      a2, 23
+    call    check_16
+    li      a2, 24
+    call    check_16
+    li      a2, 25
+    call    check_16
+    li      a2, 26
+    call    check_16
+    li      a2, 27
+    call    check_16
+
     /* Restore e8,m1 for the legality block below. */
     li      t1, 16
     SET_E8_M1
@@ -486,6 +526,44 @@ oracle_compress64:
 .Lco64_done:
     ret
 
+/*
+ * a0 expected, a1 source (128 bytes), a2 mask (16 bytes, bit i of the bitmap
+ * enables element i).  VLMAX is 128 for e8,m8; the clear runs from the
+ * compacted count to 128.
+ */
+oracle_compress_m8:
+    li      t0, 0             /* source element index */
+    li      t4, 0             /* destination count */
+.Lcm8_body:
+    li      t1, 128
+    bgeu    t0, t1, .Lcm8_tail
+    srli    t1, t0, 3
+    add     t1, a2, t1
+    lbu     t2, 0(t1)
+    andi    t3, t0, 7
+    srl     t2, t2, t3
+    andi    t2, t2, 1
+    beqz    t2, .Lcm8_next
+    add     t1, a1, t0
+    lbu     t3, 0(t1)
+    add     t1, a0, t4
+    sb      t3, 0(t1)
+    addi    t4, t4, 1
+.Lcm8_next:
+    addi    t0, t0, 1
+    j       .Lcm8_body
+.Lcm8_tail:
+    mv      t0, t4
+.Lcm8_tail_loop:
+    li      t1, 128
+    bgeu    t0, t1, .Lcm8_done
+    add     t1, a0, t0
+    sb      zero, 0(t1)
+    addi    t0, t0, 1
+    j       .Lcm8_tail_loop
+.Lcm8_done:
+    ret
+
 check_16:
     li      t0, 16
 .Lcheck_loop:
@@ -565,6 +643,16 @@ mask64_hi:
 mask64_both:
     .byte   1, 0, 0, 0, 0, 0, 0, 0
     .byte   1, 0, 0, 0, 0, 0, 0, 0
+    .balign 16
+source128:
+    .set   source128_lane, 0x80
+    .rept  128
+    .byte  source128_lane
+    .set   source128_lane, source128_lane + 1
+    .endr
+mask128:
+    .byte   0x55, 0x55, 0x55, 0x55, 0xaa, 0xaa, 0xaa, 0xaa
+    .byte   0x0f, 0xf0, 0x81, 0x18, 0x00, 0xff, 0x01, 0x80
 
     .data
     .balign 16
