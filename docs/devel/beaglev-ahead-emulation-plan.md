@@ -1777,7 +1777,8 @@ An exploratory SMP audit subsequently brought all four CPUs online in eight
 completed four-hart reruns, without reproducing the earlier CPU2-offline/CPU0-
 soft-lockup event.  A formal repetition on 2026-08-28 ran the PARTUUID-based
 four-hart gate eight further times on an idle host: all passed, every boot
-brought up four CPUs, and no lockup was logged.  Seven of those runs used ``root=179:0``; that numeric
+brought up four CPUs, and no lockup was logged.
+Seven of those runs used ``root=179:0``; that numeric
 device number is resolved before the block device necessarily exists and does
 not make ``rootwait`` wait for MMC discovery.  It explains the early root-open
 race but not necessarily the mixed card-initialization results, so the matrix
