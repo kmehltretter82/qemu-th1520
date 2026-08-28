@@ -686,7 +686,8 @@ change must add a reproducer and a regression before changing any of them.
   GMAC receive now migrates its held frames through the receive-FIFO
   subsection, so a frame the DMA could not place before migration is
   delivered by the destination once the guest resumes the ring.  USB
-  migration during an attached transfer still needs a phase/ownership test.  Focused same-version
+  migration during an attached transfer still needs a phase/ownership test.
+  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load
   reject/accept behavior and a Type-2 RDES4 result.  DWC GMAC VMState v2 now
