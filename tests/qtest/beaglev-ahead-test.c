@@ -545,6 +545,23 @@
 #define TH1520_USB_EVENT_RING_ADDR 0x00301000
 #define TH1520_USB_COMMAND_RING_ADDR 0x00302000
 #define TH1520_USB_EVENT_RING_TRBS 16
+#define TH1520_USB_DCBAA_ADDR      0x00303000
+#define TH1520_USB_DEV_CTX_ADDR    0x00304000
+#define TH1520_USB_INPUT_CTX_ADDR  0x00305000
+#define TH1520_USB_EP1_RING_ADDR   0x00306000
+#define TH1520_USB_EP1_BUF_ADDR    0x00307000
+#define TH1520_USB_EP0_RING_ADDR   0x00308000
+#define TH1520_USB_XHCI_DCBAAP     (TH1520_USB_XHCI_OPER + 0x30)
+#define TH1520_USB_XHCI_PORTSC_PR  BIT(4)
+#define TH1520_USB_XHCI_PORTSC_PED BIT(1)
+#define TH1520_USB_TR_NORMAL       1
+#define TH1520_USB_CR_ENABLE_SLOT  9
+#define TH1520_USB_CR_ADDRESS_DEV  11
+#define TH1520_USB_CR_CONFIG_EP    12
+#define TH1520_USB_ER_TRANSFER     32
+#define TH1520_USB_TRB_IOC         BIT(5)
+#define TH1520_USB_KBD_ROOT_PORT   2
+#define TH1520_USB_KBD_EP1_DCI     3
 
 #define DWMAC_MAC_CONFIG           0x0000
 #define DWMAC_FRAME_FILTER         0x0004
@@ -11259,6 +11276,291 @@ static void test_th1520_usb_pending_irq_migration(void)
  * answered as one: -display none leaves a text console in the console list,
  * and the lookup used to read its absent device link with error_abort.
  */
+typedef struct XhciEventCursor {
+    uint32_t index;
+} XhciEventCursor;
+
+static void xhci_program_event_ring(QTestState *qts)
+{
+    uint32_t erst[4] = {
+        cpu_to_le32(TH1520_USB_EVENT_RING_ADDR),
+        0,
+        cpu_to_le32(TH1520_USB_EVENT_RING_TRBS),
+        0,
+    };
+    uint8_t zeros[TH1520_USB_EVENT_RING_TRBS * 16] = { 0 };
+
+    qtest_writel(qts, TH1520_MISCSYS_BASE + TH1520_MISCSYS_USB_SWRST, 7);
+    qtest_memwrite(qts, TH1520_USB_ERST_ADDR, erst, sizeof(erst));
+    qtest_memwrite(qts, TH1520_USB_EVENT_RING_ADDR, zeros, sizeof(zeros));
+    qtest_memwrite(qts, TH1520_USB_COMMAND_RING_ADDR, zeros, sizeof(zeros));
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTSZ, 1);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA,
+                 TH1520_USB_ERST_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERSTBA + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                 TH1520_USB_EVENT_RING_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_IMAN,
+                 TH1520_USB_XHCI_IMAN_IE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DCBAAP,
+                 TH1520_USB_DCBAA_ADDR);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DCBAAP + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CRCR,
+                 TH1520_USB_COMMAND_RING_ADDR | TH1520_USB_TRB_CYCLE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_CRCR + 4, 0);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USBCMD,
+                 TH1520_USB_XHCI_USBCMD_RS | TH1520_USB_XHCI_USBCMD_INTE);
+}
+
+/* Return true and the next event if one has been written past the cursor. */
+static bool xhci_peek_event(QTestState *qts, XhciEventCursor *cur,
+                            uint32_t event[4])
+{
+    uint32_t addr = TH1520_USB_EVENT_RING_ADDR + 16 * cur->index;
+
+    g_assert_cmpuint(cur->index, <, TH1520_USB_EVENT_RING_TRBS);
+    qtest_memread(qts, addr, event, 16);
+    for (size_t i = 0; i < 4; i++) {
+        event[i] = le32_to_cpu(event[i]);
+    }
+    return event[3] & TH1520_USB_TRB_CYCLE;
+}
+
+static void xhci_take_event(QTestState *qts, XhciEventCursor *cur,
+                            uint32_t event[4])
+{
+    g_assert_true(xhci_peek_event(qts, cur, event));
+    cur->index++;
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP,
+                 (TH1520_USB_EVENT_RING_ADDR + 16 * cur->index) |
+                 TH1520_USB_XHCI_ERDP_EHB);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_ERDP + 4, 0);
+}
+
+static void xhci_write_trb(QTestState *qts, uint32_t addr, uint64_t param,
+                           uint32_t status, uint32_t control)
+{
+    uint32_t trb[4] = {
+        cpu_to_le32((uint32_t)param), cpu_to_le32((uint32_t)(param >> 32)),
+        cpu_to_le32(status), cpu_to_le32(control),
+    };
+
+    qtest_memwrite(qts, addr, trb, sizeof(trb));
+}
+
+/* Queue one command, ring doorbell 0, and return its completion code. */
+static uint32_t xhci_command(QTestState *qts, unsigned *cmd_index,
+                             XhciEventCursor *cur, uint64_t param,
+                             uint32_t control, uint32_t *slotid_out)
+{
+    uint32_t addr = TH1520_USB_COMMAND_RING_ADDR + 16 * *cmd_index;
+    uint32_t event[4];
+
+    xhci_write_trb(qts, addr, param, 0, control | TH1520_USB_TRB_CYCLE);
+    (*cmd_index)++;
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL, 0);
+    xhci_take_event(qts, cur, event);
+    g_assert_cmphex(event[0], ==, addr);
+    g_assert_cmphex(extract32(event[3], 10, 6), ==,
+                    TH1520_USB_ER_CMD_COMPLETE);
+    if (slotid_out) {
+        *slotid_out = extract32(event[3], 24, 8);
+    }
+    return extract32(event[2], 24, 8);
+}
+
+/*
+ * Bring the hot-added keyboard to a configured slot with its interrupt IN
+ * endpoint enabled, queue one 8-byte read on it, and ring the doorbell.  The
+ * keyboard NAKs an idle read, so the transfer stays pending on the endpoint.
+ */
+static uint32_t xhci_arm_keyboard_read(QTestState *qts, XhciEventCursor *cur)
+{
+    const uint32_t ictx = TH1520_USB_INPUT_CTX_ADDR;
+    uint8_t zeros[1024] = { 0 };
+    uint64_t dcbaa_entry = cpu_to_le64(TH1520_USB_DEV_CTX_ADDR);
+    uint32_t event[4];
+    uint32_t slotid;
+    uint32_t ctx[8];
+    unsigned cmd = 0;
+
+    qtest_memwrite(qts, TH1520_USB_DCBAA_ADDR, zeros, 256);
+    qtest_memwrite(qts, TH1520_USB_DEV_CTX_ADDR, zeros, sizeof(zeros));
+    qtest_memwrite(qts, ictx, zeros, sizeof(zeros));
+    qtest_memwrite(qts, TH1520_USB_EP1_RING_ADDR, zeros, 256);
+    qtest_memwrite(qts, TH1520_USB_EP0_RING_ADDR, zeros, 256);
+    qtest_memset(qts, TH1520_USB_EP1_BUF_ADDR, 0xee, 16);
+
+    /*
+     * Name the root port explicitly: without it QEMU inserts a hub and the
+     * keyboard sits behind it at path 1.1, so a slot addressed at the root
+     * port would talk to the hub's interrupt endpoint instead.
+     */
+    qtest_qmp_device_add(qts, "usb-kbd", "usb-kbd0", "{ 'port': '1' }");
+    xhci_take_event(qts, cur, event);   /* port status change: attach */
+    g_assert_cmphex(extract32(event[3], 10, 6), ==,
+                    TH1520_USB_ER_PORT_CHANGE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USB2_PORTSC,
+                 TH1520_USB_XHCI_PORTSC_PR);
+    xhci_take_event(qts, cur, event);   /* port status change: reset done */
+    g_assert_true(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                              TH1520_USB_XHCI_USB2_PORTSC) &
+                  TH1520_USB_XHCI_PORTSC_PED);
+
+    g_assert_cmphex(xhci_command(qts, &cmd, cur, 0,
+                                 TH1520_USB_CR_ENABLE_SLOT <<
+                                 TH1520_USB_TRB_TYPE_SHIFT, &slotid),
+                    ==, TH1520_USB_CC_SUCCESS);
+    g_assert_cmpuint(slotid, >=, 1);
+    qtest_memwrite(qts, TH1520_USB_DCBAA_ADDR + 8 * slotid, &dcbaa_entry,
+                   sizeof(dcbaa_entry));
+
+    /* Address Device: add slot and EP0 contexts. */
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32(BIT(0) | BIT(1));
+    qtest_memwrite(qts, ictx, ctx, 8);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[0] = cpu_to_le32(1u << 27);                     /* context entries */
+    ctx[1] = cpu_to_le32(TH1520_USB_KBD_ROOT_PORT << 16);
+    qtest_memwrite(qts, ictx + 0x20, ctx, 16);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32((4u << 3) | (3u << 1) | (64u << 16)); /* control */
+    ctx[2] = cpu_to_le32(TH1520_USB_EP0_RING_ADDR | 1);
+    qtest_memwrite(qts, ictx + 0x40, ctx, 20);
+    g_assert_cmphex(xhci_command(qts, &cmd, cur, ictx,
+                                 (slotid << 24) |
+                                 (TH1520_USB_CR_ADDRESS_DEV <<
+                                  TH1520_USB_TRB_TYPE_SHIFT), NULL),
+                    ==, TH1520_USB_CC_SUCCESS);
+
+    /* Configure Endpoint: add DCI 3, the interrupt IN endpoint. */
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32(BIT(0) | BIT(TH1520_USB_KBD_EP1_DCI));
+    qtest_memwrite(qts, ictx, ctx, 8);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[0] = cpu_to_le32((uint32_t)TH1520_USB_KBD_EP1_DCI << 27);
+    ctx[1] = cpu_to_le32(TH1520_USB_KBD_ROOT_PORT << 16);
+    qtest_memwrite(qts, ictx + 0x20, ctx, 16);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[0] = 0;                                         /* interval 1 uframe */
+    ctx[1] = cpu_to_le32((7u << 3) | (3u << 1) | (8u << 16)); /* INT IN */
+    ctx[2] = cpu_to_le32(TH1520_USB_EP1_RING_ADDR | 1);
+    ctx[4] = cpu_to_le32(8);
+    qtest_memwrite(qts, ictx + 0x20 + 0x20 * TH1520_USB_KBD_EP1_DCI, ctx, 20);
+    g_assert_cmphex(xhci_command(qts, &cmd, cur, ictx,
+                                 (slotid << 24) |
+                                 (TH1520_USB_CR_CONFIG_EP <<
+                                  TH1520_USB_TRB_TYPE_SHIFT), NULL),
+                    ==, TH1520_USB_CC_SUCCESS);
+
+    /* One 8-byte read with IOC; the idle keyboard leaves it pending. */
+    xhci_write_trb(qts, TH1520_USB_EP1_RING_ADDR, TH1520_USB_EP1_BUF_ADDR, 8,
+                   (TH1520_USB_TR_NORMAL << TH1520_USB_TRB_TYPE_SHIFT) |
+                   TH1520_USB_TRB_IOC | TH1520_USB_TRB_CYCLE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL +
+                 4 * slotid, TH1520_USB_KBD_EP1_DCI);
+    /* The first interrupt TD waits one microframe on the kick timer. */
+    qtest_clock_step(qts, 250000);
+    g_assert_false(xhci_peek_event(qts, cur, event));
+    return slotid;
+}
+
+static void xhci_expect_keyboard_report(QTestState *qts, XhciEventCursor *cur,
+                                        uint32_t slotid)
+{
+    static const uint8_t report_a[8] = { 0, 0, 0x04, 0, 0, 0, 0, 0 };
+    uint8_t buf[8];
+    uint32_t event[4];
+
+    xhci_take_event(qts, cur, event);
+    g_assert_cmphex(extract32(event[3], 10, 6), ==, TH1520_USB_ER_TRANSFER);
+    g_assert_cmphex(event[0], ==, TH1520_USB_EP1_RING_ADDR);
+    g_assert_cmphex(extract32(event[2], 24, 8), ==, TH1520_USB_CC_SUCCESS);
+    g_assert_cmpuint(extract32(event[2], 0, 24), ==, 0);
+    g_assert_cmpuint(extract32(event[3], 24, 8), ==, slotid);
+    g_assert_cmpuint(extract32(event[3], 16, 5), ==, TH1520_USB_KBD_EP1_DCI);
+    qtest_memread(qts, TH1520_USB_EP1_BUF_ADDR, buf, sizeof(buf));
+    g_assert_cmpmem(buf, sizeof(buf), report_a, sizeof(report_a));
+    g_assert_true(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                              TH1520_USB_XHCI_IMAN) &
+                  TH1520_USB_XHCI_IMAN_IP);
+}
+
+static void xhci_press_a(QTestState *qts)
+{
+    QDict *resp = qtest_qmp(qts,
+        "{ 'execute': 'input-send-event', 'arguments': {"
+        " 'events': [ { 'type': 'key', 'data': { 'down': true,"
+        " 'key': { 'type': 'qcode', 'data': 'a' } } } ] } }");
+
+    g_assert_true(qdict_haskey(resp, "return"));
+    qobject_unref(resp);
+}
+
+/* The pending read completes in place when a key finally arrives. */
+static void test_th1520_usb_attached_transfer(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    XhciEventCursor cur = { 0 };
+    uint32_t slotid;
+
+    xhci_program_event_ring(qts);
+    slotid = xhci_arm_keyboard_read(qts, &cur);
+    xhci_press_a(qts);
+    xhci_expect_keyboard_report(qts, &cur, slotid);
+    qtest_quit(qts);
+}
+
+/*
+ * A read left pending on an attached device is in-flight controller state.
+ * xHCI carries the slot, endpoint and ring state and re-kicks every running
+ * endpoint after load, so the destination re-issues the read to the same
+ * keyboard and completes it when the key arrives there.
+ */
+static void test_th1520_usb_attached_transfer_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    XhciEventCursor cur = { 0 };
+    QTestState *src;
+    QTestState *dst;
+    uint32_t event[4];
+    uint32_t slotid;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-usb-xfer-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_qmp_device_add(dst, "usb-kbd", "usb-kbd0", "{ 'port': '1' }");
+
+    xhci_program_event_ring(src);
+    slotid = xhci_arm_keyboard_read(src, &cur);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    /* Post-load re-kicks the endpoint; the idle keyboard still NAKs. */
+    qtest_clock_step(dst, 250000);
+    g_assert_false(xhci_peek_event(dst, &cur, event));
+
+    xhci_press_a(dst);
+    xhci_expect_keyboard_report(dst, &cur, slotid);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    unlink(path);
+}
+
 static void test_usb_hid_input_event_device_misuse(void)
 {
     QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
@@ -14882,6 +15184,10 @@ int main(int argc, char **argv)
                            test_th1520_usb_hid_hotplug);
             qtest_add_func("/beaglev-ahead/usb/hid-input-event-device-misuse",
                            test_usb_hid_input_event_device_misuse);
+            qtest_add_func("/beaglev-ahead/usb/attached-transfer",
+                           test_th1520_usb_attached_transfer);
+            qtest_add_func("/beaglev-ahead/usb/attached-transfer-migration",
+                           test_th1520_usb_attached_transfer_migration);
         }
         qtest_add_func("/beaglev-ahead/usb/migration",
                        test_th1520_usb_migration);

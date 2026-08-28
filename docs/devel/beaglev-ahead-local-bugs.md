@@ -189,6 +189,43 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
 
+### Current USB attached-transfer migration checkpoint
+
+This closes the last named ``MIG-001`` in-flight DMA item: a transfer pending
+on an attached USB device across migration.  It found no defect in the
+controller or the wrapper; it validates an upstream xHCI property and, on the
+way, found ``UQ-014``.
+
+The qtest drives the xHCI as a guest would: it hot-adds ``usb-kbd`` on root
+port 1, resets the port, then issues Enable Slot, Address Device with BSR
+clear and Configure Endpoint for DCI 3 through the command ring, checking
+each completion event, and queues one 8-byte Normal TRB with IOC on the
+interrupt IN ring.  The idle keyboard NAKs, so the read stays pending with no
+event.  With the same keyboard attached on the destination before
+``migrate-incoming``, xHCI's VMState carries the slot, endpoint and ring state
+and ``usb_xhci_post_load`` re-kicks every running endpoint, so the destination
+re-issues the read; it still NAKs until a key is injected there, and then
+completes with the boot report ``00 00 04 00 00 00 00 00``, a Transfer Event
+with ``CC_SUCCESS`` and zero residual, and the interrupt.  A non-migration
+variant proves the same read completes in place.
+
+Two pitfalls are worth recording.  ``device_add usb-kbd`` without a port
+inserts a hub and hangs the keyboard behind it at path ``1.1``; a slot
+addressed at the root port then reaches the hub's interrupt endpoint, whose
+2-byte port-change bitmap (``02 00``) arrives immediately and looked at first
+like a keyboard answering without a key.  And a read issued at microframe
+zero waits one microframe on the kick timer, so the virtual clock must
+advance 125 us before the pending state can be observed.
+
+Two mutations were applied to a scratch copy and reverted, each failing one
+test: making ``usb_xhci_post_load`` skip every addressed slot leaves the
+destination without an endpoint to complete (migration case), and making the
+key wakeup no longer kick the endpoint leaves the read pending forever
+(in-place case).  ``USB-002`` is unchanged: this is a digital host-controller
+contract with a synthetic keyboard, not PHY, link, device-mode or physical
+behaviour, and only interrupt IN is covered; bulk and isochronous transfers,
+streams and a transfer in the middle of a data stage remain open.
+
 ### Current GMAC receive-FIFO checkpoint (UQ-L018)
 
 This closes the receive half of the ``MIG-001`` in-flight DMA item and, like
@@ -685,8 +722,10 @@ change must add a reproducer and a regression before changing any of them.
   destination completes it once the guest hands over the last descriptor.
   GMAC receive now migrates its held frames through the receive-FIFO
   subsection, so a frame the DMA could not place before migration is
-  delivered by the destination once the guest resumes the ring.  USB
-  migration during an attached transfer still needs a phase/ownership test.
+  delivered by the destination once the guest resumes the ring.  A read
+  pending on an attached USB keyboard now migrates and completes on the
+  destination, validating the upstream xHCI post-load re-kick; bulk,
+  isochronous and mid-data-stage USB transfers remain open.
   Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load

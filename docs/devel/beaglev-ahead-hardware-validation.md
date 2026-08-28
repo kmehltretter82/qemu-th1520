@@ -167,7 +167,7 @@ sections (109 normal/108 minimal or sanitizer, then 114 normal/113 minimal and
 At the vector/RIWT checkpoints ``78ad4d6e56`` and ``1369cec4d9``, the board
 gates passed 116/116 normal, 115/115 dependency-minimal and 115/115 ASan/UBSan.
 At ``e017a59bba`` plus the current gate corrections, the board gate passes
-160/160 normal, 159/159 dependency-minimal and 159/159 ASan/UBSan under
+163/163 normal, 159/159 dependency-minimal and 159/159 ASan/UBSan under
 ``meson test``.  The intervening PHY GPIO checkpoint's 149/149 was a
 direct-binary normal-build run only, because the suite could not complete
 under ``meson test``.  The full
@@ -883,6 +883,19 @@ holds the frame whole, so a guest polling descriptors could see ``FD`` without
 overflow semantics, resume latency for a final frame under a driver that never
 writes the poll demand, and behaviour under sustained overflow.  The five
 qtests and the Linux traffic runs are software-contract evidence only.
+
+## USB-002 attached-transfer migration checkpoint
+
+The attached-transfer qtests leave an 8-byte interrupt IN read pending on a
+hot-added keyboard on root port 1, migrate, and complete it on the
+destination with an injected key.  They establish that xHCI's slot, endpoint
+and ring VMState plus the post-load re-kick carry one pending interrupt
+transfer across migration in this integration.  They do not establish
+anything under ``USB-002``: DWC3 and xHCI synthesis values remain synthetic,
+there is no PHY, link, suspend/resume, device or OTG behaviour, and bulk,
+isochronous, stream and mid-data-stage transfers are untested.  The
+keyboard must be attached on the destination before ``migrate-incoming``; a
+destination without the device silently drops the slot at load.
 
 ## Resolution record template
 
