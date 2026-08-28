@@ -538,6 +538,7 @@
 #define TH1520_USB_ER_CMD_COMPLETE 33
 #define TH1520_USB_ER_PORT_CHANGE  34
 #define TH1520_USB_CC_SUCCESS      1
+#define TH1520_USB_CC_SHORT_PACKET 13
 #define TH1520_USB_XHCI_PORTSC_CCS BIT(0)
 #define TH1520_USB_XHCI_PORTSC_CSC BIT(17)
 
@@ -562,6 +563,17 @@
 #define TH1520_USB_TRB_IOC         BIT(5)
 #define TH1520_USB_KBD_ROOT_PORT   2
 #define TH1520_USB_KBD_EP1_DCI     3
+#define TH1520_USB_EP2_RING_ADDR   0x00309000
+#define TH1520_USB_EP2_BUF_ADDR    0x0030a000
+/* CCID bulk IN is endpoint 2 and bulk OUT endpoint 3, so DCI 5 and 6. */
+#define TH1520_USB_CCID_IN_DCI     5
+#define TH1520_USB_CCID_OUT_DCI    6
+#define TH1520_USB_EP_TYPE_BULK_OUT 2
+#define TH1520_USB_EP_TYPE_BULK_IN  6
+#define TH1520_USB_CCID_GET_SLOT_STATUS 0x65
+#define TH1520_USB_CCID_SLOT_STATUS 0x81
+#define TH1520_USB_CCID_MSG_LEN    10
+#define TH1520_USB_CCID_READ_LEN   64
 
 #define DWMAC_MAC_CONFIG           0x0000
 #define DWMAC_FRAME_FILTER         0x0004
@@ -849,6 +861,7 @@ static void wait_for_migration_complete(QTestState *qts);
 #define UART_IIR_BUSY              0x07
 #define UART_FCR_ENABLE            BIT(0)
 #define UART_LCR_DLAB              BIT(7)
+#define UART_LCR_NSTB              BIT(2)
 #define UART_LSR_DR                BIT(0)
 #define UART_LSR_THRE              BIT(5)
 #define UART_LSR_TEMT              BIT(6)
@@ -9234,6 +9247,158 @@ static void test_dw_uart_interrupts(void)
     qtest_quit(qts);
 }
 
+/*
+ * The DesignWare wrapper keeps BUSY set for exactly one character frame after
+ * a THR write and rejects LCR and divisor writes for that window.  The other
+ * UART tests only ever assert that BUSY is set, so a gate that never opened
+ * would pass all of them; these two pin the closing edge to the nanosecond.
+ *
+ * The baud base is the 100 MHz UART input over 16.  A divisor of 10 gives
+ * exactly 625000 baud, so one 8N1 frame is exactly 10 * 1e9 / 625000 ns with
+ * no rounding to reason about, and 8N2 adds exactly one bit time.
+ */
+#define DW_UART_BAUDBASE           (100000000 / 16)
+#define DW_UART_TEST_DIVISOR       10
+#define DW_UART_BIT_NS             (1000000000LL / \
+                                    (DW_UART_BAUDBASE / DW_UART_TEST_DIVISOR))
+#define DW_UART_FRAME_8N1_NS       (10 * DW_UART_BIT_NS)
+#define DW_UART_FRAME_8N2_NS       (11 * DW_UART_BIT_NS)
+
+/* Program the tested divisor and leave LCR holding the given line format. */
+static void dw_uart_program_frame(QTestState *qts, uint32_t lcr)
+{
+    qtest_writel(qts, DW_UART_LCR, UART_LCR_DLAB | lcr);
+    qtest_writel(qts, DW_UART_RBR_THR_DLL, DW_UART_TEST_DIVISOR);
+    qtest_writel(qts, DW_UART_IER_DLH, 0);
+    qtest_writel(qts, DW_UART_LCR, lcr);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_LCR), ==, lcr);
+}
+
+/* True while the wrapper refuses to update LCR, which it does only if busy. */
+static bool dw_uart_lcr_write_gated(QTestState *qts, uint32_t lcr)
+{
+    qtest_writel(qts, DW_UART_LCR, UART_LCR_DLAB | lcr);
+    if (qtest_readl(qts, DW_UART_LCR) == lcr) {
+        return true;
+    }
+    /* The write landed; put the register back the way the caller had it. */
+    qtest_writel(qts, DW_UART_LCR, lcr);
+    return false;
+}
+
+/*
+ * Send one character and require BUSY, the busy-detect interrupt and the
+ * write gate to persist through the last nanosecond of the frame and to be
+ * gone at the deadline itself.
+ */
+static int64_t dw_uart_assert_busy_window(QTestState *qts, uint32_t lcr,
+                                          int64_t frame_ns, int64_t start)
+{
+    qtest_writel(qts, DW_UART_RBR_THR_DLL, 'x');
+    g_assert_true(qtest_readl(qts, DW_UART_USR) & UART_USR_BUSY);
+
+    qtest_clock_set(qts, start + frame_ns - 1);
+    g_assert_true(qtest_readl(qts, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_true(dw_uart_lcr_write_gated(qts, lcr));
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR) & 0xf, ==,
+                    UART_IIR_BUSY);
+    /* Reading USR is the only thing that clears the busy-detect interrupt. */
+    g_assert_true(qtest_readl(qts, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR), ==, UART_IIR_NO_INT);
+
+    qtest_clock_set(qts, start + frame_ns);
+    g_assert_false(qtest_readl(qts, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_true(qtest_readl(qts, DW_UART_LSR) & UART_LSR_TEMT);
+    g_assert_false(dw_uart_lcr_write_gated(qts, lcr));
+    g_assert_cmphex(qtest_readl(qts, DW_UART_IIR_FCR) & 0xf, !=,
+                    UART_IIR_BUSY);
+    return start + frame_ns;
+}
+
+static void test_dw_uart_busy_deadline(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    int64_t now;
+
+    g_assert_cmpint(qtest_clock_set(qts, 0), ==, 0);
+
+    /* Eight data bits, one stop bit: ten bit times. */
+    dw_uart_program_frame(qts, 3);
+    now = dw_uart_assert_busy_window(qts, 3, DW_UART_FRAME_8N1_NS, 0);
+
+    /* Back-to-back characters re-arm the window from the second write. */
+    now = dw_uart_assert_busy_window(qts, 3, DW_UART_FRAME_8N1_NS, now);
+
+    /*
+     * A second stop bit lengthens the frame by exactly one bit time, so the
+     * deadline follows the programmed line format rather than a constant.
+     */
+    dw_uart_program_frame(qts, UART_LCR_NSTB | 3);
+    dw_uart_assert_busy_window(qts, UART_LCR_NSTB | 3, DW_UART_FRAME_8N2_NS,
+                               now);
+
+    qtest_quit(qts);
+}
+
+/*
+ * The busy deadline is an absolute virtual-clock timestamp carried verbatim
+ * in VMState, so a migration halfway through a frame must leave exactly the
+ * remaining window on the destination: still gated one nanosecond short of
+ * the original deadline, open at it.  The existing migration test steps
+ * twenty milliseconds before re-testing the gate, so it cannot tell a
+ * preserved deadline from a cleared or rebased one.
+ */
+static void test_dw_uart_busy_deadline_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *src;
+    QTestState *dst;
+    int64_t start;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-uart-busy-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+
+    g_assert_cmpint(qtest_clock_set(src, 0), ==, 0);
+    dw_uart_program_frame(src, 3);
+    start = 0;
+    qtest_writel(src, DW_UART_RBR_THR_DLL, 'm');
+
+    /* Migrate with the frame half sent. */
+    qtest_clock_set(src, start + DW_UART_FRAME_8N1_NS / 2);
+    g_assert_true(qtest_readl(src, DW_UART_USR) & UART_USR_BUSY);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    /* The destination clock has not reached the carried deadline yet. */
+    g_assert_true(qtest_readl(dst, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_true(dw_uart_lcr_write_gated(dst, 3));
+
+    qtest_clock_set(dst, start + DW_UART_FRAME_8N1_NS - 1);
+    g_assert_true(qtest_readl(dst, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_true(dw_uart_lcr_write_gated(dst, 3));
+
+    qtest_clock_set(dst, start + DW_UART_FRAME_8N1_NS);
+    g_assert_false(qtest_readl(dst, DW_UART_USR) & UART_USR_BUSY);
+    g_assert_false(dw_uart_lcr_write_gated(dst, 3));
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    unlink(path);
+}
+
 static void dw_i2c_enable(QTestState *qts, uint64_t base, uint8_t target,
                           uint32_t intr_mask)
 {
@@ -11897,6 +12062,299 @@ static void xhci_press_a(QTestState *qts)
 
     g_assert_true(qdict_haskey(resp, "return"));
     qobject_unref(resp);
+}
+
+/*
+ * Bring a hot-added CCID reader to a configured slot with both of its bulk
+ * endpoints enabled and leave one read pending on the bulk IN endpoint.
+ * An idle reader NAKs that read just as an idle keyboard NAKs its interrupt
+ * read, so the transfer stays on the endpoint -- but here on a bulk
+ * endpoint, which xHCI retries from a doorbell or a device wakeup rather
+ * than from the microframe kick timer the interrupt endpoint uses.
+ */
+static uint32_t xhci_arm_ccid_read(QTestState *qts, XhciEventCursor *cur)
+{
+    const uint32_t ictx = TH1520_USB_INPUT_CTX_ADDR;
+    uint8_t zeros[1024] = { 0 };
+    uint64_t dcbaa_entry = cpu_to_le64(TH1520_USB_DEV_CTX_ADDR);
+    uint32_t event[4];
+    uint32_t slotid;
+    uint32_t ctx[8];
+    unsigned cmd = 0;
+
+    qtest_memwrite(qts, TH1520_USB_DCBAA_ADDR, zeros, 256);
+    qtest_memwrite(qts, TH1520_USB_DEV_CTX_ADDR, zeros, sizeof(zeros));
+    qtest_memwrite(qts, ictx, zeros, sizeof(zeros));
+    qtest_memwrite(qts, TH1520_USB_EP1_RING_ADDR, zeros, 256);
+    qtest_memwrite(qts, TH1520_USB_EP2_RING_ADDR, zeros, 256);
+    qtest_memwrite(qts, TH1520_USB_EP0_RING_ADDR, zeros, 256);
+    qtest_memset(qts, TH1520_USB_EP1_BUF_ADDR, 0xee,
+                 TH1520_USB_CCID_READ_LEN);
+
+    /* Name the root port so QEMU does not insert a hub in front. */
+    qtest_qmp_device_add(qts, "usb-ccid", "usb-ccid0", "{ 'port': '1' }");
+    xhci_take_event(qts, cur, event);   /* port status change: attach */
+    g_assert_cmphex(extract32(event[3], 10, 6), ==,
+                    TH1520_USB_ER_PORT_CHANGE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_USB2_PORTSC,
+                 TH1520_USB_XHCI_PORTSC_PR);
+    xhci_take_event(qts, cur, event);   /* port status change: reset done */
+    g_assert_true(qtest_readl(qts, TH1520_USB_CORE_BASE +
+                              TH1520_USB_XHCI_USB2_PORTSC) &
+                  TH1520_USB_XHCI_PORTSC_PED);
+
+    g_assert_cmphex(xhci_command(qts, &cmd, cur, 0,
+                                 TH1520_USB_CR_ENABLE_SLOT <<
+                                 TH1520_USB_TRB_TYPE_SHIFT, &slotid),
+                    ==, TH1520_USB_CC_SUCCESS);
+    g_assert_cmpuint(slotid, >=, 1);
+    qtest_memwrite(qts, TH1520_USB_DCBAA_ADDR + 8 * slotid, &dcbaa_entry,
+                   sizeof(dcbaa_entry));
+
+    /* Address Device: add slot and EP0 contexts. */
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32(BIT(0) | BIT(1));
+    qtest_memwrite(qts, ictx, ctx, 8);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[0] = cpu_to_le32(1u << 27);                     /* context entries */
+    ctx[1] = cpu_to_le32(TH1520_USB_KBD_ROOT_PORT << 16);
+    qtest_memwrite(qts, ictx + 0x20, ctx, 16);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32((4u << 3) | (3u << 1) | (64u << 16)); /* control */
+    ctx[2] = cpu_to_le32(TH1520_USB_EP0_RING_ADDR | 1);
+    qtest_memwrite(qts, ictx + 0x40, ctx, 20);
+    g_assert_cmphex(xhci_command(qts, &cmd, cur, ictx,
+                                 (slotid << 24) |
+                                 (TH1520_USB_CR_ADDRESS_DEV <<
+                                  TH1520_USB_TRB_TYPE_SHIFT), NULL),
+                    ==, TH1520_USB_CC_SUCCESS);
+
+    /* Configure Endpoint: add both bulk endpoints, DCI 5 and DCI 6. */
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32(BIT(0) | BIT(TH1520_USB_CCID_IN_DCI) |
+                         BIT(TH1520_USB_CCID_OUT_DCI));
+    qtest_memwrite(qts, ictx, ctx, 8);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[0] = cpu_to_le32((uint32_t)TH1520_USB_CCID_OUT_DCI << 27);
+    ctx[1] = cpu_to_le32(TH1520_USB_KBD_ROOT_PORT << 16);
+    qtest_memwrite(qts, ictx + 0x20, ctx, 16);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32((TH1520_USB_EP_TYPE_BULK_IN << 3) | (3u << 1) |
+                         (64u << 16));
+    ctx[2] = cpu_to_le32(TH1520_USB_EP1_RING_ADDR | 1);
+    ctx[4] = cpu_to_le32(TH1520_USB_CCID_READ_LEN);
+    qtest_memwrite(qts, ictx + 0x20 + 0x20 * TH1520_USB_CCID_IN_DCI, ctx, 20);
+    memset(ctx, 0, sizeof(ctx));
+    ctx[1] = cpu_to_le32((TH1520_USB_EP_TYPE_BULK_OUT << 3) | (3u << 1) |
+                         (64u << 16));
+    ctx[2] = cpu_to_le32(TH1520_USB_EP2_RING_ADDR | 1);
+    ctx[4] = cpu_to_le32(TH1520_USB_CCID_MSG_LEN);
+    qtest_memwrite(qts, ictx + 0x20 + 0x20 * TH1520_USB_CCID_OUT_DCI, ctx,
+                   20);
+    g_assert_cmphex(xhci_command(qts, &cmd, cur, ictx,
+                                 (slotid << 24) |
+                                 (TH1520_USB_CR_CONFIG_EP <<
+                                  TH1520_USB_TRB_TYPE_SHIFT), NULL),
+                    ==, TH1520_USB_CC_SUCCESS);
+
+    /* One read with IOC; the idle reader leaves it pending. */
+    xhci_write_trb(qts, TH1520_USB_EP1_RING_ADDR, TH1520_USB_EP1_BUF_ADDR,
+                   TH1520_USB_CCID_READ_LEN,
+                   (TH1520_USB_TR_NORMAL << TH1520_USB_TRB_TYPE_SHIFT) |
+                   TH1520_USB_TRB_IOC | TH1520_USB_TRB_CYCLE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL +
+                 4 * slotid, TH1520_USB_CCID_IN_DCI);
+    g_assert_false(xhci_peek_event(qts, cur, event));
+    return slotid;
+}
+
+/* Queue a 10-byte GetSlotStatus on the bulk OUT endpoint and ring it. */
+static void xhci_ccid_request_slot_status(QTestState *qts, uint32_t slotid,
+                                          uint8_t seq)
+{
+    uint8_t command[TH1520_USB_CCID_MSG_LEN] = { 0 };
+
+    command[0] = TH1520_USB_CCID_GET_SLOT_STATUS;
+    command[6] = seq;                                   /* bSeq */
+    qtest_memwrite(qts, TH1520_USB_EP2_BUF_ADDR, command, sizeof(command));
+    xhci_write_trb(qts, TH1520_USB_EP2_RING_ADDR, TH1520_USB_EP2_BUF_ADDR,
+                   TH1520_USB_CCID_MSG_LEN,
+                   (TH1520_USB_TR_NORMAL << TH1520_USB_TRB_TYPE_SHIFT) |
+                   TH1520_USB_TRB_IOC | TH1520_USB_TRB_CYCLE);
+    qtest_writel(qts, TH1520_USB_CORE_BASE + TH1520_USB_XHCI_DOORBELL +
+                 4 * slotid, TH1520_USB_CCID_OUT_DCI);
+}
+
+/*
+ * Consume the two transfer events the command produces -- the OUT command
+ * itself and the bulk IN read the reader's wakeup completes -- and check the
+ * reply the pending read collected.  The reader wakes the IN endpoint from
+ * inside the OUT packet, so the two events may arrive in either order.
+ */
+static void xhci_expect_ccid_slot_status(QTestState *qts,
+                                         XhciEventCursor *cur,
+                                         uint32_t slotid, uint8_t seq)
+{
+    uint8_t reply[TH1520_USB_CCID_MSG_LEN];
+    bool seen_in = false;
+    bool seen_out = false;
+    uint32_t event[4];
+
+    for (int i = 0; i < 2; i++) {
+        xhci_take_event(qts, cur, event);
+        g_assert_cmphex(extract32(event[3], 10, 6), ==,
+                        TH1520_USB_ER_TRANSFER);
+        g_assert_cmpuint(extract32(event[3], 24, 8), ==, slotid);
+        switch (extract32(event[3], 16, 5)) {
+        case TH1520_USB_CCID_IN_DCI:
+            g_assert_false(seen_in);
+            seen_in = true;
+            g_assert_cmphex(event[0], ==, TH1520_USB_EP1_RING_ADDR);
+            /*
+             * The reply is shorter than the read, so the transfer ends as a
+             * short packet and the untouched tail is the residual.
+             */
+            g_assert_cmphex(extract32(event[2], 24, 8), ==,
+                            TH1520_USB_CC_SHORT_PACKET);
+            g_assert_cmpuint(extract32(event[2], 0, 24), ==,
+                             TH1520_USB_CCID_READ_LEN -
+                             TH1520_USB_CCID_MSG_LEN);
+            break;
+        case TH1520_USB_CCID_OUT_DCI:
+            g_assert_false(seen_out);
+            seen_out = true;
+            g_assert_cmphex(event[0], ==, TH1520_USB_EP2_RING_ADDR);
+            g_assert_cmphex(extract32(event[2], 24, 8), ==,
+                            TH1520_USB_CC_SUCCESS);
+            g_assert_cmpuint(extract32(event[2], 0, 24), ==, 0);
+            break;
+        default:
+            g_assert_not_reached();
+        }
+    }
+    g_assert_true(seen_in);
+    g_assert_true(seen_out);
+
+    qtest_memread(qts, TH1520_USB_EP1_BUF_ADDR, reply, sizeof(reply));
+    g_assert_cmphex(reply[0], ==, TH1520_USB_CCID_SLOT_STATUS);
+    g_assert_cmphex(ldl_le_p(&reply[1]), ==, 0);        /* dwLength */
+    g_assert_cmphex(reply[5], ==, 0);                   /* bSlot echo */
+    g_assert_cmphex(reply[6], ==, seq);                 /* bSeq echo */
+}
+
+/*
+ * Isochronous endpoints cannot be carried across migration in this
+ * integration, and the reason is a device property rather than an xHCI
+ * limitation: usb-audio is the only device in the tree that declares an
+ * isochronous endpoint, and it is marked unmigratable, so migration is
+ * refused outright while it is attached.  Pin that contract in both
+ * directions -- refused with the device present, accepted once it is gone --
+ * so that making usb-audio migratable is caught here and answered with a
+ * real in-flight isochronous test rather than silently leaving this gap.
+ */
+static void test_th1520_usb_isochronous_migration_blocked(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *qts;
+    QDict *resp;
+    QDict *error;
+    const char *class;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-usb-iso-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    qts = qtest_init("-machine beaglev-ahead -bios none "
+                     "-audiodev driver=none,id=audio0");
+    qtest_qmp_device_add(qts, "usb-audio", "usb-audio0",
+                         "{ 'port': '1', 'audiodev': 'audio0' }");
+
+    resp = qtest_qmp(qts,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    g_assert_true(qdict_haskey(resp, "error"));
+    error = qdict_get_qdict(resp, "error");
+    class = qdict_get_try_str(error, "desc");
+    g_assert_nonnull(class);
+    /* The device is named by its VMState id, not by its qdev id. */
+    g_assert_true(g_str_has_prefix(class,
+                                   "State blocked by non-migratable device"));
+    g_assert_true(g_str_has_suffix(class, "/usb-audio'"));
+    qobject_unref(resp);
+
+    /* Unplugging the isochronous device lifts the block. */
+    qtest_qmp_device_del(qts, "usb-audio0");
+    qtest_qmp_assert_success(qts,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(qts);
+
+    qtest_quit(qts);
+    unlink(path);
+}
+
+/* The pending bulk read completes in place once a command produces a reply. */
+static void test_th1520_usb_bulk_transfer(void)
+{
+    QTestState *qts = qtest_init("-machine beaglev-ahead -bios none");
+    XhciEventCursor cur = { 0 };
+    uint32_t slotid;
+
+    xhci_program_event_ring(qts);
+    slotid = xhci_arm_ccid_read(qts, &cur);
+    xhci_ccid_request_slot_status(qts, slotid, 0x27);
+    xhci_expect_ccid_slot_status(qts, &cur, slotid, 0x27);
+    qtest_quit(qts);
+}
+
+/*
+ * The interrupt-endpoint case is retried from the microframe kick timer;
+ * a bulk endpoint instead sits in xHCI's retry state until a doorbell or a
+ * device wakeup kicks it.  Neither the pending packet nor the retry state is
+ * migrated, so the destination must rebuild both from the endpoint context
+ * and transfer ring in guest memory and complete the read there.
+ */
+static void test_th1520_usb_bulk_transfer_migration(void)
+{
+    g_autofree char *path = NULL;
+    g_autofree char *uri = NULL;
+    XhciEventCursor cur = { 0 };
+    QTestState *src;
+    QTestState *dst;
+    uint32_t event[4];
+    uint32_t slotid;
+    int fd;
+
+    fd = g_file_open_tmp("beaglev-ahead-usb-bulk-XXXXXX", &path, NULL);
+    g_assert_cmpint(fd, >=, 0);
+    close(fd);
+    uri = g_strdup_printf("file:%s", path);
+
+    src = qtest_init("-machine beaglev-ahead -bios none");
+    dst = qtest_init("-machine beaglev-ahead -bios none -incoming defer");
+    qtest_qmp_device_add(dst, "usb-ccid", "usb-ccid0", "{ 'port': '1' }");
+
+    xhci_program_event_ring(src);
+    slotid = xhci_arm_ccid_read(src, &cur);
+
+    qtest_qmp_assert_success(src,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    wait_for_migration_complete(src);
+    qtest_qmp_assert_success(dst,
+        "{ 'execute': 'migrate-incoming', 'arguments': { 'uri': %s } }",
+        uri);
+    wait_for_migration_complete(dst);
+
+    /* Post-load re-kicks the endpoint; the idle reader still NAKs. */
+    g_assert_false(xhci_peek_event(dst, &cur, event));
+
+    xhci_ccid_request_slot_status(dst, slotid, 0x5b);
+    xhci_expect_ccid_slot_status(dst, &cur, slotid, 0x5b);
+
+    qtest_quit(dst);
+    qtest_quit(src);
+    unlink(path);
 }
 
 /* The pending read completes in place when a key finally arrives. */
@@ -15755,6 +16213,16 @@ int main(int argc, char **argv)
                        test_th1520_usb_host_dma_irq);
         qtest_add_func("/beaglev-ahead/usb/pending-irq-migration",
                        test_th1520_usb_pending_irq_migration);
+        if (qtest_has_device("usb-audio")) {
+            qtest_add_func("/beaglev-ahead/usb/isochronous-migration-blocked",
+                           test_th1520_usb_isochronous_migration_blocked);
+        }
+        if (qtest_has_device("usb-ccid")) {
+            qtest_add_func("/beaglev-ahead/usb/bulk-transfer",
+                           test_th1520_usb_bulk_transfer);
+            qtest_add_func("/beaglev-ahead/usb/bulk-transfer-migration",
+                           test_th1520_usb_bulk_transfer_migration);
+        }
         if (qtest_has_device("usb-kbd")) {
             qtest_add_func("/beaglev-ahead/usb/hid-hotplug",
                            test_th1520_usb_hid_hotplug);
@@ -15950,6 +16418,10 @@ int main(int argc, char **argv)
                        test_dw_uart_tx_rx);
         qtest_add_func("/beaglev-ahead/dw-uart/interrupts",
                        test_dw_uart_interrupts);
+        qtest_add_func("/beaglev-ahead/dw-uart/busy-deadline",
+                       test_dw_uart_busy_deadline);
+        qtest_add_func("/beaglev-ahead/dw-uart/busy-deadline-migration",
+                       test_dw_uart_busy_deadline_migration);
         qtest_add_func("/beaglev-ahead/dw-uart/migration",
                        test_dw_uart_migration);
     }

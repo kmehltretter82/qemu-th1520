@@ -301,6 +301,71 @@ _start:
     j       exit
 1:
 
+    /*
+     * e64,m1 puts VLMAX at two elements, a regime the byte-wide cases never
+     * reach: the whole vector is one element wider than the slide offset, so
+     * the offset comparison and the tail origin are both at the extreme end
+     * of their range.  Offset 1 keeps element 0 and lifts source element 0
+     * into element 1.
+     */
+    lla     t0, expected
+    lla     t1, old_dest
+    ld      t2, 0(t1)
+    sd      t2, 0(t0)
+    lla     t1, source
+    ld      t2, 0(t1)
+    sd      t2, 8(t0)
+    LOAD_VECTORS mask_all
+    li      t1, 2
+    .word   0x00c37057      /* th.vsetvli zero, t1, e64, m1 */
+    li      t0, 1
+    .word   0x3a12c157      /* th.vslideup.vx v2, v1, t0 */
+    STORE_V2
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 40
+    call    check_16
+
+    /* An offset equal to VLMAX writes nothing and clears no tail. */
+    lla     t0, expected
+    lla     t1, old_dest
+    ld      t2, 0(t1)
+    sd      t2, 0(t0)
+    ld      t2, 8(t1)
+    sd      t2, 8(t0)
+    LOAD_VECTORS mask_all
+    li      t1, 2
+    .word   0x00c37057      /* th.vsetvli zero, t1, e64, m1 */
+    li      t0, 2
+    .word   0x3a12c157      /* th.vslideup.vx v2, v1, t0 */
+    STORE_V2
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 41
+    call    check_16
+
+    /*
+     * Register-group alignment at LMUL=4.  Both the destination and the
+     * source group must be multiples of four; no payload set LMUL to 4
+     * before, so this rule had no coverage at any element width.
+     */
+    li      t1, 64
+    .word   0x00237057      /* th.vsetvli zero, t1, e8, m4 */
+    li      t0, 2
+    EXPECT_ILLEGAL 0x3a42c157, 7, 42    /* th.vslideup.vx v2, v4, t0 */
+    EXPECT_ILLEGAL 0x3a92c257, 8, 43    /* th.vslideup.vx v4, v9, t0 */
+
+    /* The aligned groups stay legal, and in-place is still refused. */
+    li      s0, 0
+    .word   0x3a82c257      /* th.vslideup.vx v4, v8, t0 */
+    EXPECT_ILLEGAL 0x3a82c457, 9, 44    /* th.vslideup.vx v8, v8, t0 */
+
+    li      t0, 9
+    beq     s1, t0, 1f
+    li      a0, 45
+    j       exit
+1:
+
     li      a0, 0
     j       exit
 

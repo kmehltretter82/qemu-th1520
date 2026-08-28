@@ -422,6 +422,16 @@ configurable FIFO depth, reset, and migration.  UART RX, TX, THRE and busy
 interrupts are connected through C900 PLIC source 36 and have both qtest and
 guest-executed coverage.
 
+BUSY stays set for exactly one character frame after a write to the transmit
+holding register, and for that window LCR and, under DLAB, the divisor
+registers reject writes and raise the busy-detect interrupt.  The window
+follows the programmed line format rather than a fixed delay, and it is a
+virtual-clock deadline carried verbatim across migration, so a guest that
+migrates mid-frame sees the remainder of the frame on the destination.  The
+model rejects a write made during the window rather than deferring and
+replaying it, which is the simpler of the two documented DesignWare
+behaviours.
+
 The exact TH1520 UART synthesis is not publicly established.  The board model
 therefore uses conservative defaults: a functional 16-byte FIFO while optional
 CPR, UCV, DLF, and FIFO-statistics features report unavailable unless

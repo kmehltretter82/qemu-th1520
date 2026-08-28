@@ -189,6 +189,20 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
 
+### Bulk USB, UART busy-deadline and LMUL coverage
+
+No defect was found in any of the three areas: the models already behaved
+correctly and the gap was evidence.  The payloads are mutation-sensitive
+rather than vacuous -- an off-by-one on the UART busy comparison, a busy
+deadline dropped at post-load, a wrong xHCI transfer-ring cycle state
+restored at post-load, a post-load that skips rebuilding running endpoints, a
+mask length that ignores LMUL and an always-legal register-group alignment
+rule each fail exactly one of the new tests.  One candidate mutation,
+forcing the reloaded xHCI endpoint state to ``EP_STOPPED``, does not fail
+anything, because the doorbell path re-establishes that state; it is recorded
+as a model property rather than treated as a missing assertion.  All
+mutations were applied to byte copies and reverted.
+
 ### eMMC/SDIO gate coupling (shelved, then landed with ``clock-abi``)
 
 The same coupling was then built for the eMMC/SDIO leaf, the ``core`` clock

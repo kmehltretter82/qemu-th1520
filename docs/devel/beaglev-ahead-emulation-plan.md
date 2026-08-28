@@ -455,8 +455,11 @@ three slide-up forms with their offset, mask, ``vstart``, full-XLEN and
 in-place-prohibition boundaries, and ``th.vrgather.vi`` and
 ``th.vcompress.vm`` with their VLMAX-boundary, mask-decided length and
 zero-``vstart`` rules.  All ten permutation forms now have dynamic coverage at
-RV64 e8,m1, compress additionally at e64,m1 and at e8,m8 where the mask is a
-dense one-bit-per-element bitmap; other element widths and LMULs, RV32,
+RV64 e8,m1, compress additionally at e64,m1, at e8,m8 where the mask is a
+dense one-bit-per-element bitmap, and at e8,m2 and e8,m4 whose four- and
+two-bit mask strides no other payload produces; slide-up additionally at
+e64,m1, where VLMAX is two elements.  LMUL=4 register-group alignment is
+covered for both forms.  Remaining element widths and LMULs, RV32,
 big-endian execution and physical C910 comparison remain open.  Four clean
 normal/minimal one-/four-hart Linux runs complete DHCP, three pings and a
 1 MiB HTTP SHA-256 transfer, but longer and contention-sensitive network stress
@@ -744,8 +747,12 @@ the roadmap as a claim of completion.  At the current milestone it contains:
   unimplemented-region combination, with DesignWare status, software reset,
   busy detection, fractional-divisor and synthesis-probe behavior, configurable
   FIFO depth, VMState, focused RX/TX/IRQ/reset/migration qtests, and a
-  guest-executed access/interrupt test.  All six TH1520 instances are mapped at
-  their upstream Linux addresses and PLIC sources with distinct serial aliases
+  guest-executed access/interrupt test.  The one-frame busy deadline is
+  pinned to the nanosecond in both directions -- still gating LCR and divisor
+  writes at the last nanosecond of the frame, open at the deadline itself --
+  at two line formats and across a mid-frame migration.  All six TH1520
+  instances are mapped at their upstream Linux addresses and PLIC sources
+  with distinct serial aliases
   and AP clock IDs; matching the board DT, only UART0 is enabled by default.
   Unproved shadow, DMA, and RS-485 blocks are deliberately omitted rather than
   exposed as partial features; and
@@ -1467,6 +1474,51 @@ vendor contract.  A third test rejects an unknown ``clock-abi`` value.
 The option describes QEMU's modeled devices in each kernel's namespace; it is
 not a copy of either published device tree, and no hardware comparison has
 been made.  ``DT-002`` stays open for that.
+
+### Bulk USB, UART busy-deadline and LMUL coverage checkpoint
+
+This checkpoint closes the three named software items that were left after
+the ``clock-abi`` work.  All three turned out to be evidence gaps rather than
+model defects: no device model changed, and the whole increment is test-only.
+
+**Bulk and isochronous USB migration.**  A hot-added CCID reader NAKs an idle
+read on its bulk IN endpoint exactly as an idle keyboard NAKs its interrupt
+read, so a read can be left pending there, migrated, and completed on the
+destination by a GetSlotStatus command on the bulk OUT endpoint; the reply
+arrives as a short packet whose residual is the untouched tail.  This covers
+the retry regime the interrupt case does not, since a bulk endpoint waits for
+a doorbell or a device wakeup rather than for the microframe kick timer.
+Isochronous in-flight transfers are not coverable here at all: ``usb-audio``
+is the only device in the tree declaring an isochronous endpoint and it is
+unmigratable, so a test pins that migration is refused while it is attached
+and accepted once it is unplugged.
+
+**UART busy deadline.**  Every existing UART test only ever asserted that
+BUSY was set, so a gate that never opened would have passed all of them.  Two
+tests now pin the closing edge to the nanosecond at two line formats and
+across a mid-frame migration: still gating LCR and divisor writes at the last
+nanosecond of the frame, open at the deadline itself.
+
+**XTheadVector SEW/LMUL.**  Compress gains e8,m2 and e8,m4, whose four- and
+two-bit mask strides no payload produced before, with deliberate noise in the
+unselected mask bits so a dense decode would compress different elements.
+Slide-up gains e64,m1, where VLMAX is two elements.  Both gain the first
+LMUL=4 register-group alignment coverage of any kind in the suite.
+
+Six mutations each fail exactly the intended test and nothing else: an
+off-by-one on the busy comparison, a busy deadline dropped at post-load, a
+wrong transfer-ring cycle state restored at xHCI post-load, a post-load that
+skips rebuilding running endpoints, a mask length that ignores LMUL, and a
+register-group alignment rule forced always-legal; a 64-bit slide-up element
+truncated to 32 bits fails the new e64,m1 case.  Forcing the reloaded
+endpoint state to ``EP_STOPPED`` deliberately does *not* fail, because the
+doorbell path re-establishes it -- a property of the model rather than a gap.
+
+Evidence: the board gate passes 175/175 normal, 168/168 dependency-minimal
+and 168/168 ASan/UBSan with no sanitizer finding.  The dependency-minimal and
+sanitizer builds carry no USB devices, so the three USB cases are skipped
+there and the two UART cases are not.  The complete normal RISC-V softmmu TCG
+gate passes 39/39, including all eight XTheadVector payloads.
 
 ### Vendor U-Boot configuration checkpoint
 
@@ -2315,8 +2367,10 @@ indices, a partial source-boundary crossing, in-place execution, full-width
   e64,m1 ``th.vrgather.vv`` index above 32 bits and the instruction-specific
   LMUL=1 masked-``v0`` prohibition for all three slide-down forms; two more
   targeted mutations fail at exits 14 and 15.  The follow-up independent
-  vector-index oracle covers e8,m2/e8,m8/e16,m1/e32,m1/e64,m1; other SEW/LMUL
-  and XLEN combinations remain open.
+  vector-index oracle covers e8,m2/e8,m8/e16,m1/e32,m1/e64,m1.  A later
+  checkpoint adds compress at e8,m2 and e8,m4, slide-up at e64,m1, and the
+  first LMUL=4 coverage of any kind; other SEW/LMUL and XLEN combinations
+  remain open.
 Vector loads/stores now enforce natural alignment
 independently of MXSTATUS.MM, matching the pinned openC910 LSU rule; ordinary
 guarded-page vector load/store priority is covered in S and U modes.  Standard
@@ -2641,7 +2695,20 @@ test-only TH1520 glue enumerates the attached keyboard.  A read left pending
 on a hot-added keyboard's interrupt endpoint now migrates and completes on
 the destination when the key arrives there, with a non-migration control;
 that validates the upstream xHCI post-load re-kick for one interrupt IN
-transfer and nothing about bulk, isochronous, streams or a data stage.
+transfer.  A companion pair does the same on a **bulk** endpoint: a read left
+pending on a hot-added CCID reader's bulk IN endpoint migrates, and a
+GetSlotStatus command issued on the destination's bulk OUT endpoint produces
+the reply that completes it as a short packet.  That covers the other retry
+regime, because a bulk endpoint waits in xHCI's retry state for a doorbell or
+a device wakeup instead of the microframe kick timer an interrupt endpoint
+uses.  **Isochronous** in-flight transfers cannot be covered at all here, and
+the reason is a device property rather than an xHCI limitation: ``usb-audio``
+is the only device in the tree that declares an isochronous endpoint and it
+is marked unmigratable, so migration is refused outright while it is
+attached.  A test pins that refusal in both directions so that making
+``usb-audio`` migratable is caught and answered with a real in-flight
+isochronous test rather than silently leaving the gap.  Streams and
+mid-data-stage transfers remain untested.
 The generic DWC3 node
 remains generated but disabled until mainline gains a real parent binding and
 driver.  Exact DWC3/xHCI synthesis values, distinct reset domains, clocks,

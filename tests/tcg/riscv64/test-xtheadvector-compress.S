@@ -362,6 +362,65 @@ _start:
     li      a2, 27
     call    check_16
 
+    /*
+     * e8,m2 gives mlen = SEW/LMUL = 4, so a mask bit every fourth bit, and
+     * e8,m4 gives mlen = 2.  No other payload produces either stride: the
+     * suite only ever reaches mlen 1, 8, 32 and 64.  The mask bytes below
+     * deliberately carry nonzero bits between the selected ones, so a decode
+     * that walked the mask densely would compress different elements.
+     */
+    lla     a0, expected
+    lla     a1, source128
+    lla     a2, mask_mlen4
+    li      a3, 32
+    li      a4, 2             /* log2(mlen) */
+    call    oracle_compress_mlen
+    li      t1, 16
+    SET_E8_M1
+    lla     t2, mask_mlen4
+    .word   0x12038087      /* th.vlb.v v1, (t2) */
+    li      t1, 32
+    .word   0x00137057      /* th.vsetvli zero, t1, e8, m2 */
+    lla     t2, source128
+    .word   0x0203f407      /* th.vle.v v8, (t2) */
+    .word   0x5e80a257      /* th.vcompress.vm v4, v8, v1 */
+    lla     t2, output
+    .word   0x0203f227      /* th.vse.v v4, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 40
+    call    check_16
+    li      a2, 41
+    call    check_16
+
+    lla     a0, expected
+    lla     a1, source128
+    lla     a2, mask_mlen2
+    li      a3, 64
+    li      a4, 1             /* log2(mlen) */
+    call    oracle_compress_mlen
+    li      t1, 16
+    SET_E8_M1
+    lla     t2, mask_mlen2
+    .word   0x12038087      /* th.vlb.v v1, (t2) */
+    li      t1, 64
+    .word   0x00237057      /* th.vsetvli zero, t1, e8, m4 */
+    lla     t2, source128
+    .word   0x0203f407      /* th.vle.v v8, (t2) */
+    .word   0x5e80a257      /* th.vcompress.vm v4, v8, v1 */
+    lla     t2, output
+    .word   0x0203f227      /* th.vse.v v4, (t2) */
+    lla     a0, output
+    lla     a1, expected
+    li      a2, 42
+    call    check_16
+    li      a2, 43
+    call    check_16
+    li      a2, 44
+    call    check_16
+    li      a2, 45
+    call    check_16
+
     /* Restore e8,m1 for the legality block below. */
     li      t1, 16
     SET_E8_M1
@@ -396,6 +455,25 @@ _start:
     li      t0, 5
     beq     s1, t0, 1f
     li      a0, 25
+    j       exit
+1:
+
+    /*
+     * Register-group alignment at LMUL=4.  Every vector register a widening
+     * group names must be a multiple of the group size, a rule no payload
+     * exercised before: the suite only ever set LMUL to 1, 2 or 8.
+     */
+    li      t1, 64
+    .word   0x00237057      /* th.vsetvli zero, t1, e8, m4 */
+    EXPECT_ILLEGAL 0x5e80a157, 6, 46    /* th.vcompress.vm v2, v8, v1 */
+    EXPECT_ILLEGAL 0x5e90a257, 7, 47    /* th.vcompress.vm v4, v9, v1 */
+
+    /* The aligned form of the same instruction stays legal. */
+    li      s0, 0
+    .word   0x5e80a257      /* th.vcompress.vm v4, v8, v1 */
+    li      t0, 7
+    beq     s1, t0, 1f
+    li      a0, 48
     j       exit
 1:
 
@@ -564,6 +642,43 @@ oracle_compress_m8:
 .Lcm8_done:
     ret
 
+/*
+ * a0 expected, a1 source, a2 mask, a3 vl (= VLMAX here), a4 log2(mlen).
+ * Element i is selected by bit i*mlen of the mask, counting from bit 0 of
+ * byte 0, which is the frozen RVV 0.7.1 mask layout.
+ */
+oracle_compress_mlen:
+    li      t0, 0             /* source element index */
+    li      t4, 0             /* destination count */
+.Lcml_body:
+    bgeu    t0, a3, .Lcml_tail
+    sll     t1, t0, a4        /* bit position */
+    srli    t2, t1, 3         /* byte holding it */
+    add     t2, a2, t2
+    lbu     t2, 0(t2)
+    andi    t3, t1, 7         /* bit within that byte */
+    srl     t2, t2, t3
+    andi    t2, t2, 1
+    beqz    t2, .Lcml_next
+    add     t1, a1, t0
+    lbu     t3, 0(t1)
+    add     t1, a0, t4
+    sb      t3, 0(t1)
+    addi    t4, t4, 1
+.Lcml_next:
+    addi    t0, t0, 1
+    j       .Lcml_body
+.Lcml_tail:
+    mv      t0, t4
+.Lcml_tail_loop:
+    bgeu    t0, a3, .Lcml_done
+    add     t1, a0, t0
+    sb      zero, 0(t1)
+    addi    t0, t0, 1
+    j       .Lcml_tail_loop
+.Lcml_done:
+    ret
+
 check_16:
     li      t0, 16
 .Lcheck_loop:
@@ -653,6 +768,21 @@ source128:
 mask128:
     .byte   0x55, 0x55, 0x55, 0x55, 0xaa, 0xaa, 0xaa, 0xaa
     .byte   0x0f, 0xf0, 0x81, 0x18, 0x00, 0xff, 0x01, 0x80
+    .balign 16
+/*
+ * mlen = 4: bits 0 and 4 of each byte select elements 2b and 2b+1.  Bits
+ * 1-3 and 5-7 are noise a correct decode must ignore.
+ */
+mask_mlen4:
+    .byte   0x1e, 0xe1, 0x11, 0xee, 0x0e, 0xf1, 0x10, 0x1f
+    .byte   0xe0, 0x11, 0x1e, 0xe1, 0x01, 0x10, 0xff, 0x0e
+/*
+ * mlen = 2: bits 0, 2, 4 and 6 of each byte select four elements.  The odd
+ * bits are noise.
+ */
+mask_mlen2:
+    .byte   0x55, 0xaa, 0x51, 0x0a, 0x44, 0x11, 0xff, 0x00
+    .byte   0x05, 0x50, 0x41, 0x14, 0xaf, 0xfa, 0x01, 0x54
 
     .data
     .balign 16
