@@ -483,6 +483,16 @@ faulting at it; none establishes a physical reset value, an electrical
 behaviour or an OS handoff.  Vendor U-Boot still stops before handing off to a
 kernel, and the assets it needs are the ones tracked under ``DOC-002a``.
 
+The 2026-08-28 checkpoints -- ``UQ-L016`` through ``UQ-L018``, the pinctrl
+restoration, ``UQ-014``, the GMAC and USB halves of ``MIG-001``, the GMAC
+AXI clock coupling and the shelved eMMC coupling -- do not move either
+rounded estimate either.  They remove defects and close migration boundaries
+in areas that were already counted, and the evidence base grew from 149 to
+166 board subtests without new modeled scope.  The remaining strict gap is
+still dominated by items no software change can close: 62 of 80 open ledger
+entries need the physical board, and the eMMC clock question under
+``DT-002`` now needs a decision before that leaf can be coupled.
+
 The USB-host submilestone is about **90% complete**: the TH1520 wrapper,
 miscellaneous resets, DWC3/xHCI host, DMA, PLIC IRQ, one USB2/USB3 connector,
 hotplug, migration and upstream-Linux keyboard enumeration work.  Its remaining
