@@ -466,6 +466,15 @@ identity on little-endian, so element width alone exercises no further
 distinct logic.  The genuine width risk in this area is an index type rather
 than an element type, which is what ``UQ-L014`` was.
 
+LMUL is a different matter, because it changes the mask layout the other
+way: at e8,m8 ``mlen`` is 1 and the mask becomes a dense bitmap, one bit per
+element across 128 elements, read from a single register while the sources
+and destination are eight-register groups.  A compress case at e8,m8 with a
+mixed 128-bit mask passes.  It is the only case that exercises sub-byte mask
+positions: collapsing ``th_elem_mask``'s position to zero whenever ``mlen``
+is below 8 fails it at exit 20 and touches neither the e8,m1 cases, where
+the position is a byte offset, nor the e64 case, where it is already zero.
+
 ### Current focused FXCR/MMC-alias checkpoint
 
 Normal and dependency-minimal builds both pass the C910 FXCR execution guest,
@@ -693,6 +702,15 @@ mount ext2, reproduce the stable payload hash and remount root read-only.
 Normal and dependency-minimal builds pass.  This supersedes the path-only
 control, but it is still bounded evidence rather than indefinite stress or a
 statement about the owner's hardware.
+
+Formal repetition, 2026-08-28: the PARTUUID-based ``test_emmc_root_smp``
+control was run eight further times in sequence on an otherwise idle host
+(``validation-artifacts/smp-repetition-20260828.log``).  All eight passed in
+eight to ten seconds each; every run brought all four CPUs online on both of
+its boots, reproduced ``EMMC_PROCESS_REOPEN_PASS``, and logged no soft
+lockup or failed CPU.  The original one-off CPU2-offline event therefore
+remains unreproduced across sixteen completed four-hart boots of the formal
+gate plus the earlier exploratory runs; it stays a historical observation.
 
 ### C910 FXCR implementation checkpoint
 
