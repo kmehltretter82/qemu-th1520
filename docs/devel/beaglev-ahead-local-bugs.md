@@ -14,8 +14,8 @@ baseline reproducer.
 
 ## Current disposition
 
-The fifteen local findings recorded during implementation (`UQ-L001` through
-`UQ-L015`) are fixed and have focused regressions.  The GMAC audit found that
+The sixteen local findings recorded during implementation (`UQ-L001` through
+`UQ-L016`) are fixed and have focused regressions.  The GMAC audit found that
 the reusable DWC GMAC transmit path advertised checksum offload while its
 inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
 did not model the feature/TSF gates or descriptor-format error status.  At the
@@ -105,6 +105,7 @@ the short review index and current test checkpoint.
 | UQ-L012 | TH1520 PLL polling | A guest could observe virtual time beyond a due PLL-lock deadline while ``PLL_STS`` remained stale until the I/O thread dispatched its timer callback. | Fixed by materializing an expired deadline on ``PLL_STS`` reads through the existing lock helper; the raw RV64 single-threaded-TCG qtest fails with the preserved pre-fix binary and passes twice, across reset, with the fix. |
 | UQ-L013 | XTheadVector scalar permutation | `th.vslidedown.vx` could wrap a full-XLEN offset into a valid source lane, and the `th.vrgather.vx` helper truncated its scalar index to 32 bits. | Fixed with overflow-safe slide bounds and a `target_ulong` gather index; an independent scalar oracle covers helper/optimized, mask/prestart/tail, in-place and boundary paths, and mutations fail at exits 3, 9 and 13. |
 | UQ-L014 | XTheadVector vector permutation/slide legality | `th.vrgather.vv` truncated e64 vector indices to 32 bits, and the slide-down translators missed the frozen v0.7.1 instruction-specific masked-`vd=v0` prohibition at LMUL=1. | Fixed in `78ad4d6e56` with a `uint64_t` gather index and dedicated slide checker; an e64,m1 oracle, three exact illegal traps, state preservation and legal controls pass, while mutations fail at exits 14 and 15. |
+| UQ-L016 | DWC GMAC partial transmit frame | A multi-descriptor frame whose terminal segment was not yet owned by the DMA was accumulated in locals of one transmit call, so the engine's suspend discarded every segment already read; the resumed frame carried only the segments submitted after the suspend, and no migration stream carried the partial frame at all. | Fixed by giving the transmit engine ownership of the partial frame: it lives in device state, resets with the device, and migrates through a per-identity `tx-frame` subsection emitted only while a frame is suspended. A two-segment qtest fails before the fix with a 64-byte frame instead of 128, and a matching migration qtest fails when the subsection is removed. |
 | UQ-L015 | DWC GMAC receive-interrupt watchdog | The local DWMAC 3.70/Ahead path advertised and Linux enabled RIWT mitigation, but the register did not schedule RI, so DIC-suppressed receive completions could remain unreported. | Fixed in `1369cec4d9` with low-byte RIWT timing, RI/NIS/PLIC delivery, cancellation/reset and VMState v2; focused watchdog/migration tests pass and the GMAC group passes 12/12. |
 
 ## Audit evidence
@@ -185,6 +186,49 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 ``i_min = MAX(env->vstart, offset)`` with ``i_min = env->vstart`` fails at exit
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
+
+### Current GMAC partial-transmit-frame checkpoint (UQ-L016)
+
+This is the first ``MIG-001`` in-flight DMA item to close, and it found a
+defect before it found a migration gap.  The reusable DWC GMAC transmit engine
+kept a multi-descriptor frame in locals of one ``gmac_try_send_next_packet()``
+call.  Whenever the next descriptor was still owned by software the engine
+suspended and returned, discarding every segment it had already read from
+guest memory; the guest then supplied the terminal segment, the resumed call
+started from zero, and the frame went out carrying only that last segment.
+
+A two-descriptor reproducer submits a 64-byte first segment with ``OWN`` set
+and a 64-byte terminal segment with ``OWN`` clear, waits for ``TU`` and the
+descriptor pointer to advance, hands over the terminal segment and polls.
+Before the fix the wire carried 64 bytes instead of 128.  This is a real
+guest-visible truncation reachable by any driver that fills a ring
+incrementally.
+
+The fix gives the transmit engine ownership of the partial frame: the
+accumulated bytes, their length and the first-descriptor checksum control
+live in ``DWGMACState``, a first segment starts a new frame and drops any
+stale one, every error exit discards it, and device reset clears it.  The
+host-side allocation capacity is not migrated; it is rebuilt from the length.
+
+Migration carries the frame through a subsection that is only emitted while a
+frame is suspended, so an idle GMAC and every existing stream are unchanged.
+``savevm`` requires a subsection name to be prefixed by its parent's, and the
+reusable core is registered under both ``dw-gmac`` and ``npcm-gmac``, so each
+identity has its own description over one shared field table.  The
+``-dump-vmstate`` output lists both ``dw-gmac/tx-frame`` and
+``npcm-gmac/tx-frame``.  The shared-model check was not academic: a first
+version with one ``dw-gmac``-prefixed subsection passed the complete Ahead
+gate and aborted the NPCM suite on that exact assertion.
+
+The matching migration qtest suspends the engine mid-frame, migrates, hands
+the terminal descriptor to the destination, and requires the full 128-byte
+frame.  QEMU announces a migrated NIC with broadcast frames, so the test
+skips wire frames of any other length rather than assuming the transmitted
+frame is first.  Removing the subsection makes the destination emit nothing
+of the expected length, and the test fails at its readable-socket wait.
+
+Three-configuration gates after the fix: 155/155 normal, 154/154
+dependency-minimal, 154/154 ASan/UBSan, and the NPCM GMAC suite 7/7.
 
 ### Current XTheadVector gather-immediate and compress checkpoint
 
@@ -527,8 +571,12 @@ change must add a reproducer and a regression before changing any of them.
   No-Op completion, consumes it, then completes the next command at the next
   event-ring slot; omitting xHCI's command-ring VMState makes it fail.  That
   proves controller ring and IRQ continuity, not an attached USB device or
-  endpoint transfer.  GMAC and USB migration during in-flight DMA or an
-  attached transfer still need phase/ownership tests.  Focused same-version
+  endpoint transfer.  GMAC transmit now migrates at its real in-flight
+  boundary: a frame suspended between its first and terminal segment carries
+  its accumulated bytes and checksum control through a subsection, and the
+  destination completes it once the guest hands over the last descriptor.
+  USB migration during an attached transfer, and GMAC receive during an
+  in-flight frame, still need phase/ownership tests.  Focused same-version
   GMAC coverage preserves MAC0/MAC31, frame-filter, address-hash and VLAN
   registers, IPC state and an active enhanced ring, then proves post-load
   reject/accept behavior and a Type-2 RDES4 result.  DWC GMAC VMState v2 now

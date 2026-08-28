@@ -779,7 +779,7 @@ zero write or reset cancels it.  Current VMState version 2 preserves an armed
 deadline.  Older streams retain the low register byte but load unarmed because
 they contain no deadline.
 
-The complete GMAC qtest group passes 14/14.  Four clean normal/minimal
+The complete GMAC qtest group passes 16/16.  Four clean normal/minimal
 one-/four-hart Linux runs pass DHCP, 3/3 gateway pings and a 1 MiB HTTP
 SHA-256 download.  A retained contention run exposes a Linux masked-RI race:
 RIWT expires while RIE is masked, then an unrelated TX interrupt W1C-clears RI

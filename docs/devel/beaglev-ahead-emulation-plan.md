@@ -136,7 +136,7 @@ descriptor arms the one-shot timer; expiry raises RI/NIS and the GMAC PLIC
 line, while an immediate non-DIC RI, a zero write or reset cancels it.  Current
 VMState version 2 preserves an armed deadline; a pre-version-2 stream retains
 the masked low register byte but cannot reconstruct a missing deadline and is
-loaded unarmed.  The complete GMAC qtest group passes 14/14, including PHY
+loaded unarmed.  The complete GMAC qtest group passes 16/16, including PHY
 GPIO/reset-state migration plus focused watchdog and migration cases.  The
 direct normal board gate passes 149/149; the 115/115 dependency-minimal and
 ASan/UBSan gate records predate this checkpoint.
@@ -2325,7 +2325,7 @@ assembly and normal/enhanced status distinctions without changing guest
 buffers.  DMA RIWT now implements the driver's DIC-based interrupt-mitigation
 timer at the fixed 500 MHz TH1520 reset/reference rate, raises RI/NIS and PLIC
 source 66 on expiry, cancels on reset/zero/immediate RI, and migrates an armed
-deadline in VMState v2.  Fourteen focused GMAC qtests include a deterministic
+deadline in VMState v2.  Sixteen focused GMAC qtests include a deterministic
 rejection barrier, a 34-case filter matrix, a Type-2 matrix, an 18-case TX
 checksum matrix, PHY reset/interrupt GPIO wiring and reset-state migration,
 split-descriptor boundaries, filter/IPC-state migration and exact 81,920 ns
