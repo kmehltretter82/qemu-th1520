@@ -50,6 +50,8 @@
 #define TH1520_AP_TIMED_GATE_HZ 125000000
 /* stmmaceth: the GMAC AXI/DMA clock the pinned Linux RIWT conversion assumes. */
 #define TH1520_AP_GMAC_AXI_HZ 500000000
+/* The eMMC/SDIO core clock rate the generated DT already describes. */
+#define TH1520_AP_EMMC_SDIO_HZ 198000000
 
 typedef struct TH1520RegInfo {
     uint16_t offset;
@@ -202,13 +204,22 @@ static Clock *th1520_ap_clock_timed_output(TH1520APClockState *s,
     if (output == TH1520_AP_CLOCK_GATE_GMAC_AXI) {
         return s->gmac_axi_clock;
     }
+    if (output == TH1520_AP_CLOCK_GATE_EMMC_SDIO) {
+        return s->emmc_sdio_clock;
+    }
     return NULL;
 }
 
 static unsigned th1520_ap_clock_output_hz(unsigned int output)
 {
-    return output == TH1520_AP_CLOCK_GATE_GMAC_AXI ? TH1520_AP_GMAC_AXI_HZ :
-                                                     TH1520_AP_TIMED_GATE_HZ;
+    switch (output) {
+    case TH1520_AP_CLOCK_GATE_GMAC_AXI:
+        return TH1520_AP_GMAC_AXI_HZ;
+    case TH1520_AP_CLOCK_GATE_EMMC_SDIO:
+        return TH1520_AP_EMMC_SDIO_HZ;
+    default:
+        return TH1520_AP_TIMED_GATE_HZ;
+    }
 }
 
 static void th1520_ap_clock_update_gate(TH1520APClockState *s,
@@ -485,6 +496,8 @@ static void th1520_ap_clock_init(Object *obj)
         DEVICE(s), TH1520_AP_CLOCK_WDT1_OUTPUT);
     s->gmac_axi_clock = qdev_init_clock_out(
         DEVICE(s), TH1520_AP_CLOCK_GMAC_AXI_OUTPUT);
+    s->emmc_sdio_clock = qdev_init_clock_out(
+        DEVICE(s), TH1520_AP_CLOCK_EMMC_SDIO_OUTPUT);
 }
 
 static void th1520_ap_clock_class_init(ObjectClass *klass, const void *data)

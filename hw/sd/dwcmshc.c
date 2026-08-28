@@ -16,6 +16,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/sd/dwcmshc.h"
 #include "migration/vmstate.h"
+#include "hw/core/qdev-clock.h"
 
 #define DWCMSHC_VENDOR_POINTER          0x0e8
 #define DWCMSHC_VENDOR_WINDOW           0x100
@@ -390,6 +391,25 @@ static void dwcmshc_realize(DeviceState *dev, Error **errp)
     s->bus = qdev_get_child_bus(DEVICE(sdhci_sbd), "sd-bus");
 }
 
+static bool dwcmshc_core_clock_needed(void *opaque)
+{
+    DWCMSHCState *s = opaque;
+
+    return clock_has_source(s->core_clk);
+}
+
+/* Emitted only by an integration that connects the core clock. */
+static const VMStateDescription vmstate_dwcmshc_core_clock = {
+    .name = TYPE_DWC_MSHC "/core-clock",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = dwcmshc_core_clock_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_CLOCK(core_clk, DWCMSHCState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 static const VMStateDescription vmstate_dwcmshc = {
     .name = TYPE_DWC_MSHC,
     .version_id = 1,
@@ -404,6 +424,10 @@ static const VMStateDescription vmstate_dwcmshc = {
         VMSTATE_UINT32(embedded_ctrl, DWCMSHCState),
         VMSTATE_UINT8_ARRAY(phy, DWCMSHCState, DWCMSHC_PHY_SIZE),
         VMSTATE_END_OF_LIST(),
+    },
+    .subsections = (const VMStateDescription * const []) {
+        &vmstate_dwcmshc_core_clock,
+        NULL
     },
 };
 
@@ -420,11 +444,25 @@ static const Property dwcmshc_properties[] = {
     DEFINE_PROP_UINT16("vendor-area2", DWCMSHCState, vendor_area2, 0x180),
 };
 
+static void dwcmshc_core_clock_update(void *opaque, ClockEvent event)
+{
+    DWCMSHCState *s = opaque;
+
+    if (event == ClockUpdate && clock_get_hz(s->core_clk)) {
+        sdhci_core_clock_resumed(&s->sdhci);
+    }
+}
+
 static void dwcmshc_init(Object *obj)
 {
     DWCMSHCState *s = DWC_MSHC(obj);
 
     object_initialize_child(obj, "sdhci", &s->sdhci, TYPE_SYSBUS_SDHCI);
+    /* Created at init so the board can connect it before realize. */
+    s->core_clk = qdev_init_clock_in(DEVICE(obj), "core",
+                                     dwcmshc_core_clock_update, s,
+                                     ClockUpdate);
+    s->sdhci.core_clk = s->core_clk;
 }
 
 static void dwcmshc_class_init(ObjectClass *oc, const void *data)

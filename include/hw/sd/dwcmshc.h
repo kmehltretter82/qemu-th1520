@@ -8,6 +8,7 @@
 #define HW_SD_DWCMSHC_H
 
 #include "hw/sd/sdhci.h"
+#include "hw/core/clock.h"
 
 #define TYPE_DWC_MSHC "dwcmshc"
 OBJECT_DECLARE_SIMPLE_TYPE(DWCMSHCState, DWC_MSHC)
@@ -24,6 +25,8 @@ struct DWCMSHCState {
     BusState *bus;
 
     SDHCIState sdhci;
+    /* Controller core clock; a zero rate stalls the SDHCI data engine. */
+    Clock *core_clk;
 
     /* Read-only integration parameters. */
     uint64_t capareg;
