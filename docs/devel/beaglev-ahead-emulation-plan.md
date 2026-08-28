@@ -1701,9 +1701,11 @@ image for either one.
 The same cross-pair exposed a generated-DT compatibility issue: QEMU had used
 the generic ``thead,th1520-pinctrl`` string, whereas the pinned RevyOS driver
 matches only its older group-specific ``xuantie,th1520-groupN-pinctrl`` names.
-QEMU now emits the documented group-specific ``thead`` name followed by that
-vendor fallback for each of its three pad controllers.  The direct-DT qtest
-asserts both strings.  The resulting RevyOS/Alpine rerun recorded all four
+QEMU briefly emitted an invented group-specific ``thead`` name in front of
+that vendor fallback, which mainline's driver does not match; ``UQ-L017``
+restores the binding's sole ``thead,th1520-pinctrl`` compatible ahead of the
+fallback so each kernel matches its own string, and the direct-DT qtest
+asserts that pair.  The resulting RevyOS/Alpine rerun recorded all four
 markers in
 ``validation-artifacts/beaglev-ahead-alpine-revyos-pinctrl-20260826.log`` and
 no longer contains the previous AO GPIO/GPIO4 ``failed to register gpiochip``
@@ -1784,6 +1786,17 @@ QEMU's deterministic CIC0-3 transmit and RIWT contracts, while the clean
 Linux runs establish bounded bidirectional traffic; neither proves a physical
 link, the provisional hardware-feature aggregate, RTL8211F vendor behavior,
 dynamic clock/gate effects or the sustained traffic/stress requirement in P5.
+
+Those four runs predate commits ``6538905317`` and ``e248faad96``.  Between
+them and ``UQ-L017`` the mainline lane was dead: the pad controllers carried an
+invented ``thead,th1520-groupN-pinctrl`` compatible that mainline's driver does
+not match, every gpiochip deferred forever, and once the GMAC0 PHY gained
+``reset-gpios`` on GPIO3 the ethernet deferred with it.  ``run-fy5rp0f6``,
+``run-uik1cyw0``, ``run-unm20jtx`` and ``run-972e19bf`` record that state:
+``GMAC_TRAFFIC_FAIL`` at about three seconds with no ``eth0``.  After the
+correction, ``run-zosaows1`` (one hart) and ``run-qbaveqbv`` (four harts) pass
+all three markers with the PHY bound to its GPIO3 interrupt rather than
+polling, and with the receive-FIFO change of ``UQ-L018`` also present.
 
 The pinned Linux source, with ``CONFIG_DMATEST=y``, also binds the general
 controller as ``dw_axi_dmac_platform`` with four channels.  A tiny initramfs

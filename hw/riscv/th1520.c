@@ -1462,8 +1462,7 @@ static void th1520_create_pinctrl_fdt(
         const MemMapEntry *map = &th1520_memmap[info->memmap];
         g_autofree char *name =
             g_strdup_printf("/soc/pinctrl@%" HWADDR_PRIx, map->base);
-        g_autofree char *compatible =
-            g_strdup_printf("thead,th1520-group%u-pinctrl", info->group);
+        g_autofree char *compatible = g_strdup("thead,th1520-pinctrl");
         g_autofree char *vendor_compatible =
             g_strdup_printf("xuantie,th1520-group%u-pinctrl", info->group);
         const char *const compatibles[] = {
@@ -1474,10 +1473,12 @@ static void th1520_create_pinctrl_fdt(
         padctrl_phandles[i] = (*phandle)++;
         qemu_fdt_add_subnode(fdt, name);
         /*
-         * The documented binding uses group-specific ``thead`` compatibles.
-         * RevyOS' TH1520 driver still uses the older ``xuantie`` spelling.
-         * Retain it as a fallback so either driver can bind the same modeled
-         * register block and GPIO ranges.
+         * The mainline binding documents exactly one compatible,
+         * "thead,th1520-pinctrl", with the pad group carried by
+         * "thead,pad-group".  RevyOS' driver instead matches only its older
+         * group-specific "xuantie" spelling.  Emit both so either kernel binds
+         * the same modeled register block and GPIO ranges; a pad controller
+         * that fails to bind takes every gpiochip and the GMAC0 PHY with it.
          */
         qemu_fdt_setprop_string_array(fdt, name, "compatible",
                                       (char **)compatibles,

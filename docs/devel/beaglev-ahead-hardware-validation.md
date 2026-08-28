@@ -842,6 +842,17 @@ that schedule RIWT expires while RIE is masked; an unrelated TX interrupt
 causes the ISR to W1C-clear RI without scheduling RX, leaving three completed
 descriptors temporarily stranded and the 1 MiB transfer stalled.
 
+Those four runs predate commits ``6538905317`` and ``e248faad96``.  Between
+them and ``UQ-L017`` the mainline lane was dead: the pad controllers carried an
+invented ``thead,th1520-groupN-pinctrl`` compatible that mainline's driver does
+not match, every gpiochip deferred forever, and once the GMAC0 PHY gained
+``reset-gpios`` on GPIO3 the ethernet deferred with it.  ``run-fy5rp0f6``,
+``run-uik1cyw0``, ``run-unm20jtx`` and ``run-972e19bf`` record that state:
+``GMAC_TRAFFIC_FAIL`` at about three seconds with no ``eth0``.  After the
+correction, ``run-zosaows1`` (one hart) and ``run-qbaveqbv`` (four harts) pass
+all three markers with the PHY bound to its GPIO3 interrupt rather than
+polling, and with the receive-FIFO change of ``UQ-L018`` also present.
+
 The fixed 500 MHz conversion is not a dynamic clock model or a measurement of
 the owner's silicon.  Hardware comparison must establish the actual rate on
 both cores, DIC start/reload behavior, RI/NIS W1C and re-arm ordering, zero and

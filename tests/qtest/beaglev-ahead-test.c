@@ -1370,13 +1370,13 @@ static uint32_t assert_padctrl_fdt(const void *fdt,
 {
     static const char *const compatibles[][2] = {
         {
-            "thead,th1520-group1-pinctrl",
+            "thead,th1520-pinctrl",
             "xuantie,th1520-group1-pinctrl",
         }, {
-            "thead,th1520-group2-pinctrl",
+            "thead,th1520-pinctrl",
             "xuantie,th1520-group2-pinctrl",
         }, {
-            "thead,th1520-group3-pinctrl",
+            "thead,th1520-pinctrl",
             "xuantie,th1520-group3-pinctrl",
         },
     };

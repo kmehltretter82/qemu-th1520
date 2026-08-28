@@ -14,8 +14,8 @@ baseline reproducer.
 
 ## Current disposition
 
-The sixteen local findings recorded during implementation (`UQ-L001` through
-`UQ-L016`) are fixed and have focused regressions.  The GMAC audit found that
+The seventeen local findings recorded during implementation (`UQ-L001` through
+`UQ-L017`) are fixed and have focused regressions.  The GMAC audit found that
 the reusable DWC GMAC transmit path advertised checksum offload while its
 inherited shortcut handled only IPv4 TCP/UDP, treated CIC2 and CIC3 alike, and
 did not model the feature/TSF gates or descriptor-format error status.  At the
@@ -105,6 +105,7 @@ the short review index and current test checkpoint.
 | UQ-L012 | TH1520 PLL polling | A guest could observe virtual time beyond a due PLL-lock deadline while ``PLL_STS`` remained stale until the I/O thread dispatched its timer callback. | Fixed by materializing an expired deadline on ``PLL_STS`` reads through the existing lock helper; the raw RV64 single-threaded-TCG qtest fails with the preserved pre-fix binary and passes twice, across reset, with the fix. |
 | UQ-L013 | XTheadVector scalar permutation | `th.vslidedown.vx` could wrap a full-XLEN offset into a valid source lane, and the `th.vrgather.vx` helper truncated its scalar index to 32 bits. | Fixed with overflow-safe slide bounds and a `target_ulong` gather index; an independent scalar oracle covers helper/optimized, mask/prestart/tail, in-place and boundary paths, and mutations fail at exits 3, 9 and 13. |
 | UQ-L014 | XTheadVector vector permutation/slide legality | `th.vrgather.vv` truncated e64 vector indices to 32 bits, and the slide-down translators missed the frozen v0.7.1 instruction-specific masked-`vd=v0` prohibition at LMUL=1. | Fixed in `78ad4d6e56` with a `uint64_t` gather index and dedicated slide checker; an e64,m1 oracle, three exact illegal traps, state preservation and legal controls pass, while mutations fail at exits 14 and 15. |
+| UQ-L017 | TH1520 pad-controller DT compatible | Commit `6538905317` replaced the generated `thead,th1520-pinctrl` compatible with an invented `thead,th1520-groupN-pinctrl` string that no driver matches, while adding the RevyOS `xuantie` fallback.  Mainline's pinctrl stopped binding, every DesignWare gpiochip deferred on its `gpio-ranges`, and after `e248faad96` gave the GMAC0 PHY a GPIO3 reset line the mainline ethernet deferred with it: `eth0` never existed and the traffic gate failed at three seconds.  Only storage markers were re-checked after those commits. | Fixed by emitting the binding's sole compatible, `thead,th1520-pinctrl`, ahead of the vendor fallback, so each kernel matches its own string.  The direct-DT qtest asserts the corrected pair; the mainline traffic gate passes on one and four harts, the RevyOS/Alpine pair and the Tuxboot control still pass, and no kernel reports `failed to register gpiochip`. |
 | UQ-L016 | DWC GMAC partial transmit frame | A multi-descriptor frame whose terminal segment was not yet owned by the DMA was accumulated in locals of one transmit call, so the engine's suspend discarded every segment already read; the resumed frame carried only the segments submitted after the suspend, and no migration stream carried the partial frame at all. | Fixed by giving the transmit engine ownership of the partial frame: it lives in device state, resets with the device, and migrates through a per-identity `tx-frame` subsection emitted only while a frame is suspended. A two-segment qtest fails before the fix with a 64-byte frame instead of 128, and a matching migration qtest fails when the subsection is removed. |
 | UQ-L015 | DWC GMAC receive-interrupt watchdog | The local DWMAC 3.70/Ahead path advertised and Linux enabled RIWT mitigation, but the register did not schedule RI, so DIC-suppressed receive completions could remain unreported. | Fixed in `1369cec4d9` with low-byte RIWT timing, RI/NIS/PLIC delivery, cancellation/reset and VMState v2; focused watchdog/migration tests pass and the GMAC group passes 12/12. |
 
@@ -186,6 +187,39 @@ payload is mutation-sensitive rather than vacuous.  Replacing the helper's
 ``i_min = MAX(env->vstart, offset)`` with ``i_min = env->vstart`` fails at exit
 1, and removing ``(a->rd != a->rs2)`` from ``slideup_check_th`` fails at exit
 23.  Both mutations were applied to a scratch copy and reverted.
+
+### Current TH1520 pinctrl compatible checkpoint (UQ-L017)
+
+Re-running the GMAC Linux traffic gate for ``UQ-L018`` failed on both one and
+four harts with ``GMAC_TRAFFIC_FAIL`` at about three seconds, before DHCP was
+attempted; the retained ``run-53c1sfu1`` race fails much later, after DHCP and
+ping pass.  The DMA trace held only reset and link-down lines and the console
+had no stmmac probe at all, so ``eth0`` never existed.  A bisect that stashed
+only the receive-FIFO change and ran the gate on a transmit-fix-only binary
+failed identically, which cleared both of the day's device changes.
+
+The console named the cause: ``gpio-dwapb ...: failed to register gpiochip
+for port0`` for all six controllers on every deferred-probe pass.  Commit
+``6538905317`` had replaced the generated ``thead,th1520-pinctrl`` compatible
+with ``thead,th1520-groupN-pinctrl``, described in its message as the
+documented group-specific binding.  It is not: the mainline binding's enum,
+``th1520.dtsi`` and ``pinctrl-th1520.c`` all carry exactly one string,
+``thead,th1520-pinctrl``, with the group in ``thead,pad-group``, and RevyOS
+matches only ``xuantie,th1520-groupN-pinctrl``.  The invented string matched
+nothing, mainline's pad controllers never bound, each gpiochip deferred on its
+``gpio-ranges``, and once ``e248faad96`` gave the GMAC0 PHY a ``reset-gpios``
+on GPIO3 the ethernet deferred with it.  The last passing traffic runs predate
+both commits; only storage markers were re-checked afterwards.
+
+The generated nodes now carry ``thead,th1520-pinctrl`` followed by the vendor
+fallback, and the direct-DT qtest asserts that pair.  Mainline ``run-zosaows1``
+and ``run-qbaveqbv`` pass all three traffic markers on one and four harts, with
+the RTL8211F now bound to its GPIO3 interrupt (``irq=25``) rather than polling
+and DHCP completing at 4.5 s instead of 11.9 s because no probe defers.  The
+RevyOS/Alpine cross-pair recorded its four markers in
+``validation-artifacts/beaglev-ahead-alpine-revyos-pinctrl-fix-20260828.log``,
+and neither kernel reports a gpiochip failure.  The Tuxboot ``test_emmc_root``
+and ``test_emmc_root_smp`` controls pass.
 
 ### Current GMAC partial-transmit-frame checkpoint (UQ-L016)
 
@@ -334,6 +368,17 @@ Four clean pinned-Linux runs pass DHCP, 3/3 gateway pings and the SHA-256 of a
 expires while RIE is masked, an unrelated TX interrupt W1C-clears RI without
 scheduling RX, and three completed descriptors are temporarily stranded.  It
 is not hidden by a QEMU workaround.
+
+Those four runs predate commits ``6538905317`` and ``e248faad96``.  Between
+them and ``UQ-L017`` the mainline lane was dead: the pad controllers carried an
+invented ``thead,th1520-groupN-pinctrl`` compatible that mainline's driver does
+not match, every gpiochip deferred forever, and once the GMAC0 PHY gained
+``reset-gpios`` on GPIO3 the ethernet deferred with it.  ``run-fy5rp0f6``,
+``run-uik1cyw0``, ``run-unm20jtx`` and ``run-972e19bf`` record that state:
+``GMAC_TRAFFIC_FAIL`` at about three seconds with no ``eth0``.  After the
+correction, ``run-zosaows1`` (one hart) and ``run-qbaveqbv`` (four harts) pass
+all three markers with the PHY bound to its GPIO3 interrupt rather than
+polling, and with the receive-FIFO change of ``UQ-L018`` also present.
 
 The current complete board gates pass **116/116** normal, **115/115**
 dependency-minimal and **115/115** ASan/UBSan.  The normal full RISC-V TCG gate
