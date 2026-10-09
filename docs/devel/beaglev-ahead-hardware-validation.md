@@ -1,6 +1,6 @@
 # BeagleV Ahead hardware validation and uncertainty ledger
 
-Status: the owner's board is powered and running its vendor Linux image.
+Status: the owner's physical board is available for bounded measurements.
 Bounded owner-board measurements from 2026-10-09 are recorded in
 [the validation report](beaglev-ahead-hardware-validation-20261009.md), with
 [the executed plan](beaglev-ahead-hardware-validation-plan.md). Integer, atomic,
@@ -13,6 +13,14 @@ A subsequent [current-mainline QEMU boot check](beaglev-ahead-mainline-20261009.
 passed with generated and upstream Ahead DTs, including four CPUs, eMMC root,
 matching scalar bytes, timer checks and runtime UART. This is virtual boot
 evidence; the physical factory boot and recovery paths remain unverified.
+
+A subsequent [physical mainline RAM boot](beaglev-ahead-mainline-hardware-20261009.md)
+passed on all four CPUs under the factory resident firmware, with matching
+scalar output hashes, successful timer checks and runtime UART output. The
+test used an adapted upstream DT with storage controllers disabled and ran
+entirely from initramfs; its software reboot stalled. Factory recovery after
+the requested RESET-button press is still pending. This bounded result does
+not close any open item below.
 
 Board identity supplied by owner:
 

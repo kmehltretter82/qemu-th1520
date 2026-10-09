@@ -7,6 +7,10 @@ the scalar and timer workloads, and printed through the runtime UART.
 The physical board remains on `5.10.113-yocto-standard`; no hardware boot,
 storage or boot-environment changes were made for this test.
 
+The subsequent [physical mainline RAM boot](beaglev-ahead-mainline-hardware-20261009.md)
+uses this exact kernel and configuration and records the separate hardware
+handover, CPU/timer/UART observations and recovery boundary.
+
 ## Exact build
 
 * Linux source: Torvalds mainline fetched on 2026-10-09, commit
