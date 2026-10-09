@@ -9,6 +9,11 @@ revision; timer consistency observations also passed. Privileged/reset,
 electrical and other unmeasured details remain open. No ledger entry is closed
 by this checkpoint.
 
+A subsequent [current-mainline QEMU boot check](beaglev-ahead-mainline-20261009.md)
+passed with generated and upstream Ahead DTs, including four CPUs, eMMC root,
+matching scalar bytes, timer checks and runtime UART. This is virtual boot
+evidence; the physical factory boot and recovery paths remain unverified.
+
 Board identity supplied by owner:
 
 * distributor part: 2820-102991698-ND
