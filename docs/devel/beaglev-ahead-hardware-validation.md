@@ -1,7 +1,13 @@
 # BeagleV Ahead hardware validation and uncertainty ledger
 
-Status: the owner's hardware is not yet powered; owner-board observations are
-pending
+Status: the owner's board is powered and running its vendor Linux image.
+Bounded owner-board measurements from 2026-10-09 are recorded in
+[the validation report](beaglev-ahead-hardware-validation-20261009.md), with
+[the executed plan](beaglev-ahead-hardware-validation-plan.md). Integer, atomic,
+floating-point, legacy-vector and UART result bytes matched the tested QEMU
+revision; timer consistency observations also passed. Privileged/reset,
+electrical and other unmeasured details remain open. No ledger entry is closed
+by this checkpoint.
 
 Board identity supplied by owner:
 
@@ -46,7 +52,7 @@ only bit 0 of ``IC_ENABLE``; its disable helper writes ``~1``.  The selected
 CPU-voltage sequence.  The extracted public board schematic labels U81
 ``DA9063`` and connects ``AON_SDA``/``AON_SCL`` to
 ``DA9063_SDA``/``DA9063_SCL``.  This is source/schematic evidence, not an
-observation of the owner's unpowered board.
+observation of the owner's board at that earlier checkpoint.
 
 QEMU maps a generic 4 KiB controller, routes source 79 and accepts only that
 enable bit for the AON instance.  It attaches a private, partial DA9063 slave
@@ -84,7 +90,7 @@ CFG0/CFG1 at ``0x0``/``0x4``, the PLL words at ``0x8``/``0xc``/``0x18``, and
 their reset fields and writable masks.  The selected 3733 LPDDR4X path writes
 those SYSREG words, a DesignWare controller at ``0xffff000000``, and two PHY
 CSR regions at ``0xfffd000000`` and ``0xfffe000000``.  This is public-source
-evidence, not an observation of the owner's unpowered board.
+evidence, not an observation of the owner's board at that earlier checkpoint.
 
 QEMU maps CFG0/CFG1 with source-derived masks and reset values, the PLL words,
 a bounded ``0x3000`` controller window, and the source-used ``0x200000``
