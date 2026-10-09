@@ -17,10 +17,11 @@ evidence; the physical factory boot and recovery paths remain unverified.
 A subsequent [physical mainline RAM boot](beaglev-ahead-mainline-hardware-20261009.md)
 passed on all four CPUs under the factory resident firmware, with matching
 scalar output hashes, successful timer checks and runtime UART output. The
-test used an adapted upstream DT with storage controllers disabled and ran
+test used an adapted upstream DT with all three MMC controllers disabled and ran
 entirely from initramfs; its software reboot stalled. Factory recovery after
-the requested RESET-button press is still pending. This bounded result does
-not close any open item below.
+the owner's RESET-button press and one orderly stock reboot was verified,
+including Wi-Fi, key-based SSH and unchanged boot-file hashes. This bounded
+result does not close any open item below.
 
 Board identity supplied by owner:
 

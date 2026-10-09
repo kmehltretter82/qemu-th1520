@@ -5,12 +5,14 @@ The same unpatched mainline kernel used in the
 owner's physical BeagleV Ahead through a temporary kexec handover. All four
 CPUs came online, the unchanged scalar/atomic/floating-point workload matched
 the QEMU hashes on every hart, timer checks passed, and the runtime UART
-accepted output. The test ran entirely from an initramfs with no storage
-controllers enabled in its device tree.
+accepted output. The test ran entirely from an initramfs with all three MMC
+controllers disabled in its device tree.
 
-Factory recovery verification is pending the owner's RESET-button press.
-The test's software reboot reached `Restarting system` without returning to
-factory firmware. No eMMC image, boot file or saved boot environment was changed.
+Factory recovery is verified: the owner's RESET-button press returned to the
+stock kernel, and one subsequent orderly stock reboot restored Wi-Fi and
+key-based SSH. The test's software reboot reached `Restarting system` without
+returning to factory firmware. All four factory boot-file hashes match the
+pre-test snapshot; no eMMC image or saved boot environment was replaced.
 
 ## Kernel, firmware and RAM payload
 
@@ -89,6 +91,7 @@ from the minimal mainline configuration; UART provided the observation path.
 | Runtime `ttyS0` write | Passed; PLIC source 36 recorded |
 | Ghostwrite mitigation | Enabled; status reports `xtheadvector disabled` |
 | Software reset | Stalled at `Restarting system`; manual reset needed |
+| Factory recovery | RESET plus one orderly stock reboot; kernel, Wi-Fi and SSH verified |
 
 Each scalar output is 880,336 bytes / 15,720 records, with SHA-256
 `cf891df2c8b7af547b3c9574a0801b9d68976828dd42ebf51f53556cb80a2c11`.
@@ -104,6 +107,31 @@ Private source/helper snapshots, payloads, build and load logs, the console,
 decoded timer bytes and machine-readable results are retained under
 `beagle/captures/20261009-mainline-hardware/` in the owner's workspace.
 Raw board/network identifiers are not included in this public report.
+
+## Factory recovery
+
+The original passive UART listener reached its 600-second limit before the
+owner pressed RESET, so the first recovery boot is not present in that log.
+A new UART command capture verified the stock
+`5.10.113-yocto-standard` kernel, a new boot ID, `kexec_loaded=0`, and the
+factory root mounted read/write. The kernel Image, DTB, resident-firmware file
+and extlinux configuration all had their original SHA-256 hashes.
+
+Wi-Fi initially failed to return: the stock built-in DHD driver failed to
+enumerate its SDIO device, and `wlan0` was absent. One orderly `systemctl reboot`
+of the stock system restored SDIO discovery, Wi-Fi association and DHCP.
+Key-based SSH then succeeded with the original pinned host key. The DHCP
+address had changed; the owner's local SSH connection file was updated after
+host-key verification. No Wi-Fi configuration was rewritten.
+
+The final SSH inspection verified all four CPUs online, the same factory
+kernel, active Wi-Fi and SSH services, `kexec_loaded=0`, absence of the
+temporary `/tmp` payload, and all four boot-file hashes matching again.
+The captured orderly factory reboot is 94,924 bytes, SHA-256
+`427a2175ff183c3e5d087dec74b85e5b62c55ace2f4f6132c356837aa5ed236a`.
+This demonstrates recovery for this RAM-only experiment; it does not establish
+microSD recovery, a Mac USB reflashing procedure, or the cause of the initial
+SDIO failure or mainline reset stall. UART was released after verification.
 
 This proves a bounded mainline RAM boot under the factory resident firmware.
 It does not qualify mainline Wi-Fi, Ethernet, eMMC, microSD, USB, display,
