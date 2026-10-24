@@ -174,6 +174,21 @@ static void dw_i2c_update_irq(DesignWareI2CState *s)
     qemu_set_irq(s->irq, !!(intr & DW_IC_INTR_ANY_MASK));
 }
 
+static void dw_i2c_update_rx_status(DesignWareI2CState *s)
+{
+    if (fifo8_is_empty(&s->rx_fifo)) {
+        s->regs[R_DW_IC_STATUS] &= ~R_DW_IC_STATUS_RFNE_MASK;
+    } else {
+        s->regs[R_DW_IC_STATUS] |= R_DW_IC_STATUS_RFNE_MASK;
+    }
+
+    if (fifo8_is_full(&s->rx_fifo)) {
+        s->regs[R_DW_IC_STATUS] |= R_DW_IC_STATUS_RFF_MASK;
+    } else {
+        s->regs[R_DW_IC_STATUS] &= ~R_DW_IC_STATUS_RFF_MASK;
+    }
+}
+
 static void dw_i2c_stop(DesignWareI2CState *s)
 {
     s->implicit_stop_pending = false;
@@ -217,6 +232,7 @@ static uint64_t dw_ic_data_cmd_reg_post_read(RegisterInfo *reg, uint64_t value)
     }
 
     value = fifo8_pop(&s->rx_fifo);
+    dw_i2c_update_rx_status(s);
     if (s->implicit_stop_on_fifo_drain && s->implicit_stop_pending &&
         s->regs[R_DW_IC_RXFLR] == 0 && i2c_bus_busy(s->bus)) {
         i2c_nack(s->bus);
@@ -363,6 +379,7 @@ static void dw_i2c_reset_to_idle(DesignWareI2CState *s)
     s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_RX_OVER_MASK;
     s->regs[R_DW_IC_RXFLR] = 0;
     fifo8_reset(&s->rx_fifo);
+    dw_i2c_update_rx_status(s);
     s->regs[R_DW_IC_STATUS] &= ~R_DW_IC_STATUS_ACTIVITY_MASK;
     s->status = DW_I2C_STATUS_IDLE;
     dw_i2c_update_irq(s);
@@ -427,6 +444,24 @@ static void dw_ic_data_cmd_reg_post_write(RegisterInfo *reg, uint64_t value)
             return;
         }
         s->status = recv ? DW_I2C_STATUS_RECEIVING : DW_I2C_STATUS_SENDING;
+    } else if (value & R_DW_IC_DATA_CMD_RESTART_MASK &&
+               s->regs[R_DW_IC_CON] & R_DW_IC_CON_IC_RESTART_EN_MASK) {
+        /* Restart command */
+        s->regs[R_DW_IC_RAW_INTR_STAT] &= ~DW_IC_INTR_STOP_DET_MASK;
+        s->regs[R_DW_IC_RAW_INTR_STAT] |= DW_IC_INTR_RESTART_DET_MASK |
+                                          DW_IC_INTR_START_DET_MASK |
+                                          DW_IC_INTR_ACTIVITY_MASK |
+                                          DW_IC_INTR_TX_EMPTY_MASK;
+        s->regs[R_DW_IC_STATUS] |= R_DW_IC_STATUS_ACTIVITY_MASK;
+        dw_i2c_update_irq(s);
+
+        if (i2c_start_transfer(s->bus,
+                    ARRAY_FIELD_EX32(s->regs, DW_IC_TAR, ADDRESS), recv)) {
+            dw_ic_tx_abort(s, R_DW_IC_TX_ABRT_SOURCE_7B_ADDR_NOACK_MASK);
+            return;
+        }
+
+        s->status = recv ? DW_I2C_STATUS_RECEIVING : DW_I2C_STATUS_SENDING;
     }
 
     /* Send data */
@@ -444,24 +479,6 @@ static void dw_ic_data_cmd_reg_post_write(RegisterInfo *reg, uint64_t value)
         dw_i2c_update_irq(s);
     }
 
-    /* Restart command */
-    if (value & R_DW_IC_DATA_CMD_RESTART_MASK &&
-            s->regs[R_DW_IC_CON] & R_DW_IC_CON_IC_RESTART_EN_MASK) {
-        s->regs[R_DW_IC_RAW_INTR_STAT] |= DW_IC_INTR_RESTART_DET_MASK |
-                                          DW_IC_INTR_START_DET_MASK |
-                                          DW_IC_INTR_ACTIVITY_MASK;
-        s->regs[R_DW_IC_STATUS] |= R_DW_IC_STATUS_ACTIVITY_MASK;
-        dw_i2c_update_irq(s);
-
-        if (i2c_start_transfer(s->bus,
-                    ARRAY_FIELD_EX32(s->regs, DW_IC_TAR, ADDRESS), recv)) {
-            dw_ic_tx_abort(s, R_DW_IC_TX_ABRT_SOURCE_7B_ADDR_NOACK_MASK);
-            return;
-        }
-
-        s->status = recv ? DW_I2C_STATUS_RECEIVING : DW_I2C_STATUS_SENDING;
-    }
-
     /* Receive data */
     if (recv) {
         g_assert(s->regs[R_DW_IC_RXFLR] == fifo8_num_used(&s->rx_fifo));
@@ -469,6 +486,7 @@ static void dw_ic_data_cmd_reg_post_write(RegisterInfo *reg, uint64_t value)
         if (!fifo8_is_full(&s->rx_fifo)) {
             fifo8_push(&s->rx_fifo, i2c_recv(s->bus));
             s->regs[R_DW_IC_RXFLR]++;
+            dw_i2c_update_rx_status(s);
         } else {
             s->regs[R_DW_IC_RAW_INTR_STAT] |= DW_IC_INTR_RX_OVER_MASK;
             dw_i2c_update_irq(s);

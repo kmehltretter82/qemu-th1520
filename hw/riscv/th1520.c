@@ -2601,6 +2601,9 @@ static void beaglev_ahead_machine_done(Notifier *notifier, void *data)
     if (ms->kernel_filename) {
         riscv_load_kernel(ms, &boot_info, kernel_start, true, NULL);
         kernel_entry = boot_info.image_low_addr;
+        if (firmware_end == start_addr) {
+            start_addr = kernel_entry;
+        }
     } else {
         /* Give FW_DYNAMIC a valid next address even for a firmware-only run. */
         kernel_entry = kernel_start;

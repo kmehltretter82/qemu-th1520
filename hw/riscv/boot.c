@@ -364,23 +364,23 @@ uint64_t riscv_compute_fdt_addr(hwaddr dram_base, hwaddr dram_size,
         exit(1);
     }
 
-    if (info->initrd_size) {
-        /* If initrd is successfully loaded, place DTB after it. */
-        dtb_start_limit = info->initrd_start + info->initrd_size;
-    } else if (info->kernel_size) {
-        /* If only kernel is successfully loaded, place DTB after it. */
-        dtb_start_limit = info->image_high_addr;
-    } else {
-        /* Otherwise, do not check DTB overlapping */
-        dtb_start_limit = 0;
-    }
-
     /*
      * A dram_size == 0, usually from a MemMapEntry[].size element,
      * means that the DRAM block goes all the way to ms->ram_size.
      */
     dram_end = dram_base;
     dram_end += dram_size ? MIN(ms->ram_size, dram_size) : ms->ram_size;
+
+    if (info->initrd_size) {
+        /* If initrd is successfully loaded, place DTB after it. */
+        dtb_start_limit = info->initrd_start + info->initrd_size;
+    } else if (info->kernel_size && info->image_low_addr < dram_end) {
+        /* If only kernel is successfully loaded in DRAM, place DTB after it. */
+        dtb_start_limit = info->image_high_addr;
+    } else {
+        /* Otherwise, do not check DTB overlapping */
+        dtb_start_limit = 0;
+    }
 
     /*
      * We should put fdt as far as possible to avoid kernel/initrd overwriting
