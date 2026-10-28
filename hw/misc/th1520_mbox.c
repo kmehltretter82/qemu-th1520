@@ -131,6 +131,11 @@ static void th1520_mbox_write(void *opaque, hwaddr offset, uint64_t value,
         return;
     case TH1520_MBOX_GENERATE:
         s->generate[channel] = value & TH1520_MBOX_GENERATE_MASK;
+        if (!window->local && channel > 0 &&
+            (s->mask & BIT(channel - 1)) && (value & BIT(0))) {
+            s->status |= BIT(channel - 1);
+            th1520_mbox_update_irq(s);
+        }
         return;
     case TH1520_MBOX_INFO0 ... TH1520_MBOX_INFO_LAST:
         s->info[channel][(offset - TH1520_MBOX_INFO0) / 4] = value;

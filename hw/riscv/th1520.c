@@ -37,12 +37,19 @@
 #include "hw/net/dw_gmac.h"
 #include "hw/net/th1520_gmac.h"
 #include "hw/i2c/da9063.h"
+#include "hw/i2c/i2c.h"
 #include "hw/nvram/eeprom_at24c.h"
 #include "hw/riscv/boot.h"
 #include "hw/riscv/fdt-common.h"
 #include "hw/riscv/machines-qom.h"
 #include "hw/riscv/th1520.h"
 #include "hw/sd/sd.h"
+#include "hw/ssi/ssi.h"
+#include "chardev/char.h"
+#include "migration/vmstate.h"
+#include "qobject/qdict.h"
+#include "qemu/timer.h"
+#include "system/block-backend.h"
 
 #include <libfdt.h>
 
@@ -1024,6 +1031,7 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
 
     for (int i = 0; i < TH1520_UART_COUNT; i++) {
         SysBusDevice *uart = SYS_BUS_DEVICE(&s->uart[i]);
+        Chardev *chr = serial_hd(i);
 
         /*
          * The DW register model occupies 0x100 bytes.  Linux describes a
@@ -1031,7 +1039,14 @@ static void th1520_soc_realize(DeviceState *dev, Error **errp)
          * behavior of the reserved portion is not established (UART-001).
          * Leave it unmapped until it can be checked on physical hardware.
          */
-        qdev_prop_set_chr(DEVICE(uart), "chardev", serial_hd(i));
+        if (i == 4 && !chr && !qtest_enabled()) {
+            chr = qemu_chardev_new("ap6203bm-hci", "chardev-ap6203bm-hci",
+                                   NULL, NULL, errp);
+            if (!chr) {
+                return;
+            }
+        }
+        qdev_prop_set_chr(DEVICE(uart), "chardev", chr);
         if (!sysbus_realize(uart, errp)) {
             return;
         }
@@ -2419,9 +2434,29 @@ static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
 {
     for (int i = 0; i < 2; i++) {
         DriveInfo *dinfo = drive_get(IF_SD, 0, i);
+        BlockBackend *blk = NULL;
         DeviceState *card;
 
-        if (!dinfo) {
+        if (dinfo) {
+            blk = blk_by_legacy_dinfo(dinfo);
+        } else if (i == 0 && !qtest_enabled()) {
+            g_autofree char *tmp_path = NULL;
+            int fd = g_file_open_tmp("beaglev-ahead-emmc-XXXXXX",
+                                     &tmp_path, NULL);
+            if (fd >= 0) {
+                if (ftruncate(fd, 2 * MiB) == 0) {
+                    QDict *opts = qdict_new();
+                    qdict_put_str(opts, "driver", "raw");
+                    qdict_put_str(opts, "file.driver", "file");
+                    qdict_put_str(opts, "file.filename", tmp_path);
+                    blk = blk_new_open(NULL, NULL, opts, BDRV_O_RDWR, NULL);
+                }
+                close(fd);
+                g_unlink(tmp_path);
+            }
+        }
+
+        if (!blk) {
             continue;
         }
 
@@ -2429,10 +2464,845 @@ static void beaglev_ahead_attach_storage(BeagleVAheadState *s)
         if (i == 0) {
             qdev_prop_set_bit(card, "emmc-5.1-hs400-1.8v", true);
         }
-        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
-                                &error_fatal);
+        qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
         qdev_realize_and_unref(card, s->soc.mshc[i].bus, &error_fatal);
     }
+}
+
+#define TYPE_BEAGLEV_AHEAD_BME280 "beaglev-ahead-bme280"
+OBJECT_DECLARE_SIMPLE_TYPE(BeagleVAheadBME280State, BEAGLEV_AHEAD_BME280)
+
+struct BeagleVAheadBME280State {
+    I2CSlave parent_obj;
+    uint8_t pointer;
+    bool addr_byte;
+    uint8_t ctrl_hum;
+    uint8_t ctrl_meas;
+    uint8_t config;
+};
+
+static uint8_t bme280_read_reg(BeagleVAheadBME280State *s, uint8_t reg)
+{
+    /* Bosch BME280 factory trim & raw ADC values (~25.08 C, ~100.8 kPa, ~50.4 %RH) */
+    static const uint8_t calib0[26] = {
+        0x70, 0x6b, /* dig_t1 = 27504 */
+        0x43, 0x67, /* dig_t2 = 26435 */
+        0x18, 0xfc, /* dig_t3 = -1000 */
+        0x7d, 0x8e, /* dig_p1 = 36477 */
+        0x43, 0xd6, /* dig_p2 = -10685 */
+        0xd0, 0x0b, /* dig_p3 = 3024 */
+        0x27, 0x0b, /* dig_p4 = 2855 */
+        0x8c, 0x00, /* dig_p5 = 140 */
+        0xf9, 0xff, /* dig_p6 = -7 */
+        0x8c, 0x3c, /* dig_p7 = 15500 */
+        0xf8, 0xc6, /* dig_p8 = -14600 */
+        0x70, 0x17, /* dig_p9 = 6000 */
+        0x00,       /* reserved */
+        0x4b,       /* dig_h1 = 75 */
+    };
+    static const uint8_t calib1[7] = {
+        0x72, 0x01, /* dig_h2 = 370 */
+        0x00,       /* dig_h3 = 0 */
+        0x13, 0x29, 0x03, /* dig_h4 = 313, dig_h5 = 50 */
+        0x1e,       /* dig_h6 = 30 */
+    };
+    static const uint8_t raw_adc[8] = {
+        0x65, 0x5a, 0xc0, /* press_msb..xlsb: adc_P = 415148 */
+        0x7e, 0xf1, 0x00, /* temp_msb..xlsb:  adc_T = 519888 */
+        0x73, 0x3c,       /* hum_msb..lsb:    adc_H = 29500 */
+    };
+
+    if (reg >= 0x88 && reg <= 0xa1) {
+        return calib0[reg - 0x88];
+    }
+    if (reg >= 0xe1 && reg <= 0xe7) {
+        return calib1[reg - 0xe1];
+    }
+    if (reg >= 0xf7 && reg <= 0xfe) {
+        return raw_adc[reg - 0xf7];
+    }
+    switch (reg) {
+    case 0xd0:
+        return 0x60; /* BME280_CHIP_ID */
+    case 0xf2:
+        return s->ctrl_hum;
+    case 0xf3:
+        return 0x00; /* status: idle */
+    case 0xf4:
+        return s->ctrl_meas;
+    case 0xf5:
+        return s->config;
+    default:
+        return 0x00;
+    }
+}
+
+static int bme280_i2c_event(I2CSlave *i2c, enum i2c_event event)
+{
+    BeagleVAheadBME280State *s = BEAGLEV_AHEAD_BME280(i2c);
+
+    if (event == I2C_START_SEND) {
+        s->addr_byte = true;
+    }
+    return 0;
+}
+
+static uint8_t bme280_i2c_rx(I2CSlave *i2c)
+{
+    BeagleVAheadBME280State *s = BEAGLEV_AHEAD_BME280(i2c);
+    uint8_t val = bme280_read_reg(s, s->pointer);
+
+    s->pointer++;
+    return val;
+}
+
+static int bme280_i2c_tx(I2CSlave *i2c, uint8_t data)
+{
+    BeagleVAheadBME280State *s = BEAGLEV_AHEAD_BME280(i2c);
+
+    if (s->addr_byte) {
+        s->pointer = data;
+        s->addr_byte = false;
+        return 0;
+    }
+
+    switch (s->pointer) {
+    case 0xe0:
+        if (data == 0xb6) {
+            s->ctrl_hum = 0;
+            s->ctrl_meas = 0;
+            s->config = 0;
+        }
+        break;
+    case 0xf2:
+        s->ctrl_hum = data & 0x07;
+        break;
+    case 0xf4:
+        s->ctrl_meas = data;
+        break;
+    case 0xf5:
+        s->config = data;
+        break;
+    default:
+        break;
+    }
+    s->pointer++;
+    return 0;
+}
+
+static void bme280_reset(DeviceState *dev)
+{
+    BeagleVAheadBME280State *s = BEAGLEV_AHEAD_BME280(dev);
+
+    s->pointer = 0;
+    s->addr_byte = false;
+    s->ctrl_hum = 0;
+    s->ctrl_meas = 0;
+    s->config = 0;
+}
+
+static const VMStateDescription vmstate_beaglev_ahead_bme280 = {
+    .name = TYPE_BEAGLEV_AHEAD_BME280,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_I2C_SLAVE(parent_obj, BeagleVAheadBME280State),
+        VMSTATE_UINT8(pointer, BeagleVAheadBME280State),
+        VMSTATE_BOOL(addr_byte, BeagleVAheadBME280State),
+        VMSTATE_UINT8(ctrl_hum, BeagleVAheadBME280State),
+        VMSTATE_UINT8(ctrl_meas, BeagleVAheadBME280State),
+        VMSTATE_UINT8(config, BeagleVAheadBME280State),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void bme280_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
+
+    dc->desc = "Bosch BME280 Environmental Sensor (MikroBUS Weather Click)";
+    device_class_set_legacy_reset(dc, bme280_reset);
+    dc->vmsd = &vmstate_beaglev_ahead_bme280;
+    k->event = bme280_i2c_event;
+    k->recv = bme280_i2c_rx;
+    k->send = bme280_i2c_tx;
+}
+
+#define TYPE_BEAGLEV_AHEAD_MCP2518FD "beaglev-ahead-mcp2518fd"
+OBJECT_DECLARE_SIMPLE_TYPE(BeagleVAheadMCP2518FDState, BEAGLEV_AHEAD_MCP2518FD)
+
+struct BeagleVAheadMCP2518FDState {
+    SSIPeripheral parent_obj;
+    qemu_irq irq;
+    bool irq_driven;
+    uint32_t phase;
+    uint8_t cmd;
+    uint16_t addr;
+    uint8_t crc_len;
+    uint16_t crc_accum;
+    uint8_t cmd_hdr[3];
+    uint8_t mem[0x1000];
+    uint8_t tef_head;
+    uint8_t tef_tail;
+    uint8_t tef_count;
+    uint8_t txq_head;
+    uint8_t rx1_head;
+    uint8_t rx1_tail;
+    uint8_t rx1_count;
+};
+
+static uint16_t mcp2518fd_crc16(uint16_t crc, const uint8_t *buf, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)buf[i] << 8;
+        for (int b = 0; b < 8; b++) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x8005;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+static uint32_t mcp2518fd_plsize_bytes(uint32_t con)
+{
+    static const uint32_t map[8] = { 8, 12, 16, 20, 24, 32, 48, 64 };
+    return map[(con >> 29) & 0x7];
+}
+
+static void mcp2518fd_sync_fifo_regs(BeagleVAheadMCP2518FDState *s)
+{
+    uint32_t tefcon = ldl_le_p(&s->mem[0x040]);
+    uint32_t txqcon = ldl_le_p(&s->mem[0x050]);
+    uint32_t fifocon1 = ldl_le_p(&s->mem[0x05c]);
+    uint32_t tef_cap = ((tefcon >> 24) & 0x1f) + 1;
+    uint32_t txq_cap = ((txqcon >> 24) & 0x1f) + 1;
+    uint32_t rx1_cap = ((fifocon1 >> 24) & 0x1f) + 1;
+    uint32_t tef_item = 8;
+    uint32_t txq_item = 8 + mcp2518fd_plsize_bytes(txqcon);
+    uint32_t rx1_item = ((fifocon1 & BIT(5)) ? 12 : 8) +
+                        mcp2518fd_plsize_bytes(fifocon1);
+    uint32_t tef_base = 0;
+    uint32_t txq_base = tef_cap * tef_item;
+    uint32_t rx1_base = txq_base + txq_cap * txq_item;
+
+    uint32_t tefsta = (s->tef_count > 0) ? BIT(0) : 0;
+    uint32_t tefua = tef_base + (s->tef_tail % tef_cap) * tef_item;
+    stl_le_p(&s->mem[0x044], tefsta);
+    stl_le_p(&s->mem[0x048], tefua);
+
+    uint32_t txqsta = BIT(0) | BIT(2) | ((s->txq_head % txq_cap) << 8);
+    uint32_t txqua = txq_base + (s->txq_head % txq_cap) * txq_item;
+    stl_le_p(&s->mem[0x054], txqsta);
+    stl_le_p(&s->mem[0x058], txqua);
+
+    uint32_t fifosta1 = ((s->rx1_count > 0) ? BIT(0) : 0) |
+                        ((s->rx1_head % rx1_cap) << 8);
+    uint32_t fifoua1 = rx1_base + (s->rx1_tail % rx1_cap) * rx1_item;
+    stl_le_p(&s->mem[0x060], fifosta1);
+    stl_le_p(&s->mem[0x064], fifoua1);
+}
+
+static void mcp2518fd_update_irq(BeagleVAheadMCP2518FDState *s)
+{
+    uint32_t reg_int = ldl_le_p(&s->mem[0x01c]);
+    uint16_t ie = (reg_int >> 16) & 0xffff;
+    uint16_t flags = reg_int & 0xffff;
+    bool active = (ie & flags) != 0;
+
+    if (ie != 0 || s->irq_driven) {
+        s->irq_driven = true;
+        qemu_set_irq(s->irq, active ? 1 : 0);
+    }
+}
+
+static void mcp2518fd_reset_chip(BeagleVAheadMCP2518FDState *s)
+{
+    memset(s->mem, 0, sizeof(s->mem));
+    s->tef_head = 0;
+    s->tef_tail = 0;
+    s->tef_count = 0;
+    s->txq_head = 0;
+    s->rx1_head = 0;
+    s->rx1_tail = 0;
+    s->rx1_count = 0;
+
+    /* REG_CON: REQOP=4 (CONFIG), OPMOD=4 (CONFIG), TXQEN, STEF, WAKFIL, ISOCRCEN */
+    stl_le_p(&s->mem[0x000], (4U << 24) | (4U << 21) | BIT(20) | BIT(19) |
+                             BIT(8) | BIT(5));
+    /* REG_OSC: OSCRDY | SCLKRDY */
+    stl_le_p(&s->mem[0xe00], BIT(10) | BIT(12));
+    /* REG_IOCON: TRIS0 | TRIS1 | PM0 | PM1 */
+    stl_le_p(&s->mem[0xe04], BIT(25) | BIT(24) | BIT(1) | BIT(0));
+    /* REG_DEVID: MCP2518FD */
+    stl_le_p(&s->mem[0xe14], 0x00000010);
+
+    mcp2518fd_sync_fifo_regs(s);
+    if (s->irq_driven) {
+        qemu_set_irq(s->irq, 0);
+    }
+}
+
+static void mcp2518fd_handle_txreq(BeagleVAheadMCP2518FDState *s)
+{
+    uint32_t con = ldl_le_p(&s->mem[0x000]);
+    uint32_t tefcon = ldl_le_p(&s->mem[0x040]);
+    uint32_t txqcon = ldl_le_p(&s->mem[0x050]);
+    uint32_t fifocon1 = ldl_le_p(&s->mem[0x05c]);
+    uint32_t tef_cap = ((tefcon >> 24) & 0x1f) + 1;
+    uint32_t txq_cap = ((txqcon >> 24) & 0x1f) + 1;
+    uint32_t rx1_cap = ((fifocon1 >> 24) & 0x1f) + 1;
+    uint32_t tef_item = 8;
+    uint32_t txq_pl = mcp2518fd_plsize_bytes(txqcon);
+    uint32_t txq_item = 8 + txq_pl;
+    bool rx_ts = (fifocon1 & BIT(5)) != 0;
+    uint32_t rx1_pl = mcp2518fd_plsize_bytes(fifocon1);
+    uint32_t rx1_item = (rx_ts ? 12 : 8) + rx1_pl;
+    uint32_t tef_base = 0;
+    uint32_t txq_base = tef_cap * tef_item;
+    uint32_t rx1_base = txq_base + txq_cap * txq_item;
+
+    uint32_t tx_ram_off = 0x400 + txq_base + (s->txq_head % txq_cap) * txq_item;
+    if (tx_ram_off + txq_item > sizeof(s->mem)) {
+        return;
+    }
+
+    uint32_t tx_id = ldl_le_p(&s->mem[tx_ram_off + 0]);
+    uint32_t tx_flags = ldl_le_p(&s->mem[tx_ram_off + 4]);
+    const uint8_t *tx_data = &s->mem[tx_ram_off + 8];
+
+    s->txq_head = (s->txq_head + 1) % txq_cap;
+
+    /* 1. Store into TEF if STEF is set */
+    if ((con & BIT(19)) && s->tef_count < tef_cap) {
+        uint32_t tef_ram_off = 0x400 + tef_base +
+                               (s->tef_head % tef_cap) * tef_item;
+        if (tef_ram_off + 8 <= sizeof(s->mem)) {
+            stl_le_p(&s->mem[tef_ram_off + 0], tx_id);
+            stl_le_p(&s->mem[tef_ram_off + 4], tx_flags);
+            s->tef_head = (s->tef_head + 1) % tef_cap;
+            s->tef_count++;
+            if (tefcon & BIT(0)) {
+                uint32_t reg_int = ldl_le_p(&s->mem[0x01c]);
+                stl_le_p(&s->mem[0x01c], reg_int | BIT(4)); /* TEFIF */
+            }
+        }
+    }
+
+    /* 2. Loopback / deliver into RX FIFO 1 */
+    if (s->rx1_count < rx1_cap) {
+        uint32_t filhit = 0;
+        for (uint32_t f = 0; f < 32; f++) {
+            uint8_t fltcon = s->mem[0x1d0 + f];
+            if (fltcon & BIT(7)) {
+                uint32_t fltobj = ldl_le_p(&s->mem[0x1f0 + 8 * f]);
+                uint32_t fltmask = ldl_le_p(&s->mem[0x1f4 + 8 * f]);
+                if (((tx_id ^ fltobj) & (fltmask & 0x1fffffffU)) == 0) {
+                    filhit = f;
+                    break;
+                }
+            }
+        }
+        uint32_t rx_ram_off = 0x400 + rx1_base +
+                              (s->rx1_head % rx1_cap) * rx1_item;
+        if (rx_ram_off + rx1_item <= sizeof(s->mem)) {
+            uint32_t rx_flags = (tx_flags & ~0x0000f800U) | (filhit << 11);
+            stl_le_p(&s->mem[rx_ram_off + 0], tx_id);
+            stl_le_p(&s->mem[rx_ram_off + 4], rx_flags);
+            if (rx_ts) {
+                uint32_t tbc = ldl_le_p(&s->mem[0x010]) + 100;
+                stl_le_p(&s->mem[0x010], tbc);
+                stl_le_p(&s->mem[rx_ram_off + 8], tbc);
+                memcpy(&s->mem[rx_ram_off + 12], tx_data, MIN(txq_pl, rx1_pl));
+            } else {
+                memcpy(&s->mem[rx_ram_off + 8], tx_data, MIN(txq_pl, rx1_pl));
+            }
+            s->rx1_head = (s->rx1_head + 1) % rx1_cap;
+            s->rx1_count++;
+            stl_le_p(&s->mem[0x020], BIT(1)); /* REG_RXIF */
+            if (fifocon1 & BIT(0)) {
+                uint32_t reg_int = ldl_le_p(&s->mem[0x01c]);
+                stl_le_p(&s->mem[0x01c], reg_int | BIT(1)); /* RXIF */
+            }
+        }
+    }
+
+    mcp2518fd_sync_fifo_regs(s);
+}
+
+static void mcp2518fd_on_write_byte(BeagleVAheadMCP2518FDState *s,
+                                    uint16_t addr, uint8_t val)
+{
+    if (addr >= sizeof(s->mem)) {
+        return;
+    }
+
+    if (addr >= 0x01c && addr <= 0x01d) {
+        /* Low 16 bits of REG_INT: clearable IF flags */
+        s->mem[addr] &= val | ~0xf808U >> ((addr - 0x01c) * 8);
+        s->mem[addr] = (s->mem[addr] & 0x03) | (val & ~0x03);
+        mcp2518fd_update_irq(s);
+        return;
+    }
+
+    s->mem[addr] = val;
+
+    if (addr <= 0x003) {
+        uint32_t con = ldl_le_p(&s->mem[0x000]);
+        uint32_t reqop = (con >> 24) & 0x7;
+        uint32_t opmod = (con >> 21) & 0x7;
+        con &= ~BIT(27); /* Clear ABAT */
+        if (reqop != opmod) {
+            con = (con & ~(0x7U << 21)) | (reqop << 21);
+            uint32_t reg_int = ldl_le_p(&s->mem[0x01c]);
+            stl_le_p(&s->mem[0x01c], reg_int | BIT(3)); /* MODIF */
+        }
+        stl_le_p(&s->mem[0x000], con);
+        mcp2518fd_update_irq(s);
+    } else if (addr >= 0x01c && addr <= 0x01f) {
+        mcp2518fd_update_irq(s);
+    } else if (addr >= 0x040 && addr <= 0x043) {
+        uint32_t tefcon = ldl_le_p(&s->mem[0x040]);
+        uint32_t tef_cap = ((tefcon >> 24) & 0x1f) + 1;
+        if (tefcon & BIT(10)) { /* FRESET */
+            s->tef_head = 0;
+            s->tef_tail = 0;
+            s->tef_count = 0;
+            tefcon &= ~BIT(10);
+        }
+        if (tefcon & BIT(8)) { /* UINC */
+            if (s->tef_count > 0) {
+                s->tef_tail = (s->tef_tail + 1) % tef_cap;
+                s->tef_count--;
+            }
+            if (s->tef_count == 0) {
+                uint32_t reg_int = ldl_le_p(&s->mem[0x01c]);
+                stl_le_p(&s->mem[0x01c], reg_int & ~BIT(4)); /* Clear TEFIF */
+            }
+            tefcon &= ~BIT(8);
+        }
+        stl_le_p(&s->mem[0x040], tefcon);
+        mcp2518fd_sync_fifo_regs(s);
+        mcp2518fd_update_irq(s);
+    } else if (addr >= 0x050 && addr <= 0x053) {
+        uint32_t txqcon = ldl_le_p(&s->mem[0x050]);
+        if (txqcon & BIT(10)) { /* FRESET */
+            s->txq_head = 0;
+            txqcon &= ~BIT(10);
+        }
+        if (txqcon & (BIT(9) | BIT(8))) { /* TXREQ | UINC */
+            txqcon &= ~(BIT(9) | BIT(8));
+            stl_le_p(&s->mem[0x050], txqcon);
+            mcp2518fd_handle_txreq(s);
+        } else {
+            stl_le_p(&s->mem[0x050], txqcon);
+            mcp2518fd_sync_fifo_regs(s);
+        }
+        mcp2518fd_update_irq(s);
+    } else if (addr >= 0x05c && addr <= 0x05f) {
+        uint32_t fifocon1 = ldl_le_p(&s->mem[0x05c]);
+        uint32_t rx1_cap = ((fifocon1 >> 24) & 0x1f) + 1;
+        if (fifocon1 & BIT(10)) { /* FRESET */
+            s->rx1_head = 0;
+            s->rx1_tail = 0;
+            s->rx1_count = 0;
+            fifocon1 &= ~BIT(10);
+        }
+        if (fifocon1 & BIT(8)) { /* UINC */
+            if (s->rx1_count > 0) {
+                s->rx1_tail = (s->rx1_tail + 1) % rx1_cap;
+                s->rx1_count--;
+            }
+            if (s->rx1_count == 0) {
+                stl_le_p(&s->mem[0x020], 0);
+                uint32_t reg_int = ldl_le_p(&s->mem[0x01c]);
+                stl_le_p(&s->mem[0x01c], reg_int & ~BIT(1)); /* Clear RXIF */
+            }
+            fifocon1 &= ~BIT(8);
+        }
+        stl_le_p(&s->mem[0x05c], fifocon1);
+        mcp2518fd_sync_fifo_regs(s);
+        mcp2518fd_update_irq(s);
+    } else if (addr >= 0xe00 && addr <= 0xe03) {
+        uint32_t osc = ldl_le_p(&s->mem[0xe00]);
+        osc |= BIT(10) | BIT(12); /* OSCRDY | SCLKRDY */
+        if (osc & BIT(0)) {
+            osc |= BIT(8); /* PLLRDY */
+        }
+        stl_le_p(&s->mem[0xe00], osc);
+    }
+}
+
+static int mcp2518fd_set_cs(SSIPeripheral *dev, bool select)
+{
+    BeagleVAheadMCP2518FDState *s = BEAGLEV_AHEAD_MCP2518FD(dev);
+
+    if (select) {
+        s->phase = 0;
+        s->cmd = 0;
+        s->addr = 0;
+        s->crc_len = 0;
+        s->crc_accum = 0xffff;
+    }
+    return 0;
+}
+
+static uint32_t mcp2518fd_transfer(SSIPeripheral *dev, uint32_t tx)
+{
+    BeagleVAheadMCP2518FDState *s = BEAGLEV_AHEAD_MCP2518FD(dev);
+    uint8_t byte = tx & 0xff;
+    uint8_t rx = 0;
+
+    if (s->phase == 0) {
+        s->cmd_hdr[0] = byte;
+        s->cmd = (byte >> 4) & 0x0f;
+        s->addr = (uint16_t)(byte & 0x0f) << 8;
+        s->phase = 1;
+        return 0;
+    }
+    if (s->phase == 1) {
+        s->cmd_hdr[1] = byte;
+        s->addr |= byte;
+        s->phase = 2;
+        if (s->cmd == 0x0 && s->addr == 0x000) {
+            mcp2518fd_reset_chip(s);
+        }
+        return 0;
+    }
+
+    switch (s->cmd) {
+    case 0x2: /* WRITE */
+    case 0xa: /* WRITE_CRC */
+    case 0xc: /* WRITE_SAFE */
+        mcp2518fd_on_write_byte(s, s->addr, byte);
+        s->addr = (s->addr + 1) & 0x0fff;
+        break;
+    case 0x3: /* READ */
+        rx = (s->addr < sizeof(s->mem)) ? s->mem[s->addr] : 0;
+        s->addr = (s->addr + 1) & 0x0fff;
+        break;
+    case 0xb: /* READ_CRC */
+        if (s->phase == 2) {
+            s->cmd_hdr[2] = byte;
+            s->crc_len = byte;
+            s->crc_accum = mcp2518fd_crc16(0xffff, s->cmd_hdr, 3);
+            s->phase = 3;
+            return 0;
+        } else if (s->phase < 3U + s->crc_len) {
+            rx = (s->addr < sizeof(s->mem)) ? s->mem[s->addr] : 0;
+            s->crc_accum = mcp2518fd_crc16(s->crc_accum, &rx, 1);
+            s->addr = (s->addr + 1) & 0x0fff;
+            s->phase++;
+            return rx;
+        } else if (s->phase == 3U + s->crc_len) {
+            rx = (s->crc_accum >> 8) & 0xff;
+            s->phase++;
+            return rx;
+        } else if (s->phase == 4U + s->crc_len) {
+            rx = s->crc_accum & 0xff;
+            s->phase++;
+            return rx;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return rx;
+}
+
+static void mcp2518fd_reset(DeviceState *dev)
+{
+    BeagleVAheadMCP2518FDState *s = BEAGLEV_AHEAD_MCP2518FD(dev);
+
+    s->phase = 0;
+    s->cmd = 0;
+    s->addr = 0;
+    s->crc_len = 0;
+    s->crc_accum = 0xffff;
+    mcp2518fd_reset_chip(s);
+}
+
+static void mcp2518fd_realize(SSIPeripheral *dev, Error **errp)
+{
+    BeagleVAheadMCP2518FDState *s = BEAGLEV_AHEAD_MCP2518FD(dev);
+
+    qdev_init_gpio_out(DEVICE(dev), &s->irq, 1);
+    mcp2518fd_reset_chip(s);
+}
+
+static const VMStateDescription vmstate_beaglev_ahead_mcp2518fd = {
+    .name = TYPE_BEAGLEV_AHEAD_MCP2518FD,
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_SSI_PERIPHERAL(parent_obj, BeagleVAheadMCP2518FDState),
+        VMSTATE_BOOL(irq_driven, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT32(phase, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(cmd, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT16(addr, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(crc_len, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT16(crc_accum, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8_ARRAY(cmd_hdr, BeagleVAheadMCP2518FDState, 3),
+        VMSTATE_UINT8_ARRAY(mem, BeagleVAheadMCP2518FDState, 0x1000),
+        VMSTATE_UINT8(tef_head, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(tef_tail, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(tef_count, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(txq_head, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(rx1_head, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(rx1_tail, BeagleVAheadMCP2518FDState),
+        VMSTATE_UINT8(rx1_count, BeagleVAheadMCP2518FDState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void mcp2518fd_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
+
+    dc->desc = "Microchip MCP2518FD CAN-FD Controller (MikroBUS CAN-FD Click)";
+    device_class_set_legacy_reset(dc, mcp2518fd_reset);
+    dc->vmsd = &vmstate_beaglev_ahead_mcp2518fd;
+    k->realize = mcp2518fd_realize;
+    k->transfer = mcp2518fd_transfer;
+    k->set_cs = mcp2518fd_set_cs;
+    k->cs_polarity = SSI_CS_LOW;
+}
+
+#define TYPE_CHARDEV_AP6203BM_HCI "chardev-ap6203bm-hci"
+OBJECT_DECLARE_SIMPLE_TYPE(AP6203BMHCIChardev, CHARDEV_AP6203BM_HCI)
+
+struct AP6203BMHCIChardev {
+    Chardev parent_obj;
+    QEMUTimer *tx_timer;
+    uint8_t cmd_buf[264];
+    uint32_t cmd_len;
+    uint8_t tx_buf[512];
+    uint32_t tx_head;
+    uint32_t tx_len;
+};
+
+static void ap6203bm_hci_drain_tx(void *opaque)
+{
+    AP6203BMHCIChardev *s = CHARDEV_AP6203BM_HCI(opaque);
+    Chardev *chr = CHARDEV(s);
+
+    if (s->tx_len == 0) {
+        return;
+    }
+
+    int can = qemu_chr_be_can_write(chr);
+    if (can > 0) {
+        uint32_t n = MIN((uint32_t)can, s->tx_len);
+        qemu_chr_be_write(chr, &s->tx_buf[s->tx_head], n);
+        s->tx_head += n;
+        s->tx_len -= n;
+        if (s->tx_len == 0) {
+            s->tx_head = 0;
+        }
+    }
+
+    if (s->tx_len > 0) {
+        timer_mod_ns(s->tx_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 50000);
+    }
+}
+
+static void ap6203bm_hci_queue_evt(AP6203BMHCIChardev *s,
+                                   const uint8_t *data, size_t len)
+{
+    if (s->tx_head + s->tx_len + len > sizeof(s->tx_buf)) {
+        if (s->tx_len > 0) {
+            memmove(s->tx_buf, &s->tx_buf[s->tx_head], s->tx_len);
+        }
+        s->tx_head = 0;
+    }
+    if (s->tx_len + len <= sizeof(s->tx_buf)) {
+        memcpy(&s->tx_buf[s->tx_head + s->tx_len], data, len);
+        s->tx_len += len;
+        timer_mod_ns(s->tx_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 50000);
+    }
+}
+
+static void ap6203bm_hci_handle_cmd(AP6203BMHCIChardev *s, uint16_t opcode,
+                                    const uint8_t *params, uint8_t plen)
+{
+    uint8_t evt[128];
+    uint8_t extra[72];
+    size_t extra_len = 0;
+
+    memset(extra, 0, sizeof(extra));
+
+    switch (opcode) {
+    case 0x1001: /* HCI_Read_Local_Version_Info */
+        extra[0] = 0x09; /* HCI Version: Bluetooth 5.0 */
+        extra[1] = 0x15;
+        extra[2] = 0x00;
+        extra[3] = 0x09; /* LMP Version: 5.0 */
+        extra[4] = 0x0f; /* Broadcom (AP6203BM) */
+        extra[5] = 0x00;
+        extra[6] = 0x03;
+        extra[7] = 0x41;
+        extra_len = 8;
+        break;
+    case 0x1002: /* HCI_Read_Local_Supported_Commands */
+        /* Enable standard HCI & LE commands (octets 0..38) */
+        memset(extra, 0xff, 36);
+        extra_len = 64;
+        break;
+    case 0x1003: /* HCI_Read_Local_Supported_Features */
+        /* Byte 4: LMP_BREDR_NOT_SUPPORTED (0x20) | LMP_LE_SUPPORTED (0x40) */
+        extra[4] = 0x60;
+        extra_len = 8;
+        break;
+    case 0x1005: /* HCI_Read_Buffer_Size */
+        extra[0] = 0xfb;
+        extra[1] = 0x00;
+        extra[2] = 0x40;
+        extra[3] = 0x08;
+        extra[4] = 0x00;
+        extra[5] = 0x04;
+        extra[6] = 0x00;
+        extra_len = 7;
+        break;
+    case 0x1009: /* HCI_Read_BD_ADDR: 20:15:03:62:BE:00 */
+        extra[0] = 0x20;
+        extra[1] = 0x15;
+        extra[2] = 0x03;
+        extra[3] = 0x62;
+        extra[4] = 0xbe;
+        extra[5] = 0x00;
+        extra_len = 6;
+        break;
+    case 0x2002: /* HCI_LE_Read_Buffer_Size */
+        extra[0] = 0xfb;
+        extra[1] = 0x00;
+        extra[2] = 0x08;
+        extra_len = 3;
+        break;
+    case 0x2003: /* HCI_LE_Read_Local_Supported_Features */
+        extra[0] = 0x01; /* LE Encryption */
+        extra_len = 8;
+        break;
+    case 0x2007: /* HCI_LE_Read_Advertising_Physical_Channel_Tx_Power */
+        extra[0] = 0x08; /* +8 dBm */
+        extra_len = 1;
+        break;
+    case 0x200f: /* HCI_LE_Read_Filter_Accept_List_Size */
+        extra[0] = 0x08;
+        extra_len = 1;
+        break;
+    case 0x2018: /* HCI_LE_Rand */
+        for (int i = 0; i < 8; i++) {
+            extra[i] = 0x11 * (i + 1);
+        }
+        extra_len = 8;
+        break;
+    case 0x201c: /* HCI_LE_Read_Supported_States */
+        extra[0] = 0xff;
+        extra[1] = 0xff;
+        extra[2] = 0xff;
+        extra[3] = 0x03;
+        extra_len = 8;
+        break;
+    default:
+        extra_len = 0;
+        break;
+    }
+
+    evt[0] = 0x04; /* H4_EVT */
+    evt[1] = 0x0e; /* BT_HCI_EVT_CMD_COMPLETE */
+    evt[2] = 4 + extra_len;
+    evt[3] = 0x01; /* num_hci_cmd_packets */
+    evt[4] = opcode & 0xff;
+    evt[5] = (opcode >> 8) & 0xff;
+    evt[6] = 0x00; /* status: SUCCESS */
+    if (extra_len > 0) {
+        memcpy(&evt[7], extra, extra_len);
+    }
+    ap6203bm_hci_queue_evt(s, evt, 7 + extra_len);
+
+    /* If LE Scan is enabled (0x200c, enable=1), emit an LE Advertising Report */
+    if (opcode == 0x200c && plen >= 1 && params[0] == 0x01) {
+        static const uint8_t adv_report[] = {
+            0x04, /* H4_EVT */
+            0x3e, /* BT_HCI_EVT_LE_META_EVENT */
+            29,   /* param len */
+            0x02, /* BT_HCI_EVT_LE_ADVERTISING_REPORT */
+            0x01, /* num_reports = 1 */
+            0x00, /* evt_type = BT_HCI_ADV_IND */
+            0x00, /* addr_type = public */
+            0xaa, 0xbb, 0xcc, 0x20, 0x15, 0x00, /* peer addr 00:15:20:CC:BB:AA */
+            17,   /* data_len = 17 */
+            0x02, 0x01, 0x06, /* Flags: LE General Discoverable | BR/EDR Not Supp */
+            13,   0x09, 'A', 'P', '6', '2', '0', '3', 'B', 'M', '-', 'B', 'L', 'E',
+            0xd6, /* RSSI = -42 dBm */
+        };
+        ap6203bm_hci_queue_evt(s, adv_report, sizeof(adv_report));
+    }
+}
+
+static int ap6203bm_hci_chr_write(Chardev *chr, const uint8_t *buf, int len)
+{
+    AP6203BMHCIChardev *s = CHARDEV_AP6203BM_HCI(chr);
+
+    for (int i = 0; i < len; i++) {
+        uint8_t b = buf[i];
+        if (s->cmd_len == 0 && b != 0x01) {
+            /* Ignore non-command packet headers or sync bytes */
+            continue;
+        }
+        if (s->cmd_len < sizeof(s->cmd_buf)) {
+            s->cmd_buf[s->cmd_len++] = b;
+        }
+        if (s->cmd_len >= 4) {
+            uint8_t plen = s->cmd_buf[3];
+            if (s->cmd_len == 4U + plen) {
+                uint16_t opcode = lduw_le_p(&s->cmd_buf[1]);
+                ap6203bm_hci_handle_cmd(s, opcode, &s->cmd_buf[4], plen);
+                s->cmd_len = 0;
+            }
+        }
+    }
+    return len;
+}
+
+static void ap6203bm_hci_chr_init(Object *obj)
+{
+    Chardev *chr = CHARDEV(obj);
+    AP6203BMHCIChardev *s = CHARDEV_AP6203BM_HCI(obj);
+
+    chr->be_open = true;
+    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ap6203bm_hci_drain_tx, s);
+}
+
+static void ap6203bm_hci_chr_class_init(ObjectClass *oc, const void *data)
+{
+    ChardevClass *cc = CHARDEV_CLASS(oc);
+
+    cc->internal = true;
+    cc->chr_write = ap6203bm_hci_chr_write;
+}
+
+static void beaglev_ahead_attach_mikrobus(BeagleVAheadState *s)
+{
+    DeviceState *mcp;
+
+    /* MikroBUS I2C (i2c3): Bosch BME280 Weather Click at 0x76 */
+    i2c_slave_create_simple(s->soc.i2c[3].bus, TYPE_BEAGLEV_AHEAD_BME280, 0x76);
+
+    /* MikroBUS SPI (spi0, CS0, INT on GPIO0_20): Microchip MCP2518FD CAN-FD Click */
+    mcp = ssi_create_peripheral(s->soc.spi[0].spi, TYPE_BEAGLEV_AHEAD_MCP2518FD);
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.spi[0]), "cs", 0,
+                                qdev_get_gpio_in_named(mcp, SSI_GPIO_CS, 0));
+    qdev_connect_gpio_out(mcp, 0,
+                          qdev_get_gpio_in_named(DEVICE(&s->soc.gpio[0]),
+                                                 "gpio-in", 20));
 }
 
 static void beaglev_ahead_attach_ap6203bm(BeagleVAheadState *s)
@@ -2668,6 +3538,7 @@ static void beaglev_ahead_machine_init(MachineState *ms)
     beaglev_ahead_attach_pmic(s);
     beaglev_ahead_attach_eeprom(s);
     beaglev_ahead_attach_leds(s);
+    beaglev_ahead_attach_mikrobus(s);
 
     if (ms->dtb) {
         ms->fdt = load_device_tree(ms->dtb, &fdt_size);
@@ -2784,6 +3655,25 @@ static void beaglev_ahead_machine_class_init(ObjectClass *oc,
 }
 
 static const TypeInfo beaglev_ahead_types[] = {
+    {
+        .name = TYPE_BEAGLEV_AHEAD_BME280,
+        .parent = TYPE_I2C_SLAVE,
+        .instance_size = sizeof(BeagleVAheadBME280State),
+        .class_init = bme280_class_init,
+    },
+    {
+        .name = TYPE_BEAGLEV_AHEAD_MCP2518FD,
+        .parent = TYPE_SSI_PERIPHERAL,
+        .instance_size = sizeof(BeagleVAheadMCP2518FDState),
+        .class_init = mcp2518fd_class_init,
+    },
+    {
+        .name = TYPE_CHARDEV_AP6203BM_HCI,
+        .parent = TYPE_CHARDEV,
+        .instance_size = sizeof(AP6203BMHCIChardev),
+        .instance_init = ap6203bm_hci_chr_init,
+        .class_init = ap6203bm_hci_chr_class_init,
+    },
     {
         .name = TYPE_RISCV_TH1520_SOC,
         .parent = TYPE_DEVICE,

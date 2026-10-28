@@ -57,10 +57,11 @@
 #define DW_APB_SSI_CTRLR0_SCPOL          BIT(7)
 #define DW_APB_SSI_CTRLR0_TMOD_MASK      (0x3 << 8)
 #define DW_APB_SSI_CTRLR0_SRL            BIT(11)
+#define DW_APB_SSI_CTRLR0_DFS32_MASK     (0x1fU << 16)
 #define DW_APB_SSI_CTRLR0_VALID          \
     (DW_APB_SSI_CTRLR0_DFS_MASK | DW_APB_SSI_CTRLR0_SCPHA | \
      DW_APB_SSI_CTRLR0_SCPOL | DW_APB_SSI_CTRLR0_TMOD_MASK | \
-     DW_APB_SSI_CTRLR0_SRL)
+     DW_APB_SSI_CTRLR0_SRL | DW_APB_SSI_CTRLR0_DFS32_MASK)
 
 #define DW_APB_SSI_TMOD_TR               0
 #define DW_APB_SSI_TMOD_TO               1
@@ -105,7 +106,9 @@ static unsigned int dw_apb_ssi_tmod(const DWAPBSSIState *s)
 
 static uint32_t dw_apb_ssi_frame_mask(const DWAPBSSIState *s)
 {
-    unsigned int bits = (s->ctrlr0 & DW_APB_SSI_CTRLR0_DFS_MASK) + 1;
+    unsigned int dfs32 = extract32(s->ctrlr0, 16, 5);
+    unsigned int dfs = dfs32 ? dfs32 : (s->ctrlr0 & DW_APB_SSI_CTRLR0_DFS_MASK);
+    unsigned int bits = dfs + 1;
 
     return MAKE_64BIT_MASK(0, bits);
 }

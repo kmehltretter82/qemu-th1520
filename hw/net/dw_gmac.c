@@ -116,6 +116,7 @@ REG32(DW_GMAC_PTP_TTSR, 0x71c)
      DW_GMAC_FRAME_FILTER_HUC_MASK)
 #define DW_GMAC_VLAN_TAG_MASK                   0x0007ffffu
 
+#define DW_GMAC_MAC_CONFIG_LM                  BIT(12)
 #define DW_GMAC_MAC_CONFIG_DM                  BIT(11)
 #define DW_GMAC_MAC_CONFIG_IPC                 BIT(10)
 #define DW_GMAC_FLOW_CTRL_UP                   BIT(3)
@@ -894,8 +895,10 @@ static void gmac_phy_set_link(DWGMACState *gmac, bool active)
 
 static void gmac_update_phy_link(DWGMACState *gmac)
 {
-    bool active = gmac->nic && !qemu_get_queue(gmac->nic)->link_down &&
-                  !gmac->phy_reset_asserted;
+    bool loopback = gmac->phy_regs[gmac->phy_addr][MII_BMCR] &
+                    MII_BMCR_LOOPBACK;
+    bool active = ((gmac->nic && !qemu_get_queue(gmac->nic)->link_down) ||
+                   loopback) && !gmac->phy_reset_asserted;
 
     gmac_phy_set_link(gmac, active);
 }
@@ -2058,11 +2061,21 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
         tx_desc.tdes0 &= ~(TX_DESC_TDES0_IP_HEAD_ERR_MASK |
                            TX_DESC_TDES0_PYLD_CHKSM_ERR_MASK |
                            TX_DESC_TDES0_ERR_SUMM_MASK);
+        g_autofree uint8_t *loop_frame = NULL;
+        uint16_t loop_len = 0;
         if (gmac_tx_is_last(gmac, &tx_desc)) {
             uint16_t length = gmac->tx_frame_len;
+            bool loopback = (gmac->regs[R_DW_GMAC_MAC_CONFIG] &
+                             DW_GMAC_MAC_CONFIG_LM) ||
+                            (gmac->phy_regs[gmac->phy_addr][MII_BMCR] &
+                             MII_BMCR_LOOPBACK);
 
             tx_desc.tdes0 |= gmac_tx_coe_insert(gmac, gmac->tx_frame,
                                                 length, gmac->tx_frame_cic);
+            if (loopback && length > 0) {
+                loop_frame = g_memdup2(gmac->tx_frame, length);
+                loop_len = length;
+            }
             qemu_send_packet(qemu_get_queue(gmac->nic), gmac->tx_frame, length);
             trace_dw_gmac_packet_sent(DEVICE(gmac)->canonical_path, length);
             gmac_tx_frame_discard(gmac);
@@ -2084,6 +2097,9 @@ static void gmac_try_send_next_packet(DWGMACState *gmac)
         if (gmac_tx_irq_requested(gmac, &tx_desc)) {
             gmac->regs[R_DWMAC_DMA_STATUS] |= DWMAC_DMA_STATUS_TI;
             gmac_update_irq(gmac);
+        }
+        if (loop_frame && gmac->nic) {
+            gmac_receive(qemu_get_queue(gmac->nic), loop_frame, loop_len);
         }
     }
 }
@@ -2139,6 +2155,10 @@ static void dw_gmac_mdio_access(DWGMACState *gmac, uint16_t v)
                     gmac->phy_regs[pa][MII_BMSR] |= MII_BMSR_AN_COMP;
                     /* Resolve AN automatically->need to set this */
                     gmac->phy_regs[pa][MII_ANLPAR] = 0x0000;
+                }
+                if ((data & MII_BMCR_LOOPBACK) && !gmac->phy_reset_asserted) {
+                    gmac->phy_regs[pa][MII_BMSR] |=
+                        MII_BMSR_LINK_ST | MII_BMSR_AN_COMP;
                 }
             }
             gmac->phy_regs[pa][gr] = data;

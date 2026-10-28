@@ -296,8 +296,15 @@ static void xgene_rtc_write(void *opaque, hwaddr offset, uint64_t value,
         break;
     case XGENE_RTC_CLR:
         s->clr = value32;
-        s->load_pending = true;
-        xgene_rtc_schedule_load(s);
+        if (!(s->ccr & XGENE_RTC_CCR_EN)) {
+            s->counter_base = value32;
+            s->prescaler_count = 0;
+            s->base_ns = qemu_clock_get_ns(rtc_clock);
+            s->load_pending = false;
+        } else {
+            s->load_pending = true;
+            xgene_rtc_schedule_load(s);
+        }
         break;
     case XGENE_RTC_CCR:
         xgene_rtc_write_control(s, value32);

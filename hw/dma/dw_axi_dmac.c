@@ -89,6 +89,8 @@
 #define CH_CFG_TT_FC_SHIFT             32
 #define CH_CFG_TT_FC_MASK              0x7
 #define CH_CFG_TT_FC_MEM_TO_MEM        0
+#define CH_CFG_TT_FC_MEM_TO_PERIPH     1
+#define CH_CFG_TT_FC_PERIPH_TO_MEM     2
 
 #define CH_IRQ_BLOCK_TRANSFER          BIT(0)
 #define CH_IRQ_DMA_TRANSFER            BIT(1)
@@ -209,12 +211,19 @@ static uint32_t dw_axi_dmac_copy_block(DWAxiDMACState *s,
         extract64(ch->ctl, CH_CTL_SRC_INCREMENT_SHIFT, 2);
     unsigned destination_increment =
         extract64(ch->ctl, CH_CTL_DST_INCREMENT_SHIFT, 2);
+    unsigned transfer_type = extract64(ch->cfg, CH_CFG_TT_FC_SHIFT, 3);
     size_t source_width;
     size_t destination_width;
     uint64_t total_bytes;
     uint64_t source = ch->sar;
     uint64_t destination = ch->dar;
     uint8_t buffer[DW_AXI_DMAC_COPY_CHUNK];
+
+    if (transfer_type == CH_CFG_TT_FC_MEM_TO_PERIPH) {
+        destination_increment = 1;
+    } else if (transfer_type == CH_CFG_TT_FC_PERIPH_TO_MEM) {
+        source_increment = 1;
+    }
 
     if (transfers > s->block_size ||
         source_width_code > s->data_width ||
@@ -413,7 +422,9 @@ static void dw_axi_dmac_run_channel(DWAxiDMACState *s, unsigned channel)
     uint32_t event;
 
     ch->status = 0;
-    if (transfer_type != CH_CFG_TT_FC_MEM_TO_MEM) {
+    if (transfer_type != CH_CFG_TT_FC_MEM_TO_MEM &&
+        transfer_type != CH_CFG_TT_FC_MEM_TO_PERIPH &&
+        transfer_type != CH_CFG_TT_FC_PERIPH_TO_MEM) {
         qemu_log_mask(LOG_UNIMP,
                       "%s: channel %u peripheral handshake transfer is not "
                       "connected\n", TYPE_DW_AXI_DMAC, channel);
